@@ -8,7 +8,8 @@
     "locate": "node scripts/locate.js",
     "patch": "node scripts/patch.js",
     "verify": "node scripts/verify.js",
-    "test": "node --test"
+    "test": "node --test",
+    "scan": "node scripts/scan.js"
   },
   "engines": {
     "node": ">=18"

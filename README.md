@@ -28,10 +28,12 @@ github-desktop-zh-cn/
 │   ├── 3.6.5/zh-CN.json    # 首个版本字典
 │   └── README.md           # 字典格式与贡献约定
 ├── scripts/                # 补丁工具链（Node.js，零依赖）
-│   ├── common.js           # 共享：定位 / 版本 / 字典 / 备份
+│   ├── common.js           # 共享：定位 / 版本 / 字典 / 备份 / 扫描匹配器
 │   ├── locate.js           # 定位安装目录并备份
 │   ├── patch.js            # 按字典替换并写回
-│   └── verify.js           # 校验版本、命中率与语法
+│   ├── verify.js           # 校验版本、命中率与语法
+│   └── scan.js             # 未翻译文案自查（读官方 sourcemap，输出待补清单）
+├── test/                   # 匹配器单元测试（npm test）
 └── docs/                   # 文档：使用说明 / 贡献指南（规划中）
 ```
 
@@ -43,6 +45,7 @@ github-desktop-zh-cn/
 npm run locate         # 定位安装目录，校验结构，备份原文件到 tmp/backup/<版本>/
 npm run patch          # 按字典替换 main.js / renderer.js 并写回
 npm run verify         # 校验版本一致性、字典命中率、补丁后 JS 语法
+npm run scan           # 自查还有哪些界面文案没翻译（输出待补清单）
 ```
 
 - `patch` 前建议先 `patch --dry-run` 预览命中统计（不写盘）；

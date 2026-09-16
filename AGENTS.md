@@ -16,6 +16,8 @@ GitHub Desktop 中文汉化补丁工具仓库（字典驱动、开源）。GitHu
 npm run locate         # 定位安装目录，校验结构，备份原文件到 tmp/backup/<版本>/
 npm run patch          # 按字典替换 main.js / renderer.js 并写回（--dry-run 预览不写盘）
 npm run verify         # 校验版本一致性、字典命中率、补丁后 JS 语法
+npm run scan           # 未翻译文案自查（读 sourcemap 里的官方源码，输出待补清单）
+npm test               # 匹配器单元测试（node --test）
 ```
 
 各脚本支持 `--help`；`patch`/`verify` 支持 `--version <版本>` 指定字典版本、`--path <resources目录>` 显式指定安装目录（跨平台 / 自动探测失败时用）。脚本改动后至少跑一次 `node --check` 与 `--dry-run` 做验证。
@@ -27,6 +29,7 @@ npm run verify         # 校验版本一致性、字典命中率、补丁后 JS 
   - `locate.js`：定位安装目录（Windows 自动探测取最新版本；macOS/Linux 走 `--path`）→ 校验 `main.js`/`renderer.js`/`package.json` 存在 → 备份原文件到 `tmp/backup/<版本>/`（已备份则跳过）。
   - `patch.js`：版本一致性校验（字典目录名 ≠ 安装版本即拒绝，错配可能导致应用无法启动）→ 逐条整串替换（只在字符串字面量区间内、内容与键完全相等才替换；整模板键整段替换模板源码）→ 统计命中 → 写回前自动备份。
   - `verify.js`：版本一致性、字典条目在两个文件中的命中率（0 命中 = 两个文件均未出现）、补丁后 `node --check` 语法校验。
+  - `scan.js`：**未翻译文案自查**——读安装目录 `renderer.js.map` 中的官方自有源码（`app/src/**`），提取界面文案候选（JSX 文本 + 字面量），与产物、字典对照后输出待补清单（产物侧忽略大小写与空白差异，因产物文案经 `sentenceCase` 处理）。字典迭代时先用它自查，别只依赖截图。
 - **字典组织**：`dictionaries/<版本>/zh-CN.json`，扁平 `{"原文": "译文"}` 映射，`_` 开头的键为元信息（脚本跳过）；键以反引号开头结尾、含 `${}` 的为**整模板键**（值须是 JS 模板/字符串字面量，用于替换运行时拼接文案）；键写作 `<文件名>.js|原文` 的为**作用域键**（只对该文件生效，用于同名文本在两文件中语义不同的情况，如 `en-US`）。
 - **跨平台**：`--path` 可指向任意平台的 resources 目录；自动探测仅实现 Windows。
 

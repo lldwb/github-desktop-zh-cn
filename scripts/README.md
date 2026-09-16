@@ -7,6 +7,7 @@
 | `locate.js` | 定位安装目录（Windows 自动探测取最新版本；`--path` 手动指定跨平台），校验 `app/` 结构，备份原文件到 `tmp/backup/<版本>/` | 已实现 |
 | `patch.js` | 校验字典版本与安装版本一致 → 按 `dictionaries/<版本>/zh-CN.json` 替换 `main.js` / `renderer.js` → 命中统计 → 写回（写回前自动备份） | 已实现 |
 | `verify.js` | 校验版本一致性、字典条目命中率（两个文件均 0 命中才算缺失）、补丁后 `node --check` 语法校验 | 已实现 |
+| `scan.js` | 未翻译文案自查：读安装目录 `renderer.js.map` 里的官方自有源码（`app/src/**`），提取界面文案候选并与产物、字典对照，输出待补清单 | 已实现 |
 
 ## 用法
 
@@ -14,6 +15,7 @@
 node scripts/locate.js [--path <resources目录>] [--version <版本>]
 node scripts/patch.js   [--dry-run] [--version <版本>] [--path <resources目录>]
 node scripts/verify.js  [--version <版本>] [--path <resources目录>]
+node scripts/scan.js    [--out <文件>] [--min-length <n>] [--version <版本>] [--path <resources目录>]
 ```
 
 ## 实现要点
@@ -29,3 +31,4 @@ node scripts/verify.js  [--version <版本>] [--path <resources目录>]
 - **安全边界**：写回前自动备份原文件到 `tmp/backup/<版本>/`，恢复 = 把备份复制回 `app/`；补丁后必须 `verify`（`node --check` 语法校验 + 残留英文清单）。
 - **预览**：`patch --dry-run` 输出命中统计与 0 命中条目，不写盘。
 - **验证**：`verify` 对补丁后文件跑 `node --check`（语法合法性）；已汉化状态下列出仍残留英文的条目，人工核对。
+- **自查（scan）**：官方产物的 sourcemap 里含 GitHub Desktop 自有源码，`scan` 从中提取界面文案候选（JSX 文本节点 + 字符串字面量），再回到产物核对是否存在，排除字典已收录项后输出待补清单。产物侧按「忽略大小写 + 折叠空白」匹配——产物文案经 `sentenceCase` 处理（`Confirm discard changes`）、源码是 Title Case（`Confirm Discard Changes`），且 JSX 多行文本在产物里带转义换行与缩进。清单里仍会有专有名词、代码键名、句子片段等噪声，需人工判断。
