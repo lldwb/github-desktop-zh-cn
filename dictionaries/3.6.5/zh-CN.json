@@ -1717,5 +1717,13 @@
   "`Why are you bypassing this ${this.props.secret.description}?`": "`你为什么要绕过这个 ${this.props.secret.description}？`",
   "`O&pen in ${t??\"shell\"}`": "`在 ${t??\"shell\"} 中打开(&P)`",
   "`&Open in ${e??\"external editor\"}`": "`在 ${e??\"external editor\"} 中打开(&O)`",
-  "Permission denied.": "权限不足。"
+  "Permission denied.": "权限不足。",
+  "The Git repository appears to be owned by another user on your machine.\\n      Adding untrusted repositories may automatically execute files in the repository.\\n      If you trust the owner of the directory you can add an exception for this directory in order to continue.": "此 Git 仓库似乎属于你机器上的另一位用户。\\n      添加不受信任的仓库可能会自动执行仓库中的文件。\\n      如果你信任该目录的所有者，可以为该目录添加例外以继续。",
+  "`Edit ${t}`": "`编辑 ${t}`",
+  "`Remove ${t}`": "`移除 ${t}`",
+  "`Edit ${e.name}`": "`编辑 ${e.name}`",
+  "`Remove ${e.name}`": "`移除 ${e.name}`",
+  "`Copy the full${n} SHA`": "`复制完整${n} SHA`",
+  "`Bypass ${e.description}`": "`绕过 ${e.description}`",
+  "Bypass": "绕过"
 }
