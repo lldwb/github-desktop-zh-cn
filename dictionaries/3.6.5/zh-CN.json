@@ -5,7 +5,6 @@
     "notes": "首个版本字典：覆盖主界面、菜单、常用对话框、提交区、分支列表、关于对话框与相对时间文案。键的三类形态：普通键（字符串字面量内容或模板文本段整串匹配）、整模板键（含 ${} 的完整模板源码整段替换，用于运行时拼接文案）、作用域键（<文件名>.js|原文，只对该文件生效，如 renderer.js|en-US 把相对时间语言改为 zh-CN，而 main.js 的同名字面量是拼写检查逻辑须保留）。大小写敏感、精确匹配；条目源自官方 3.6.5 产物 renderer.js / main.js 提取。"
   },
   "Add": "添加",
-  "Abort": "中止",
   "Aborted": "已中止",
   "Accessibility": "辅助功能",
   "Account": "账户",
@@ -432,7 +431,6 @@
   "Undo": "撤销",
   "Undo commit": "撤销提交",
   "Underline links": "链接下划线",
-  "Unknown": "未知",
   "Unknown co-authors": "未知共同作者",
   "Unknown license": "未知许可证",
   "Unknown reason": "未知原因",
@@ -1553,9 +1551,9 @@
   "This will merge": "这将合并",
   "There will be": "将会有",
   " when merging ": "，合并 ",
-  " that": " ",
+  " that": "，它",
   "that ": " ",
-  "would": "本会",
+  "would": "会",
   "will": "会",
   " is not a valid name.": " 不是有效的名称。",
   "Will be ": "将被 ",
@@ -1604,5 +1602,12 @@
   "renderer.js|`after commit ${t}`": "`第 ${t} 个提交之后`",
   "renderer.js|`Re-run ${i}check${s}`": "`${i===\"failed \"?\"重新运行失败的检查\":i===\"single \"?\"重新运行单个检查\":\"重新运行检查\"}`",
   "renderer.js|`Failed to symlink ${eV} to ${JZ}`": "`无法创建符号链接：${eV} → ${JZ}`",
-  "We couldn't find that repository. Check that you are logged in, the network is accessible, and the URL or repository alias are spelled correctly.": "找不到该仓库。请检查你是否已登录、网络是否可访问，以及 URL 或仓库别名是否拼写正确。"
+  "We couldn't find that repository. Check that you are logged in, the network is accessible, and the URL or repository alias are spelled correctly.": "找不到该仓库。请检查你是否已登录、网络是否可访问，以及 URL 或仓库别名是否拼写正确。",
+  ") has": "）上有",
+  "a commit": "一个提交",
+  " on": " 在",
+  "the remote": "远端",
+  "does not": "并不",
+  "do not": "并不",
+  " exist on your machine.": "存在于你的机器上。"
 }
