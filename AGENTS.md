@@ -15,6 +15,7 @@ GitHub Desktop 中文汉化补丁工具仓库（字典驱动、开源）。GitHu
 ```bash
 npm run locate         # 定位安装目录，校验结构，备份原文件到 tmp/backup/<版本>/
 npm run patch          # 按字典替换 main.js / renderer.js 并写回（--dry-run 预览不写盘）
+npm run restore        # 从 tmp/backup/<版本>/ 还原官方原版（字典有删改时先还原再重打）
 npm run verify         # 校验版本一致性、字典命中率、补丁后 JS 语法
 npm run scan           # 未翻译文案自查（读 sourcemap 里的官方源码，输出待补清单）
 npm test               # 匹配器单元测试（node --test）
@@ -25,9 +26,10 @@ npm test               # 匹配器单元测试（node --test）
 ## 架构
 
 - **替换对象**：官方 Windows 3.6.x 安装目录 `%LOCALAPPDATA%\GitHubDesktop\app-<版本>\resources\app\` 下的 `main.js` 与 `renderer.js`——官方产物为**免打包裸目录**（无 `app.asar`，3.6.4 / 3.6.5 已实测；robotze/GithubDesktopZhTool 的 Mac/Linux 方案同样直接替换 `Resources/app` 下文件）。
-- **工具链三段式**（`scripts/`，Node.js 零依赖，仅内置模块）：
+- **工具链**（`scripts/`，Node.js 零依赖，仅内置模块）：
   - `locate.js`：定位安装目录（Windows 自动探测取最新版本；macOS/Linux 走 `--path`）→ 校验 `main.js`/`renderer.js`/`package.json` 存在 → 备份原文件到 `tmp/backup/<版本>/`（已备份则跳过）。
   - `patch.js`：版本一致性校验（字典目录名 ≠ 安装版本即拒绝，错配可能导致应用无法启动）→ 逐条整串替换（只在字符串字面量区间内、内容与键完全相等才替换；整模板键整段替换模板源码）→ 统计命中 → 写回前自动备份。
+  - `restore.js`：把 `tmp/backup/<版本>/` 下的官方原版复制回安装目录，覆盖已汉化文件。**字典条目被删除或修改后必须先 `restore` 再 `patch`**——`patch` 只替换命中的字面量，不会把已删条目的旧译文从产物里退出。
   - `verify.js`：版本一致性、字典条目在两个文件中的命中率（0 命中 = 两个文件均未出现）、补丁后 `node --check` 语法校验。
   - `scan.js`：**未翻译文案自查**——读安装目录 `renderer.js.map` 中的官方自有源码（`app/src/**`），提取界面文案候选（JSX 文本 + 字面量），与产物、字典对照后输出待补清单（产物侧忽略大小写与空白差异，因产物文案经 `sentenceCase` 处理）。字典迭代时先用它自查，别只依赖截图。
 - **字典组织**：`dictionaries/<版本>/zh-CN.json`，扁平 `{"原文": "译文"}` 映射，`_` 开头的键为元信息（脚本跳过）；键以反引号开头结尾、含 `${}` 的为**整模板键**（值须是 JS 模板/字符串字面量，用于替换运行时拼接文案）；键写作 `<文件名>.js|原文` 的为**作用域键**（只对该文件生效，用于同名文本在两文件中语义不同的情况，如 `en-US`）。
@@ -43,6 +45,7 @@ npm test               # 匹配器单元测试（node --test）
 - **替换后失去官方签名**：汉化产物在 Windows 下可能触发 SmartScreen 提示，属预期行为，文档需提前说明。
 - **升级即失效**：GitHub Desktop 官方更新会覆盖汉化文件，需用对应对应版本的字典重新打补丁。
 - **版本错配打不开应用**：字典与目标版本不一致时替换结果不可控，`patch` 前必须先校验版本。
+- **原地替换不回调**：`patch` 不会把已删条目的旧译文从产物里退出。字典条目有删除或修改时，必须 `npm run restore` + `npm run patch` 重打，否则产物里残留的失效译文继续生效（实例：HTTP 头名 `Link` 被译成中文后 `headers.get` 抛 `non ISO-8859-1 code point`，Issues / PR 拉取全挂）。
 - **字典范围与匹配**：收录界面文本（含读屏 / 命令行 / 报错，不含不可见日志）；整串匹配——普通键对应字符串字面量或模板文本段，整模板键对应完整模板源码；大小写敏感。**共用字面量**（英文词同时被非界面逻辑复用，如 `"Commit"` 兼作议题关闭关键词与拖拽枚举值）不能整串替换，只能整模板覆盖外层模板或保持英文。
 
 ## 提交规范

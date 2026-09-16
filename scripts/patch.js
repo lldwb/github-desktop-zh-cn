@@ -5,7 +5,7 @@
 
 const fs = require('fs');
 const path = require('path');
-const { locateApp, listDictVersions, loadDict, scopedEntries, backupAppFiles, backupExists, applyDictInStrings } = require('./common');
+const { locateApp, listDictVersions, loadDict, scopedEntries, backupAppFiles, backupExists, backupDir, applyDictInStrings } = require('./common');
 
 const TARGETS = ['main.js', 'renderer.js'];
 
@@ -64,6 +64,15 @@ function main() {
     console.log(`字典：dictionaries/${version}/zh-CN.json（${entries.size} 条）`);
     console.log(`目标版本：${app.version}（${app.appDir}）`);
 
+    // 「已汉化」判定必须在写回之前做：首次汉化时备份与当前文件相同（都是官方原版），
+    // 判定为未汉化，0 命中条目才会作为「需人工核对」报出来，而不是被当成预期
+    const backup = backupDir(version);
+    const alreadyPatched = backupExists(version) && TARGETS.some((f) => {
+      const b = path.join(backup, f);
+      const cur = path.join(app.appDir, f);
+      return fs.existsSync(b) && !fs.readFileSync(b).equals(fs.readFileSync(cur));
+    });
+
     let totalAll = 0;
     const perFile = {};
     for (const f of TARGETS) {
@@ -96,16 +105,10 @@ function main() {
         ...scopedEntries(entries, 'renderer.js').keys(),
       ]),
     ];
-    const patchedAlready = backupExists(version)
-      && TARGETS.some((f) => {
-        const b = path.join(__dirname, '..', 'tmp', 'backup', version, f);
-        const cur = path.join(app.appDir, f);
-        return fs.existsSync(b) && !fs.readFileSync(b).equals(fs.readFileSync(cur));
-      });
     const globalMisses = effectiveKeys.filter(
       (k) => !perFile['main.js'].has(k) && !perFile['renderer.js'].has(k)
     );
-    if (globalMisses.length > 0 && !patchedAlready) {
+    if (globalMisses.length > 0 && !alreadyPatched) {
       console.log(`\n两个文件均 0 命中的条目 ${globalMisses.length} 条（需人工核对，可暂不处理）：`);
       for (const k of globalMisses) console.log(`    - ${k}`);
     } else if (globalMisses.length > 0) {
@@ -116,7 +119,7 @@ function main() {
     if (args.dryRun) {
       console.log('（--dry-run 预览，未写盘）');
     } else {
-      console.log('汉化完成。启动 GitHub Desktop 查看效果；恢复官方版：把 tmp/backup/<版本>/ 下文件复制回 app/。');
+      console.log('汉化完成。启动 GitHub Desktop 查看效果；恢复官方版：npm run restore。');
     }
   } catch (e) {
     console.error(`错误：${e.message}`);

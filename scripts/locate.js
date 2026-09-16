@@ -63,7 +63,7 @@ function main() {
     for (const { f, skipped } of backed) {
       console.log(`${skipped ? '已存在，跳过' : '已备份'}：tmp/backup/${app.version}/${f}`);
     }
-    console.log('备份用于恢复官方版：把 tmp/backup/<版本>/ 下文件复制回 app/ 即可。');
+    console.log('备份用于恢复官方版：npm run restore。');
   } catch (e) {
     console.error(`错误：${e.message}`);
     process.exit(1);

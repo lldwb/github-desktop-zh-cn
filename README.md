@@ -22,7 +22,7 @@ GitHub Desktop（Electron 应用）官方未提供简体中文界面——其界
 github-desktop-zh-cn/
 ├── README.md               # 本项目
 ├── LICENSE                 # GPL-3.0
-├── package.json            # 脚本入口（locate / patch / verify）
+├── package.json            # 脚本入口（locate / patch / restore / verify / scan）
 ├── AGENTS.md / CLAUDE.md   # agent 指引（唯一权威源为 AGENTS.md）
 ├── dictionaries/           # 语言字典（核心资产），按版本目录组织
 │   ├── 3.6.5/zh-CN.json    # 首个版本字典
@@ -31,6 +31,7 @@ github-desktop-zh-cn/
 │   ├── common.js           # 共享：定位 / 版本 / 字典 / 备份 / 扫描匹配器
 │   ├── locate.js           # 定位安装目录并备份
 │   ├── patch.js            # 按字典替换并写回
+│   ├── restore.js          # 从备份还原官方原版（字典删改后重打用）
 │   ├── verify.js           # 校验版本、命中率与语法
 │   └── scan.js             # 未翻译文案自查（读官方 sourcemap，输出待补清单）
 ├── test/                   # 匹配器单元测试（npm test）
@@ -45,11 +46,13 @@ github-desktop-zh-cn/
 npm run locate         # 定位安装目录，校验结构，备份原文件到 tmp/backup/<版本>/
 npm run patch          # 按字典替换 main.js / renderer.js 并写回
 npm run verify         # 校验版本一致性、字典命中率、补丁后 JS 语法
+npm run restore        # 还原官方原版（字典有删改时先还原再重打）
 npm run scan           # 自查还有哪些界面文案没翻译（输出待补清单）
 ```
 
 - `patch` 前建议先 `patch --dry-run` 预览命中统计（不写盘）；
-- 替换前已自动备份：恢复官方版 = 把 `tmp/backup/<版本>/` 下的 `main.js` / `renderer.js` 复制回 `resources/app/`；
+- 替换前已自动备份：恢复官方版 = `npm run restore`（等价于把 `tmp/backup/<版本>/` 下的 `main.js` / `renderer.js` 复制回 `resources/app/`）；
+- `patch` 是**原地替换**：删掉或改掉字典条目后不会自动从产物里退出，必须先 `npm run restore` 再 `npm run patch` 重打；
 - 自动探测仅支持 Windows；macOS / Linux 或其他位置用 `--path <resources目录>` 显式指定（`node scripts/locate.js --path /path/to/resources`）；
 - 官方更新覆盖汉化后，用对应新版本的字典重新执行 `locate` + `patch` 即可。
 
