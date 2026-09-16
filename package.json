@@ -1,0 +1,15 @@
+{
+  "name": "github-desktop-zh-cn",
+  "version": "0.1.0",
+  "description": "GitHub Desktop 中文汉化补丁工具（字典驱动）：解包 app.asar，按 JSON 语言字典替换 main.js / renderer.js 中的界面文本",
+  "license": "MIT",
+  "type": "commonjs",
+  "scripts": {
+    "unpack": "node scripts/unpack.js",
+    "patch": "node scripts/patch.js",
+    "verify": "node scripts/verify.js"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

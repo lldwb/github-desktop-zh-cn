@@ -1,0 +1,22 @@
+# 依赖与构建产物
+node_modules/
+dist/
+out/
+
+# asar 解包 / 重打包产物
+*.asar
+*.asar.unpacked/
+app-asar-unpacked/
+patched/
+tmp/
+
+# 系统与编辑器
+Thumbs.db
+Desktop.ini
+.DS_Store
+.vscode/
+.idea/
+
+# 日志与过程产物
+*.log
+.tasks/
