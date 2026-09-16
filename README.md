@@ -62,6 +62,10 @@ npm run verify         # 校验版本一致性、字典命中率、补丁后 JS 
 - 字典与版本强对应：错配可能导致应用无法启动，`patch` 前务必确认版本一致；
 - 首个字典（3.6.5）覆盖主界面、菜单、常用对话框与错误提示；少数由运行时拼接、或英文原文同时被非界面逻辑复用的文案保持英文（见 `dictionaries/README.md`「已知限制」）。
 
+## 开发说明
+
+本仓库使用 [lldwb-claude-skills](https://github.com/lldwb/lldwb-claude-skills.git)（Claude Code 技能集仓库）完成开发：从需求分析、缺陷修复到字典与工具链迭代，全程在 Claude Code 规范工作流（feature-dev / bug-fix 等技能）下实现。
+
 ## 贡献
 
 字典条目贡献与脚本改进方式见 `docs/`（贡献指南，规划中）。
