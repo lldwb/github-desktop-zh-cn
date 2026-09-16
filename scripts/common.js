@@ -113,21 +113,22 @@ function compareVersions(a, b) {
   return 0;
 }
 
-// 读取字典：dictionaries/<version>/zh-CN.json，跳过 _ 开头的元信息键
-// 键以反引号开头结尾的为「整模板键」，译文须是 JS 字符串/模板字面量（会整段替换模板源码）
-function loadDict(version) {
-  const file = path.join(REPO_ROOT, 'dictionaries', version, 'zh-CN.json');
-  if (!fs.existsSync(file)) {
-    throw new Error(`字典不存在：${file}`);
-  }
-  const raw = JSON.parse(fs.readFileSync(file, 'utf8'));
+// 作用域键：`<文件名>.js|原文` 只对该文件生效（同一字面量在两个文件中语义不同时用，
+// 如 "en-US" 在 renderer 是相对时间语言、在 main.js 是拼写检查逻辑）。
+const SCOPED_KEY = /^([A-Za-z0-9._-]+\.js)\|([\s\S]+)$/;
+
+// 把字典原始对象整理为「原样键 → 译文」的 Map，并校验条目合法性。
+// 整模板键（以反引号开头、含 ${}）的译文必须是 JS 字符串/模板字面量。
+function buildEntries(raw, version) {
   const entries = new Map();
   for (const [k, v] of Object.entries(raw)) {
     if (k.startsWith('_')) continue;
     if (typeof v !== 'string' || v.length === 0) {
       throw new Error(`字典条目非法（${version}）：${k} 的译文必须是非空字符串`);
     }
-    if (k.startsWith('`')) {
+    const m = SCOPED_KEY.exec(k);
+    const key = m ? m[2] : k;
+    if (key.startsWith('`')) {
       const q = v[0];
       if ((q !== '`' && q !== '"' && q !== "'") || v[v.length - 1] !== q) {
         throw new Error(
@@ -137,6 +138,34 @@ function loadDict(version) {
     }
     entries.set(k, v);
   }
+  return entries;
+}
+
+// 取某文件的生效条目 Map<键, 译文>：全局键 + 作用域指向该文件的键（键名去掉前缀）；
+// 指向其他文件的作用域键被跳过。file 省略时返回全部（保留原键名，供统计/报告使用）。
+function scopedEntries(entries, file) {
+  const out = new Map();
+  for (const [k, v] of entries) {
+    const m = SCOPED_KEY.exec(k);
+    if (!m) {
+      out.set(k, v);
+    } else if (!file) {
+      out.set(k, v);
+    } else if (m[1] === file) {
+      out.set(m[2], v);
+    }
+  }
+  return out;
+}
+
+// 读取字典：dictionaries/<version>/zh-CN.json，跳过 _ 开头的元信息键
+function loadDict(version) {
+  const file = path.join(REPO_ROOT, 'dictionaries', version, 'zh-CN.json');
+  if (!fs.existsSync(file)) {
+    throw new Error(`字典不存在：${file}`);
+  }
+  const raw = JSON.parse(fs.readFileSync(file, 'utf8'));
+  const entries = buildEntries(raw, version);
   if (entries.size === 0) throw new Error(`字典为空：${file}`);
   return entries;
 }
@@ -337,4 +366,6 @@ module.exports = {
   backupExists,
   stringLiterals,
   applyDictInStrings,
+  buildEntries,
+  scopedEntries,
 };

@@ -4,7 +4,7 @@
 const fs = require('fs');
 const path = require('path');
 const { spawnSync } = require('child_process');
-const { locateApp, listDictVersions, loadDict, stringLiterals } = require('./common');
+const { locateApp, listDictVersions, loadDict, scopedEntries, stringLiterals } = require('./common');
 
 const TARGETS = ['main.js', 'renderer.js'];
 
@@ -65,16 +65,23 @@ function main() {
       failed = true;
     }
 
-    // 2. 字典命中率（两个文件合并统计；与 patch 口径一致：字符串字面量整串匹配）
+    // 2. 字典命中率（两个文件合并统计；与 patch 口径一致：字符串字面量整串匹配 + 整模板键）
     const entries = loadDict(version);
+    const effectiveKeys = [
+      ...new Set([
+        ...scopedEntries(entries, 'main.js').keys(),
+        ...scopedEntries(entries, 'renderer.js').keys(),
+      ]),
+    ];
     const perFile = {};
     for (const f of TARGETS) {
       const file = path.join(app.appDir, f);
       const content = fs.readFileSync(file, 'utf8');
+      const fileEntries = scopedEntries(entries, f);
       const keyHits = new Map();
       let hits = 0;
       for (const l of stringLiterals(content)) {
-        if (entries.has(l.content)) {
+        if (fileEntries.has(l.content)) {
           keyHits.set(l.content, (keyHits.get(l.content) || 0) + 1);
           hits++;
         }
@@ -90,20 +97,20 @@ function main() {
       return fs.existsSync(b) && !fs.readFileSync(b).equals(fs.readFileSync(path.join(app.appDir, f)));
     });
 
-    const globalMisses = [...entries.keys()].filter(
+    const globalMisses = effectiveKeys.filter(
       (k) => !perFile['main.js'].has(k) && !perFile['renderer.js'].has(k)
     );
     if (patched) {
       // 已汉化：报告仍残留的英文条目（未替换到的）
-      const remain = [...entries.keys()].filter((k) => perFile['main.js'].has(k) || perFile['renderer.js'].has(k));
-      console.log(`已汉化：仍残留英文的条目 ${remain.length}/${entries.size} 条`);
+      const remain = effectiveKeys.filter((k) => perFile['main.js'].has(k) || perFile['renderer.js'].has(k));
+      console.log(`已汉化：仍残留英文的条目 ${remain.length}/${effectiveKeys.length} 条`);
       if (remain.length > 0) {
         for (const k of remain.slice(0, 20)) console.log(`    - ${k}`);
         if (remain.length > 20) console.log(`    …（其余 ${remain.length - 20} 条略）`);
       }
     } else {
       // 未汉化：0 命中条目提示字典可能与版本不符
-      console.log(`未汉化：两个文件均 0 命中的条目 ${globalMisses.length}/${entries.size} 条`);
+      console.log(`未汉化：两个文件均 0 命中的条目 ${globalMisses.length}/${effectiveKeys.length} 条`);
       if (globalMisses.length > 0) {
         for (const k of globalMisses.slice(0, 20)) console.log(`    - ${k}`);
         if (globalMisses.length > 20) console.log(`    …（其余 ${globalMisses.length - 20} 条略）`);

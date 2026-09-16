@@ -5,7 +5,7 @@
 
 const fs = require('fs');
 const path = require('path');
-const { locateApp, listDictVersions, loadDict, backupAppFiles, backupExists, applyDictInStrings } = require('./common');
+const { locateApp, listDictVersions, loadDict, scopedEntries, backupAppFiles, backupExists, applyDictInStrings } = require('./common');
 
 const TARGETS = ['main.js', 'renderer.js'];
 
@@ -70,7 +70,8 @@ function main() {
       const file = path.join(app.appDir, f);
       const content = fs.readFileSync(file, 'utf8');
       // 只在字符串字面量内替换，保护标识符 / 属性名 / 正则 / 注释（单字词如 Error 亦是 JS 标识符）
-      const { content: patched, total, perKey } = applyDictInStrings(content, entries);
+      // 生效条目 = 全局键 + 作用域指向本文件的键（同名文本在两个文件中语义不同时按文件隔离）
+      const { content: patched, total, perKey } = applyDictInStrings(content, scopedEntries(entries, f));
       perFile[f] = perKey;
       console.log(`\n${f}：命中 ${total} 处`);
       totalAll += total;
@@ -88,13 +89,20 @@ function main() {
 
     // 两个文件都未命中的条目（真正缺失，可能为版本错配或条目失效）
     // 已汉化时（增量补丁）0 命中属预期：英文串已被替换
+    // 统计口径按「文件生效键」（作用域键去前缀）合并去重
+    const effectiveKeys = [
+      ...new Set([
+        ...scopedEntries(entries, 'main.js').keys(),
+        ...scopedEntries(entries, 'renderer.js').keys(),
+      ]),
+    ];
     const patchedAlready = backupExists(version)
       && TARGETS.some((f) => {
         const b = path.join(__dirname, '..', 'tmp', 'backup', version, f);
         const cur = path.join(app.appDir, f);
         return fs.existsSync(b) && !fs.readFileSync(b).equals(fs.readFileSync(cur));
       });
-    const globalMisses = [...entries.keys()].filter(
+    const globalMisses = effectiveKeys.filter(
       (k) => !perFile['main.js'].has(k) && !perFile['renderer.js'].has(k)
     );
     if (globalMisses.length > 0 && !patchedAlready) {
