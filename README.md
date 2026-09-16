@@ -39,7 +39,7 @@ github-desktop-zh-cn/
 
 - 本工具仅替换官方安装包内的界面文本，不修改官方功能；
 - GitHub Desktop 遵循 MIT License，汉化后产物保留其版权声明；
-- 本仓库代码与字典遵循 MIT License（见 `LICENSE`）。
+- 本仓库代码与字典遵循 GPL-3.0 许可证（Copyright (C) 2026 lldwb，见 `LICENSE`）。
 
 ## 贡献
 
