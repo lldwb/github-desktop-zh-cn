@@ -18,6 +18,8 @@ npm run patch          # 按字典替换 main.js / renderer.js 并写回（--dry
 npm run restore        # 从 tmp/backup/<版本>/ 还原官方原版（字典有删改时先还原再重打）
 npm run verify         # 校验版本一致性、字典命中率、补丁后 JS 语法
 npm run scan           # 未翻译文案自查（读 sourcemap 里的官方源码，输出待补清单）
+npm run tool           # 交互式中文菜单（打包产物双击即此模式；带子命令时透传给对应脚本）
+npm run build          # 打包成单文件可执行（dist/ 下，双击即用，无需 Node）
 npm test               # 匹配器单元测试（node --test）
 ```
 
@@ -33,12 +35,19 @@ npm test               # 匹配器单元测试（node --test）
   - `verify.js`：版本一致性、字典条目在两个文件中的命中率（0 命中 = 两个文件均未出现）、补丁后 `node --check` 语法校验。
   - `scan.js`：**未翻译文案自查**——读安装目录 `renderer.js.map` 中的官方自有源码（`app/src/**`），提取界面文案候选（JSX 文本 + 字面量），与产物、字典对照后输出待补清单（产物侧忽略大小写与空白差异，因产物文案经 `sentenceCase` 处理）。字典迭代时先用它自查，别只依赖截图。
 - **字典组织**：`dictionaries/<版本>/zh-CN.json`，扁平 `{"原文": "译文"}` 映射，`_` 开头的键为元信息（脚本跳过）；键以反引号开头结尾、含 `${}` 的为**整模板键**（值须是 JS 模板/字符串字面量，用于替换运行时拼接文案）；键写作 `<文件名>.js|原文` 的为**作用域键**（只对该文件生效，用于同名文本在两文件中语义不同的情况，如 `en-US`）。
-- **跨平台**：`--path` 可指向任意平台的 resources 目录；自动探测仅实现 Windows。
+- **打包与分发**（`cli.js` / `bundle.js` / `build.js`，面向使用者的说明见 `docs/打包与分发.md`）：
+  - `cli.js`：交互式中文菜单入口（无参数进菜单；带子命令则透传给对应脚本），`package.json` 的 `tool` 入口。
+  - `bundle.js`：零依赖 CJS 单文件打包器，把 `scripts/` 合成一个自包含 `.js`。**依赖靠静态 `require('...')` 字面量扫描收集**——新增依赖必须写成字面量（模板字符串 / 变量拼接收集不到）；JSON 模块转成 `module.exports = <JSON>`。
+  - `build.js`：Node SEA 打包（`node --experimental-sea-config` 生成 blob → postject 注入 node 可执行文件副本），把 `dictionaries/*/zh-CN.json` 全部作为内嵌资源打进产物，产出 `dist/` 下单文件；构建后自动跑一次 `--help` 自检。
+  - **运行形态与数据根目录**：`common.dataRoot()` 是唯一来源——源码态 = 仓库根；打包态 = 可执行文件所在目录（不可写时回退用户数据目录）。备份、`config.json`、`tmp/` 全在数据根下。
+  - **字典「外部优先、内嵌兜底」**：`<数据根>/dictionaries/<版本>/zh-CN.json` 存在则用它，否则取打包时内嵌的同名资源；用户把字典目录放进数据根即可覆盖内嵌版本。
+- **跨平台**：`--path` 可指向任意平台的 resources 目录；自动探测仅实现 Windows。打包产物只能在构建平台运行（Windows 构建 .exe、macOS 构建 Mach-O、Linux 构建 ELF），跨平台发布用 CI 矩阵构建或各平台各跑一次 `npm run build`。
 
 ### 跨模块共用约定（改代码时别破坏）
 
 - 版本号概念在 `dictionaries/` 目录名、`scripts/` 版本一致性校验、`docs/` 版本对应表三处出现，改版本组织方式时三处同步。
 - 字典文件仅含「原文 → 中文」映射数据，不含任何脚本逻辑；脚本不得在字典外硬编码翻译。
+- 「运行形态」只有 `common.isPackaged()` 一个判据（bundle 产物与 SEA 产物均视为打包态）；数据根目录只有 `common.dataRoot()` 一个来源——脚本不得自行拼 `__dirname` 或假定当前工作目录。面向用户的提示文案在打包态与源码态不同（打包态用户没有 npm），用 `isPackaged()` 分支。
 
 ## 翻译维护（字典迭代）
 
@@ -82,6 +91,11 @@ npm test               # 匹配器单元测试（node --test）
   - **查表键只译一半**：Dexie 错误名表 `e[t+"Error"]=qM[t]`——使用点用英文名查表，只译 `"Unknown"` / `"Abort"` 会让查表永远失败。凡「拼接成标识符」的常量，要么整组一起译、要么整组不动。
   - 教训：**收录前必做「是否参与比较/查表/拼接」判定**，判定方法见「翻译维护」一节。
 - **机制细节（写探针前必读）**：`applyDictInStrings(content, entries)` 期望**已剥离作用域前缀**的键（传 `scopedEntries(entries,'renderer.js')` 的结果），直接塞 `renderer.js|Enabled` 会 0 命中；`stringLiterals` 返回的 `start` / `end` 指向**引号内内容**（不含引号），做「字面量后面紧跟什么」的判断时 post 串以**闭合引号**开头；字典条目**译文不得为空串**（`buildEntries` 抛错），需要消掉某段英文时用单空格 `" "`。
+- **打包态的进程环境与源码态不同（改脚本时注意）**：
+  - `process.execPath` 指向产物自身，**不能**再当 node 用——`verify` 的语法校验已从 `node --check` 子进程改为 `vm.Script` 解析（只解析不执行，两者在官方产物上结果一致）；
+  - bundle 产物里 `require.main` 由打包器复刻（指向入口 `cli.js`），子脚本的 `if (require.main === module) main()` 在打包态**不成立**，`cli.js` 透传子命令时显式调用脚本导出的 `main()`（`patch.js` / `restore.js` 已导出；`locate` / `verify` / `scan` 是加载即执行）；
+  - 打包态下 `__dirname` 被设为可执行文件所在目录，`path.resolve(__dirname, '..')` 不再指向仓库根；产物旁没有 `dictionaries/`，字典走内嵌资源；
+  - 打包态用管道一次性喂入多行 stdin 会丢行（readline 预读），测菜单交互要分次输入。
 
 ## 提交规范
 

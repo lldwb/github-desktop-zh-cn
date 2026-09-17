@@ -22,28 +22,42 @@ GitHub Desktop（Electron 应用）官方未提供简体中文界面——其界
 github-desktop-zh-cn/
 ├── README.md               # 本项目
 ├── LICENSE                 # GPL-3.0
-├── package.json            # 脚本入口（locate / patch / restore / verify / scan）
+├── package.json            # 脚本入口（locate / patch / restore / verify / scan / tool / build）
 ├── AGENTS.md / CLAUDE.md   # agent 指引（唯一权威源为 AGENTS.md）
 ├── .claude/skills/         # 翻译维护技能（补译与纠错的流程、判定标准与探针模板）
 ├── dictionaries/           # 语言字典（核心资产），按版本目录组织
 │   ├── 3.6.5/zh-CN.json    # 首个版本字典
 │   └── README.md           # 字典格式与贡献约定
 ├── scripts/                # 补丁工具链（Node.js，零依赖）
-│   ├── common.js           # 共享：定位 / 版本 / 字典 / 备份 / 扫描匹配器
+│   ├── common.js           # 共享：定位 / 版本 / 字典 / 备份 / 扫描匹配器（SSOT）
 │   ├── locate.js           # 定位安装目录并备份
 │   ├── patch.js            # 按字典替换并写回
 │   ├── restore.js          # 从备份还原官方原版（字典删改后重打用）
 │   ├── verify.js           # 校验版本、命中率与语法
-│   └── scan.js             # 未翻译文案自查（读官方 sourcemap，输出待补清单）
+│   ├── scan.js             # 未翻译文案自查（读官方 sourcemap，输出待补清单）
+│   ├── cli.js              # 交互式中文菜单入口（打包产物的双击形态）
+│   ├── bundle.js           # 零依赖 CJS 单文件打包器
+│   └── build.js            # 打包成单文件可执行（Node SEA）
 ├── test/                   # 匹配器单元测试（npm test）
-└── docs/                   # 文档：使用说明 / 贡献指南（规划中）
+└── docs/                   # 文档
+    ├── 打包与分发.md        # 分发给普通用户：用法、构建、跨平台、常见问题
+    └── README.md           # 文档索引
 ```
 
 ## 使用方式
 
-前置要求：本机已安装对应版本的 GitHub Desktop（Windows 安装目录 `%LOCALAPPDATA%\GitHubDesktop`）。
+### 方式一：下载现成产物（普通用户，无需 Node.js）
+
+到 Releases 下载对应平台的单文件产物，双击运行，按中文菜单操作即可（汉化 / 还原 / 指定安装位置）。详见 **[docs/打包与分发.md](docs/打包与分发.md)**。
+
+自己构建产物：`npm run build`（产物在 `dist/` 下，双击即用；跨平台构建方式见该文档）。
+
+### 方式二：源码运行（开发者）
+
+前置要求：本机已安装 Node.js 与对应版本的 GitHub Desktop（Windows 安装目录 `%LOCALAPPDATA%\GitHubDesktop`）。
 
 ```bash
+npm run tool           # 交互式中文菜单（等价于打包产物的双击运行）
 npm run locate         # 定位安装目录，校验结构，备份原文件到 tmp/backup/<版本>/
 npm run patch          # 按字典替换 main.js / renderer.js 并写回
 npm run verify         # 校验版本一致性、字典命中率、补丁后 JS 语法
@@ -66,6 +80,7 @@ npm run scan           # 自查还有哪些界面文案没翻译（输出待补�
 ## 已知限制
 
 - 汉化后的 `main.js` / `renderer.js` 与官方文件不同，Windows 下可能触发 SmartScreen 提示（应用本体签名不受影响）；
+- 打包产物（单文件可执行）未做代码签名，首次运行可能触发 SmartScreen / 杀软提示——处理方式见 `docs/打包与分发.md`「系统提示怎么处理」；产物只能在构建平台运行，跨平台发布需各平台分别构建；
 - 字典与版本强对应：错配可能导致应用无法启动，`patch` 前务必确认版本一致；
 - 首个字典（3.6.5）覆盖主界面、菜单、常用对话框与错误提示；少数由运行时拼接、或英文原文同时被非界面逻辑复用的文案保持英文（见 `dictionaries/README.md`「已知限制」）。
 
