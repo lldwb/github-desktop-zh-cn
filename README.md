@@ -92,3 +92,11 @@ npm run scan           # 自查还有哪些界面文案没翻译（输出待补�
 ## 贡献
 
 字典条目贡献与脚本改进方式见 `docs/`（贡献指南，规划中）。
+
+## 许可证
+
+GPL-3.0
+
+本仓库以 GNU General Public License v3.0 开源：允许使用、修改与分发，但衍生作品必须以相同协议（GPL-3.0）开源（copyleft）。完整条款见根目录 `LICENSE`。
+
+Copyright (C) 2026 lldwb
