@@ -126,6 +126,7 @@ npm test               # 匹配器单元测试（node --test）
   - 打包态用管道一次性喂入多行 stdin 会丢行（readline 预读），测菜单交互要分次输入。
   - **Electron 打包态是另一套**（`npm run dist` 的产物）：`__dirname` 落在 `resources/app.asar` 内（asar 内 `require` 正常），`process.execPath` 是改名后的应用 exe；字典走 `extraResources` 进应用的 `resources/dictionaries`（不是内嵌资源——`node:sea` 在 Electron 里不可用；**也不能放 exe 同级**，macOS 的数据根在用户数据目录、Linux 的 AppImage 挂在只读临时目录，两处都取不到），由 `gui/main.js` 的 `seedBundledDicts()` 在 `registerIpc()` **之前**播种到数据根——状态与字典表格读的就是数据根里的字典；数据根在 macOS 上恒为用户数据目录（见上）。上面关于打包器复刻 `require.main`、stdin 预读的两条只适用于 bundle / SEA 产物。
 - **改 Release 正文的中文编码坑（实测发生过）**：用脚本改已发布 Release 的正文时，HTTP 响应**不要按数据块 `toString('utf8')` 解码**——多字节字符会在块边界被截断，正文出现 `还��` 这类替换符，而接口照样返回成功；要**按 `Buffer` 拼接后整体解码**。正文以本地 `CHANGELOG.md` 对应段落为准整体写回，写回后逐字复核（与 CHANGELOG 逐字一致、无替换符），别只看状态码。
+- **electron-builder 在 CI 上会隐式发 Release（v0.2.0 首次发 GUI 产物时踩到）**：electron-builder 26 只要 `publish` 未显式指定就自行判定——检出 tag 时（`GITHUB_REF_TYPE=tag`）按 `onTag`、仅检测到 CI 时按 `onTagOrDraft`，随后**在四个平台各自构建全部跑完之后**才去找 `GH_TOKEN`，找不到就报 `GitHub Personal Access Token is not set` 并 exit 1。表现是「每个平台的 GUI job 都失败、且都失败在最后一步」，本地却怎么跑都成功（本地无 CI 与 tag，这条分支不触发），极易误判成打包配置坏了。本仓库的 Release 由 `gh release create` 创建、不走 electron-builder，故 `package.json` 的 `dist` 脚本固定带 `--publish never`——**别去掉**；`electron-builder.yml` 里也不要加 `publish` 配置。要复现本地只需 `CI=true GITHUB_REF_TYPE=tag GITHUB_REF_NAME=v0.2.0 npm run dist`。
 
 ## 提交规范
 
