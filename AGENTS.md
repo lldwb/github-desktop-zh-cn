@@ -158,7 +158,9 @@ npm test               # 匹配器单元测试（node --test）
 
 **Release 由作者的 PAT 创建**（`secrets.RELEASE_TOKEN`），不用内置 `GITHUB_TOKEN`——内置 token 建出来的 Release 署名是 `github-actions[bot]`，而**作者一经创建无法修改**，要换署名只能删了重建，故必须在创建前就定好。首次配置：GitHub → Settings → Developer settings → Personal access tokens → **Fine-grained token**，`Repository access` 只勾本仓库、权限只给 **Contents: Read and write**；再到仓库 Settings → Secrets and variables → Actions 建 repository secret，名字必须是 `RELEASE_TOKEN`。secret 缺失时 release job 会在创建**之前**失败并打印可读原因（构建产物不受影响，仍在 Artifacts 里）；令牌过期后同样会失败，换新令牌重配即可。
 
-**已发布的 Release 不再改动**：CI 只**创建**缺失的 Release——该 tag 的 Release 已存在时，发布步骤直接跳过、正文也不动。因此**改已发布版本的正文不能靠重跑 CI**，只能直接改 Release（`gh release edit <tag> --notes-file <文件>`，只换正文、不碰附件）。历史改写等场景**强推 tag 会再触发一次 CI**（tag 推送即触发），发布步骤同样按设计跳过，产物与正文都不被覆盖。
+**已发布的 Release 不再改动**：CI 只**创建**缺失的 Release——该 tag 的 Release 已**发布**时，发布步骤直接跳过、正文也不动。因此**改已发布版本的正文不能靠重跑 CI**，只能直接改 Release（`gh release edit <tag> --notes-file <文件>`，只换正文、不碰附件）。历史改写等场景**强推 tag 会再触发一次 CI**（tag 推送即触发），发布步骤同样按设计跳过，产物与正文都不被覆盖。
+
+**草稿要删掉重建**（实测踩过）：`gh release create` 是**先建草稿、传完附件才发布**，中途被取消（或上传失败）就留下一个附件不全、还可能是旧提交产物的草稿。草稿对匿名接口不可见（`/releases` 列不出、`/releases/tags/<tag>` 返 404），但 `gh release view` 用写权限令牌**看得见**——不处理的话下次发布步骤会误判「已存在」而跳过，表面成功、实际什么都没发（表现：**发布步骤 0 秒过、Release 列表里却没有这个版本**）。故发布步骤只对**已发布**的跳过，草稿一律 `gh release delete <tag> --yes` 后重建（不带 `--cleanup-tag`，tag 保留）。
 
 CI 在发版前校验三处是否一致（tag ≠ `package.json` 版本、或 CHANGELOG 缺该版本条目时直接失败），但**不定级**——该升哪一位由人按上述规则判断。
 

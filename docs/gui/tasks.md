@@ -98,6 +98,7 @@
 - [x] **zip 产物运行态实测**（解压到 `tmp/gui-test/`，CDP 点界面里的真实按钮，见下表）
 - [x] 文档同步：`CHANGELOG.md`（0.2.0 条目按实际情形改写）、`README.md`（方式一改为随 Release 分发、目录结构补 `build/`、已知限制补 macOS 未签名打开方式）、`docs/打包与分发.md`（产物矩阵表、`extraResources` 理由、CI 构建小节、检查清单与常见问题）、`AGENTS.md`（CI 两类产物、Electron 打包态与 mac 例外）
 - [x] 首次重发（run #8）四个平台的 GUI job 全挂在最后一步：electron-builder 26 在 CI 上**隐式开发布**——检出 tag 按 `onTag`、仅检测到 CI 按 `onTagOrDraft`，构建全部跑完才去找 `GH_TOKEN`，没有就 `GitHub Personal Access Token is not set` 退出（本机复现一致：`CI=true GITHUB_REF_TYPE=tag GITHUB_REF_NAME=v0.2.0 npm run dist`）。`package.json` 的 `dist` 脚本改为 `electron-builder --publish never` 后本地模拟复跑 exit 0
+- [x] 第二次重发（run #9）9 个 job 全绿，Release 仍未出现：run #6 的创建步骤跑了 606 秒后被取消，而 `gh release create` 是**先建草稿、传完附件才发布**，于是留下一个**草稿版 v0.2.0**（附件还是 fa8463f 那次的 5 个 SEA 产物、署名 `github-actions[bot]`）。草稿对匿名接口不可见（`/releases/tags/v0.2.0` → 404），但发布步骤用写权限 PAT 的 `gh release view` 看得见 → 走「已存在，跳过」→ `创建 Release → success (0s)` 表面成功、实际什么都没发。workflow 改为只对**已发布**的跳过，草稿一律 `gh release delete --yes`（不带 `--cleanup-tag`）后重建
 - [ ] **macOS / Linux 产物实机验证**：本机是 Windows，这两个平台的**构建与运行都没验证过**——CI 只做静态自检（runner 无桌面会话），窗口行为与播种链路要等产物出来后实机跑
 - [ ] **重发 v0.2.0**：删远端 tag → 提交本轮改动 → 重打注解 tag 推送 → CI 出四平台两类产物 → Release 一次成型含 GUI 附件
 
