@@ -18,7 +18,7 @@ const {
   backupDir,
 } = require('../scripts/common');
 
-const VERSION = '3.6.5';
+const VERSION = '3.6.5'; // 改成目标字典版本（须与 dictionaries/ 下目录名、安装版本一致）
 const MODE = 'dry'; // 'dry'（收录前预演） | 'land'（打包后复查）
 const CANDIDATES = {
   // '原文': '译文',

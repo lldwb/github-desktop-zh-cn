@@ -42,7 +42,7 @@ npm test               # 匹配器单元测试（node --test）
 
 ## 翻译维护（字典迭代）
 
-本仓库的日常工作有三类：**更新翻译**（GitHub Desktop 官方版本更新后，为新版本更新汉化包）、**补充翻译**（找出并补译尚未汉化的界面文案）、**纠正翻译问题**（错译、译文破坏功能、失效/冗余条目）。操作手册在 `.claude/skills/translation-maintain/`（SKILL.md 三类任务流程 + `references/版本升级.md` 版本适配详程 + `references/收录判定.md` 判定标准 + `references/probe.cjs` 探针模板）；本节是仓库级规则，**两处内容需同步修改**。
+本仓库的日常工作有三类：**更新翻译**（GitHub Desktop 官方版本更新后，为新版本更新汉化包）、**补充翻译**（找出并补译尚未汉化的界面文案）、**纠正翻译问题**（错译、译文破坏功能、失效/冗余条目）。操作手册在 `.claude/skills/translation-maintain/`（`SKILL.md` 三类任务流程 + `references/版本升级.md` 版本适配详程 + `references/收录判定.md` 判定标准 + `references/probe.cjs` 探针模板 + `README.md` 人向简介）；本节是仓库级规则，**两处内容需同步修改**。
 
 **三类任务的共同主干**：取证（`npm run scan` / 截图）→ 判定可否译 → 干跑预演 → 写入字典 → `restore` + `patch` + `verify` → 落地复查 → 提交。
 
