@@ -20,7 +20,7 @@ npm run verify         # 校验版本一致性、字典命中率、补丁后 JS 
 npm run scan           # 未翻译文案自查（读 sourcemap 里的官方源码，输出待补清单）
 npm run tool           # 交互式中文菜单（SEA 产物双击即此模式；带子命令时透传给对应脚本）
 npm run gui            # 图形界面操作面板（Electron 开发态；首次需 npm install）
-npm run dist           # 打包图形界面产物（electron-builder → dist/gui/，产出 NSIS 安装包与 zip 免安装包）
+npm run dist           # 打包图形界面产物（electron-builder → dist/gui/，按当前平台：Windows NSIS+zip / macOS dmg+zip / Linux AppImage+deb；产物自检见 node build/check-gui-dist.js）
 npm run build          # 打包成单文件可执行（dist/ 下，双击即用，无需 Node）
 npm test               # 匹配器单元测试（node --test）
 ```
@@ -46,10 +46,10 @@ npm test               # 匹配器单元测试（node --test）
   - `cli.js`：交互式中文菜单入口（无参数进菜单；带子命令则透传给对应脚本），`package.json` 的 `tool` 入口。菜单只输出**结果**（命中多少处、是否重启），中间过程不出现在菜单里——子命令走 `quiet` 参数控制（命令行入口仍输出明细）。
   - `bundle.js`：零依赖 CJS 单文件打包器，把 `scripts/` 合成一个自包含 `.js`。**依赖靠静态 `require('...')` 字面量扫描收集**——新增依赖必须写成字面量（模板字符串 / 变量拼接收集不到）；JSON 模块转成 `module.exports = <JSON>`。
   - `build.js`：Node SEA 打包（`node --experimental-sea-config` 生成 blob → postject 注入 node 可执行文件副本），把**最新版本**的字典（`dictionaries/<最新>/zh-CN.json`）作为内嵌资源打进产物——更早版本用到时由 `dict-sync` 联网拉取；产出 `dist/` 下单文件；构建后自动跑一次 `--help` 自检。
-  - **运行形态与数据根目录**：`common.dataRoot()` 是唯一来源，判据两条——`isPackaged()`（bundle / SEA 产物）与 `isElectronPackaged()`（Electron 打包产物，即 `isElectron() && !process.defaultApp`）。**源码态与 Electron 开发态**（`npm run gui`）= 仓库根；**SEA 产物与 Electron 打包产物** = 可执行文件所在目录（不可写时回退用户数据目录）。备份、`config.json`、`dictionaries/`、`tmp/` 全在数据根下。
-  - **字典「外部优先、内嵌兜底」**：`<数据根>/dictionaries/<版本>/zh-CN.json` 存在则用它，否则取打包时内嵌的同名资源；都没有才联网下载（见下）。用户把字典目录放进数据根即可覆盖内嵌版本。
-  - **构建与发布（CI）**：`.github/workflows/build.yml` 用矩阵在各平台原生 runner 上构建（`windows-latest` / `macos-latest`(arm64) / `macos-15-intel` / `ubuntu-latest`）——手动触发只构建，推 `v*` tag 则构建后自动发 Release 并附 `SHA256SUMS`。发布前先校验 tag 与 `package.json` 版本一致，不一致直接失败，**改版本号时两者必须同步**。
-  - **产物去处：Artifacts 是构建中转，Release 才是成品**——手动触发构建后产物留在该次运行的 **Artifacts** 里，下载得到的是 **zip 压缩包**（GitHub 强制打包），解压后 macOS / Linux 产物可能**丢可执行位**，它只用来自己验证构建，别当成品发给使用者。推 tag 后 CI 建的 Release，附件是**原始文件**（不套 zip），名为 `github-desktop-zh-cn-v<版本>-<平台>-<架构>[.exe]`，另附 `SHA256SUMS`——给使用者的下载链接一律指向 Release 附件。
+  - **运行形态与数据根目录**：`common.dataRoot()` 是唯一来源，判据两条——`isPackaged()`（bundle / SEA 产物）与 `isElectronPackaged()`（Electron 打包产物，即 `isElectron() && !process.defaultApp`）。**源码态与 Electron 开发态**（`npm run gui`）= 仓库根；**SEA 产物与 Electron 打包产物** = 可执行文件所在目录（不可写时回退用户数据目录）。备份、`config.json`、`dictionaries/`、`tmp/` 全在数据根下。一个例外：**macOS 上的 Electron 产物**恒取用户数据目录——exe 在 `.app` 包的 `Contents/MacOS` 里，往包内写一个字节就会让签名失效、下次启动被 Gatekeeper 拒开。
+  - **字典「外部优先、内嵌兜底」**：`<数据根>/dictionaries/<版本>/zh-CN.json` 存在则用它，否则取打包时内嵌的同名资源；都没有才联网下载（见下）。用户把字典目录放进数据根即可覆盖内嵌版本。Electron 产物没有内嵌资源（`node:sea` 不可用），字典随包放在应用的 `resources/dictionaries`，由 `gui/main.js` 的 `seedBundledDicts()` 首次运行时把数据根里缺的版本播种过去（只补缺失，不覆盖用户替换或在线更新过的字典）——macOS 与 Linux 的 AppImage 取不到「exe 旁」，靠的就是这一步。
+  - **构建与发布（CI）**：`.github/workflows/build.yml` 用矩阵在各平台原生 runner 上构建（`windows-latest` / `macos-latest`(arm64) / `macos-15-intel` / `ubuntu-latest`），**两个 job 并行出两类产物**——`build`（单文件可执行）与 `gui`（Electron 图形界面，配置见 `electron-builder.yml`），`release` 等两者都完成再发。手动触发只构建，推 `v*` tag 则构建后自动发 Release 并附 `SHA256SUMS`。发布前先校验 tag 与 `package.json` 版本一致，不一致直接失败，**改版本号时两者必须同步**。GUI job 在每平台构建后跑 `node build/check-gui-dist.js` 静态自检（应用包结构 / 内置字典 / Windows 产物子系统），**运行态实测只能在本地做**（runner 没有桌面会话，起不了窗口）。
+  - **产物去处：Artifacts 是构建中转，Release 才是成品**——手动触发构建后产物留在该次运行的 **Artifacts** 里（单文件产物 `dist-<os>`、GUI 产物 `gui-<os>`），下载得到的是 **zip 压缩包**（GitHub 强制打包），解压后 macOS / Linux 产物可能**丢可执行位**，它只用来自己验证构建，别当成品发给使用者。推 tag 后 CI 建的 Release，附件是**原始文件**（不套 zip），单文件产物名为 `github-desktop-zh-cn-v<版本>-<平台>-<架构>.exe`，GUI 产物同一套词序（`…-win32-x64-setup.exe` / `…-win32-x64.zip` / `…-darwin-arm64.dmg` / `…-linux-x64.AppImage` …），另附 `SHA256SUMS`——给使用者的下载链接一律指向 Release 附件。GUI 产物体积高一个量级（Windows 实测 zip 146 MB、NSIS 安装包 106 MB），四平台全上时 Release 附件合计近 GB 级，属预期。
 - **跨平台**：`--path` 可指向任意平台的 resources 目录；自动探测仅实现 Windows。打包产物只能在构建平台运行（Windows 构建 .exe、macOS 构建 Mach-O、Linux 构建 ELF）——基底是构建机的 node 可执行文件，macOS 还必须在 macOS 上注入与签名，**因此没有交叉构建这条路**。跨平台发布走 CI 矩阵（每个平台一个原生 runner），或在各平台各跑一次 `npm run build`。
 
 ### 在线能力（改这些代码前先读）
@@ -124,7 +124,7 @@ npm test               # 匹配器单元测试（node --test）
   - bundle 产物里 `require.main` 由打包器复刻（指向入口 `cli.js`），子脚本的 `if (require.main === module) main()` 在打包态**不成立**，`cli.js` 透传子命令时显式调用脚本导出的 `main()`（`patch.js` / `restore.js` 已导出；`locate` / `verify` / `scan` 是加载即执行）；
   - 打包态下 `__dirname` 被设为可执行文件所在目录，`path.resolve(__dirname, '..')` 不再指向仓库根；产物旁没有 `dictionaries/`，字典走内嵌资源；
   - 打包态用管道一次性喂入多行 stdin 会丢行（readline 预读），测菜单交互要分次输入。
-  - **Electron 打包态是另一套**（`npm run dist` 的产物）：`__dirname` 落在 `resources/app.asar` 内（asar 内 `require` 正常），`process.execPath` 是改名后的应用 exe；字典走 `extraFiles` 落在 **exe 同级**（不是内嵌资源——`node:sea` 在 Electron 里不可用），`dataRoot()/dictionaries` 的「外部字典优先」逻辑因此零改动命中。上面关于打包器复刻 `require.main`、stdin 预读的两条只适用于 bundle / SEA 产物。
+  - **Electron 打包态是另一套**（`npm run dist` 的产物）：`__dirname` 落在 `resources/app.asar` 内（asar 内 `require` 正常），`process.execPath` 是改名后的应用 exe；字典走 `extraResources` 进应用的 `resources/dictionaries`（不是内嵌资源——`node:sea` 在 Electron 里不可用；**也不能放 exe 同级**，macOS 的数据根在用户数据目录、Linux 的 AppImage 挂在只读临时目录，两处都取不到），由 `gui/main.js` 的 `seedBundledDicts()` 在 `registerIpc()` **之前**播种到数据根——状态与字典表格读的就是数据根里的字典；数据根在 macOS 上恒为用户数据目录（见上）。上面关于打包器复刻 `require.main`、stdin 预读的两条只适用于 bundle / SEA 产物。
 - **改 Release 正文的中文编码坑（实测发生过）**：用脚本改已发布 Release 的正文时，HTTP 响应**不要按数据块 `toString('utf8')` 解码**——多字节字符会在块边界被截断，正文出现 `还��` 这类替换符，而接口照样返回成功；要**按 `Buffer` 拼接后整体解码**。正文以本地 `CHANGELOG.md` 对应段落为准整体写回，写回后逐字复核（与 CHANGELOG 逐字一致、无替换符），别只看状态码。
 
 ## 提交规范
@@ -151,9 +151,11 @@ npm test               # 匹配器单元测试（node --test）
 3. 发版提交必须位于**该版本最后一个功能提交之后**；发版条目**一次写全**（覆盖该版本全部改动），**一经创建不得在后续提交中修改**——发版后发现的补充只能记入下一个版本的条目；
 4. 打注解 tag：`git tag -a vX.Y.Z -m "vX.Y.Z: <一句话说明>"`；
 5. tag 与 main 一并推送：`git push origin main --follow-tags`（`--follow-tags` 只带注解 tag，与上面的 `-a` 配套）。发版推送是**用户明确要求的动作**，与「提交规范」里「不自动 push」不冲突——日常提交仍只落本地；
-6. CI（`.github/workflows/build.yml`）随即构建各平台产物并发 Release，**正文取自 `CHANGELOG.md` 对应段落**（`scripts/changelog.js` 提取，不是自动生成的变更列表）。
+6. CI（`.github/workflows/build.yml`）随即构建各平台产物并发 Release——单文件产物与 GUI 产物**两类都发**（四个平台、共十余个附件，见上「产物去处」），**正文取自 `CHANGELOG.md` 对应段落**（`scripts/changelog.js` 提取，不是自动生成的变更列表）；GUI 产物随 Release 分发是既定行为，改 `gui/` 或 `electron-builder.yml` 后发版即自动带上。
 
 **tag 推送与 Release 创建是同一个发版动作的两半，须配套完成、一次做完**：只推 tag 不建 Release 时首页 Releases 区块收不到该版本，只建 Release 不推 tag 时远端没有对应 ref（`/tree/<tag>` 是 404）——任一中间态都算发版未完成。**不留只存在于本地的 tag**；tag 还须指向已在远程 `main` 上的提交，避免「tag 打得开、`main` 上却看不到」的错位。
+
+**Release 由作者的 PAT 创建**（`secrets.RELEASE_TOKEN`），不用内置 `GITHUB_TOKEN`——内置 token 建出来的 Release 署名是 `github-actions[bot]`，而**作者一经创建无法修改**，要换署名只能删了重建，故必须在创建前就定好。首次配置：GitHub → Settings → Developer settings → Personal access tokens → **Fine-grained token**，`Repository access` 只勾本仓库、权限只给 **Contents: Read and write**；再到仓库 Settings → Secrets and variables → Actions 建 repository secret，名字必须是 `RELEASE_TOKEN`。secret 缺失时 release job 会在创建**之前**失败并打印可读原因（构建产物不受影响，仍在 Artifacts 里）；令牌过期后同样会失败，换新令牌重配即可。
 
 **已发布的 Release 不再改动**：CI 只**创建**缺失的 Release——该 tag 的 Release 已存在时，发布步骤直接跳过、正文也不动。因此**改已发布版本的正文不能靠重跑 CI**，只能直接改 Release（`gh release edit <tag> --notes-file <文件>`，只换正文、不碰附件）。历史改写等场景**强推 tag 会再触发一次 CI**（tag 推送即触发），发布步骤同样按设计跳过，产物与正文都不被覆盖。
 

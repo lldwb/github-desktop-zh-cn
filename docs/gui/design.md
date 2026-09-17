@@ -64,24 +64,26 @@ const beside = path.dirname(process.execPath);
 | 源码 CLI（`npm run patch`） | false | false | 仓库根（不变） |
 | SEA 单文件产物 | true | false | exe 所在目录（不变） |
 | **Electron 开发态**（`npm run gui`） | false | false | 仓库根（字典、备份与源码态一致） |
-| **Electron 打包产物** | false | true | **exe 所在目录**（与 SEA 产物语义一致） |
+| **Electron 打包产物** | false | true | **exe 所在目录**（与 SEA 产物语义一致）；**macOS 例外**：恒取用户数据目录（见下） |
 
-Electron 里 `process.execPath` 是**应用可执行文件**（改名后的 exe，非 `electron.exe`），故取 `dirname` 即产物目录。
+Electron 里 `process.execPath` 是**应用可执行文件**（改名后的 exe，非 `electron.exe`），故取 `dirname` 即产物目录。macOS 是唯一的例外：exe 在 `.app` 包的 `Contents/MacOS` 里，往包内写一个字节就会让签名失效、下次启动被 Gatekeeper 拒开，故 `dataRoot()` 在 macOS 的 Electron 打包态直接返回用户数据目录（`~/Library/Application Support/github-desktop-zh-cn`）。
 
-**打包后的目录布局**（NSIS 单用户安装 → `%LOCALAPPDATA%\Programs\<productName>\`，**可写**）：
+**打包后的目录布局**（Windows 实例，NSIS 单用户安装 → `%LOCALAPPDATA%\Programs\<productName>\`，**可写**）：
 
 ```
 %LOCALAPPDATA%\Programs\<productName>\
   <name>.exe                        ← 应用 exe（Electron 里 process.execPath 即此）
-  dictionaries/3.6.6/zh-CN.json     ← extraFiles 落到 exe 同级
   resources/app.asar                ← 应用代码（gui/ + scripts/）
+  resources/dictionaries/3.6.6/zh-CN.json ← 内置字典（extraResources）
   …（Electron 运行时文件）
-  tmp/backup/<版本>/、config.json    ← 首次汉化后按 dataRoot() 生成，与 exe 同级
+  dictionaries/、tmp/backup/<版本>/、config.json ← 首次运行后按 dataRoot() 生成，与 exe 同级
 ```
 
-- 字典走 `extraFiles`（复制到**应用根**，即 exe 同级）而**不是** `extraResources`（复制到 `resources/`）——正是为了让现有 `dataRoot()/dictionaries/` 的「外部字典优先」逻辑零改动命中，无需为 Electron 新增内嵌资源读取路径（`embeddedAsset()` 走 `node:sea`，Electron 中不可用）。
+- 字典走 `extraResources`（进应用的 `resources/`）而**不是** `extraFiles`（exe 同级）。**设计初期选的是 `extraFiles`**——当时只考虑 Windows，让 `dataRoot()/dictionaries/` 的「外部字典优先」零改动命中最省事。加入 macOS 与 Linux 后这条不成立：macOS 的数据根恒在用户数据目录（理由见上），Linux 的 AppImage 运行时挂在只读临时目录，**两者都取不到 exe 旁那份**。改由 `gui/main.js` 的 `seedBundledDicts()` 首次运行时把数据根里缺的版本复制过去——数据根的字典查找逻辑仍然零改动，三平台一条路径。
+  - 播种**只补缺失的版本**：数据根里已有该版本（用户自己替换过、或在线更新过）时不覆盖，保持「外部字典优先」的语义。
+  - 播种必须发生在 `registerIpc()` **之前**：状态与字典表格读的就是数据根里的字典。
 - asar 内 `require('../scripts/common.js')` 正常（Electron 支持 asar 内 require）；`common.REPO_ROOT` 在 asar 内会指向 `app.asar`，但 Electron 打包态下 `dataRoot()` 不走该分支。
-- NSIS 配置 `oneClick: false`（允许改安装目录）——若用户装进 `C:\Program Files`，`dataRoot()` 按现有逻辑回退用户数据目录，此时 exe 旁的字典读不到，靠 `dict-sync` 联网取（见风险表）。
+- NSIS 配置 `oneClick: false`（允许改安装目录）、`perMachine: false`（装用户目录，省掉 UAC）——即使用户装进 `C:\Program Files`，数据根按现有逻辑回退用户数据目录，内置字典照常播种过去，`dict-sync` 联网兜底因此不再是必需品（初期设计里它曾是这条路径的唯一解法）。
 
 ### 进程结构（关键决策点 2）
 
@@ -169,14 +171,16 @@ Electron 里 `process.execPath` 是**应用可执行文件**（改名后的 exe�
 
 | 文件 | 类型 | 说明 |
 |---|---|---|
-| `gui/main.js` | 新增 | 主进程：窗口创建、IPC 处理器、调用 `scripts/` |
+| `gui/main.js` | 新增 | 主进程：窗口创建、IPC 处理器、调用 `scripts/`；`seedBundledDicts()` 首次运行播种内置字典（打包态才生效） |
 | `gui/preload.js` | 新增 | `contextBridge` 暴露 `window.api` |
 | `gui/index.html` | 新增 | 界面结构 |
 | `gui/renderer.js` | 新增 | 渲染逻辑：状态渲染、表格、搜索、按钮 |
 | `gui/style.css` | 新增 | 样式（贴合截图配色：浅色工具栏、斑马纹表格、灰底状态栏） |
-| `electron-builder.yml` | 新增 | 打包配置：`files`（`gui/` + `scripts/`）、`extraFiles`（字典 → exe 同级）、`electronDownload.mirror`、NSIS 选项、产物命名 |
+| `electron-builder.yml` | 新增 | 打包配置：`files`（`gui/` + `scripts/`）、`extraResources`（字典 → 应用的 `resources/`）、`electronDownload.mirror`、NSIS 选项、三平台目标、产物命名 |
+| `build/check-gui-dist.js` | 新增 | GUI 产物静态自检（应用包结构 / 内置字典 / Windows 产物子系统），CI 与本地共用 |
+| `.github/workflows/build.yml` | 修改 | 新增 `gui` job（四平台矩阵构建 GUI 产物 → 自检 → 上传），`release` 改为等两类产物都完成 |
 | `.npmrc` | 新增 | 构建期镜像（`electron_mirror` / `electron_builder_binaries_mirror`）；不设 `registry`，npm 包仍走各人自己的源 |
-| `scripts/common.js` | 修改 | `dataRoot()` 增加 Electron 判据（新增 `isElectron` / `isElectronPackaged` 导出）；新增 `splitScopedKey`（字典键解析的 SSOT，供 GUI 的「类型」列复用） |
+| `scripts/common.js` | 修改 | `dataRoot()` 增加 Electron 判据（新增 `isElectron` / `isElectronPackaged` 导出）与 **macOS 例外**；新增 `splitScopedKey`（字典键解析的 SSOT，供 GUI 的「类型」列复用） |
 | `package.json` | 修改 | `main`、`gui` / `dist` 脚本、`devDependencies`（electron + electron-builder） |
 | `AGENTS.md` | 修改 | 「运行形态」判据、常用命令、架构节同步 |
 | `README.md` | 修改 | 使用方式增加 GUI 形态 |
@@ -190,15 +194,15 @@ Electron 里 `process.execPath` 是**应用可执行文件**（改名后的 exe�
 - **单元测试**：`test/` 覆盖的是 `reverseEntries` / `stringLiterals` 等纯函数，`dataRoot()` 改动不影响；`npm test` 应保持全绿（收尾须实测确认）。
 - **仓库体积/依赖**：新增 `devDependencies.electron` 与 `package-lock.json`（`node_modules/` 已被 `.gitignore` 忽略）。Electron 二进制约 158MB（zip），构建产物目录约 200MB。
 - **`.gitignore`**：已含 `node_modules/`、`dist/`、`out/`，GUI 产物落在 `dist/gui/`，无需改动。
-- **CI**：不动（本次不做 GUI 打包 job）。
+- **CI**：新增 `gui` job（四平台矩阵：构建 → `node build/check-gui-dist.js` 自检 → 上传），`release` 改为等 `build` 与 `gui` 都完成；`build` job 与矩阵项不变。
 - **安全**：GUI 不新增网络行为；联网仅经现有 `net.js`（字典同步 / 检查更新），远程地址仍只有 `common.js` 的 `GH_*` 一处定义。
 
 ## 风险与对策
 
 | 风险 | 对策 |
 |---|---|
-| 产物不可写（放 `C:\Program Files`）时数据根回退用户数据目录，exe 旁的字典读不到 | 文档明确「GUI 产物放在可写目录使用」；回退时 `dict-sync` 会联网取字典（现有行为），窗口状态栏提示当前数据根 |
-| Electron 二进制 / electron-builder 构建工具下载失败（国内网络，且构建工具自身**不走系统代理**） | 文档给出镜像设置（`ELECTRON_MIRROR` 与 `ELECTRON_BUILDER_BINARIES_MIRROR`）；本机已验证 Electron 镜像 3.1MB/s、electron-builder 二进制镜像目录可达 |
+| 产物不可写（放 `C:\Program Files`）时数据根回退用户数据目录，内置字典与它不在一处 | 内置字典由 `seedBundledDicts()` 播种到**实际数据根**（初期设计只考虑 Windows、靠 `dict-sync` 联网取，加入 macOS / Linux 后改为播种兜底）；文档明确「GUI 产物放在可写目录使用」，状态栏提示当前数据根 |
+| Electron 二进制 / electron-builder 构建工具下载失败（国内网络，且构建工具自身**不走系统代理**） | 镜像**固化在文件里**（`.npmrc` 的 `electron_mirror` / `electron_builder_binaries_mirror`，加 `electron-builder.yml` 的 `electronDownload.mirror`——后者不可省，electron-builder 取 Electron 走 `resolveAssetURL`、**不读** `ELECTRON_MIRROR`），无需手动设环境变量；CI 在境外，workflow 删掉 `.npmrc` 并把下载地址覆盖回官方源 |
 | 实测汉化会改动本机 GitHub Desktop | 汉化前备份（现有逻辑，写 `tmp/backup/<版本>/`），实测后按需 `restore`；实测前向用户确认 |
 | 渲染进程误加编辑能力导致字典被改坏 | 表格 `readonly` + 无写盘 IPC 通道；字典写盘通道在 GUI 中**不存在**（`writeDict` 仅由 `dict-sync` 调用） |
-| 窗口在 macOS / Linux 未验证 | 打包脚本按当前平台工作（复制对应平台 Electron 运行时，与 `build.js` 的「不能交叉构建」一致）；跨平台验证留待对应平台的 CI 或本地 |
+| 窗口在 macOS / Linux 未验证 | 打包脚本按当前平台工作（复制对应平台 Electron 运行时，与 `build.js` 的「不能交叉构建」一致）；CI 的 `gui` job 会出三平台产物并做静态结构自检，但**窗口行为、数据根与播种链路仍待对应平台实机实测**（runner 没有桌面会话） |

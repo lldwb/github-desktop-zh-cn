@@ -53,6 +53,8 @@ github-desktop-zh-cn/
 │   ├── renderer.js         # 渲染逻辑：状态 / 只读字典表格 / 搜索 / 按钮
 │   └── style.css           # 样式
 ├── electron-builder.yml    # GUI 打包配置（npm run dist → dist/gui/）
+├── build/                  # 构建期资源（electron-builder 的 buildResources）
+│   └── check-gui-dist.js   # GUI 产物静态自检（包结构 / 内置字典 / Windows 子系统），CI 与本地共用
 ├── .npmrc                  # 构建期镜像（Electron 与 electron-builder 二进制走 npmmirror）
 ├── test/                   # 匹配器单元测试（npm test）
 └── docs/                   # 文档
@@ -76,23 +78,25 @@ github-desktop-zh-cn/
 
 界面：工具栏（汉化 / 还原 / 选择 / 检查更新 / 刷新）+ 字典表格（英文 / 中文 / 类型）+ 底部路径与状态栏；操作前有确认框（提示会先自动备份），完成后窗口内提示命中处数与重启结果，运行期间显示进度阶段。
 
-GUI 产物**尚未随 Release 分发**，需自行构建；不想构建就用下面的「方式二」直接下载现成产物。
+GUI 产物**随 Release 分发**（三平台）：Windows 用 `…-win32-x64-setup.exe`（安装包，可选安装目录）或 `…-win32-x64.zip`（免安装），macOS 用 `…-darwin-arm64.dmg` / `…-darwin-x64.dmg`，Linux 用 `…-linux-x64.AppImage` / `…-linux-x64.deb`。也可以自行构建：
 
 ```bash
 npm install       # 首次：安装 Electron 与 electron-builder（仅构建期依赖，不进产物逻辑）
 npm run gui       # 开发态：直接打开窗口，用仓库里的字典与备份
-npm run dist      # 打包到 dist/gui/：NSIS 安装包 + zip 免安装包
+npm run dist      # 按当前平台打包到 dist/gui/（Windows：NSIS + zip；macOS：dmg + zip；Linux：AppImage + deb）
 ```
 
 首次构建会下载 Electron 二进制与打包工具（国内直连 GitHub 较慢）。仓库已把镜像固化在 `.npmrc` 与 `electron-builder.yml` 里，**无需手动设环境变量**。
 
-GUI 与命令行是**同一套脚本**的两种界面——定位 / 替换 / 备份 / 还原规则完全一致，没有第二份实现。GUI 产物把数据目录定在**可执行文件所在目录**（与单文件产物相同），备份与 `config.json` 就地存放，两种界面可以随时换用。
+GUI 与命令行是**同一套脚本**的两种界面——定位 / 替换 / 备份 / 还原规则完全一致，没有第二份实现。GUI 产物把数据目录定在**可执行文件所在目录**（与单文件产物相同），备份与 `config.json` 就地存放，两种界面可以随时换用；**macOS 是例外**——`.app` 包内写入会让签名失效（下次启动被 Gatekeeper 判为「已损坏」），故数据根恒为用户数据目录（`~/Library/Application Support/github-desktop-zh-cn`）。
 
 > 免安装包请用 **zip**（解压即用）。electron-builder 的 portable 目标会把自身解压到临时目录再运行，备份与配置会跟着写进临时目录、退出后可能被清理，本仓库不提供该目标。
 
 > GUI 产物放在**可写目录**使用（如 `D:\工具\`）。装进 `C:\Program Files` 时数据目录会按既有规则回退到用户数据目录，状态栏会如实显示当前数据根。
 
-### 方式二：下载现成产物（普通用户，无需 Node.js）
+> 字典随包内置在应用内（`resources/dictionaries`），**首次运行时自动播种**到数据根——macOS 与 Linux 的 AppImage 取不到「可执行文件旁」，正是靠这一步拿到字典；已存在的版本不会被覆盖，自己替换过或在线更新过的字典保持不动。
+
+### 方式二：单文件可执行（普通用户，无需 Node.js）
 
 到 Releases 下载对应平台的单文件产物（Windows 为 `github-desktop-zh-cn-v<版本>-win32-x64.exe`），双击即用。
 
@@ -101,7 +105,7 @@ GUI 与命令行是**同一套脚本**的两种界面——定位 / 替换 / 备
 双击产物，出现中文菜单：
 
 ```
- GitHub Desktop 汉化工具 v0.1.1
+ GitHub Desktop 汉化工具 v0.2.0
 ────────────────────────────────────────────────────────────────
  安装位置：C:\Users\<用户名>\AppData\Local\GitHubDesktop\app-3.6.6\resources\app
  应用版本：3.6.6
@@ -170,7 +174,7 @@ D:\工具\
 
 - **Windows SmartScreen**：首次运行可能出现「Windows 已保护你的电脑」。产物未做代码签名（开源项目通常不做），点「更多信息」→「仍要运行」即可。
 - **杀毒软件误报**：Node.js 打包的单文件程序（SEA）偶被启发式引擎误报，属已知误报类型；可加白名单，或改用源码方式运行。
-- **macOS**：产物未签名时右键 →「打开」，或执行 `xattr -dr com.apple.quarantine <产物>`；用 `npm run build` 在 macOS 上构建会自动做 ad-hoc 签名（`codesign --sign -`）。
+- **macOS**：产物未签名时右键 →「打开」，或执行 `xattr -dr com.apple.quarantine <产物>`；用 `npm run build` 在 macOS 上构建会自动做 ad-hoc 签名（`codesign --sign -`），GUI 产物则**明确不做签名**（`mac.identity: null`，仓库无证书），首次打开一律走右键「打开」或去掉隔离属性。
 - **汉化后 GitHub Desktop 本体**：替换的是官方安装目录内的 `main.js` / `renderer.js`，Windows 下可能触发 SmartScreen 提示，不影响功能。
 
 #### 7. 卸载 / 还原
@@ -208,7 +212,7 @@ npm run scan           # 自查还有哪些界面文案没翻译（输出待补�
 ## 已知限制
 
 - 汉化后的 `main.js` / `renderer.js` 与官方文件不同，Windows 下可能触发 SmartScreen 提示（应用本体签名不受影响）；
-- 打包产物（单文件可执行与 GUI 安装包）均未做代码签名，首次运行可能触发 SmartScreen / 杀软提示——处理方式见 `docs/打包与分发.md`「系统提示怎么处理」；产物只能在构建平台运行，跨平台发布需各平台分别构建；
+- 打包产物（单文件可执行与 GUI 安装包）均未做代码签名，首次运行可能触发 SmartScreen / 杀软提示——处理方式见上文「系统提示怎么处理」；**macOS 上未签名产物无法直接双击**，需右键「打开」确认一次，或执行 `xattr -dr com.apple.quarantine "/Applications/GitHub Desktop 汉化工具.app"`；产物只能在构建平台运行，跨平台发布需各平台分别构建；
 - 字典与版本强对应：错配可能导致应用无法启动，`patch` 前务必确认版本一致；
 - **没有备份时的还原**：工具按字典把中文反向替换回英文，个别词形可能与官方略有差异（同义、单复数、大小写），少数译文本身就是空格 / 标点等通用文本的位置保持原样——追求与官方逐字节一致时，请到 <https://desktop.github.com> 重装该版本；
 - **在线能力需要网络**：本地（或打包内嵌）没有对应版本字典时才会联网拉取；离线状态下首次使用某个新版本会失败，已有字典则完全离线可用；

@@ -1,6 +1,6 @@
 # GUI 操作面板 · 任务清单
 
-> 状态：**八组全部完成**（GUI 已实现、打包已实测、文档已同步、改动已本地提交）。完成一项即改 `- [x]`；第六 / 七 / 八组因会话中断为事后补勾，逐项证据见条目本身。
+> 状态：**第一～八组完成**（GUI 已实现、打包已实测、文档已同步、改动已本地提交）；**第九组「随 Release 分发」进行中**——Windows 产物已实机实测，macOS / Linux 产物待 CI 出包后验证。完成一项即改 `- [x]`；第六 / 七 / 八组因会话中断为事后补勾，逐项证据见条目本身。
 
 ## 一、前置：运行形态判据（`common.js`）
 
@@ -37,11 +37,11 @@
 
 ## 五、打包（electron-builder）
 
-- [x] `electron-builder.yml`：`files`（`gui/` + `scripts/` + `package.json`）、`extraFiles`（`dictionaries/` → exe 同级）、NSIS 选项（`oneClick: false`、可选安装目录）、产物命名、`directories.output: dist/gui`
+- [x] `electron-builder.yml`：`files`（`gui/` + `scripts/` + `package.json`）、`extraResources`（`dictionaries/` → 应用的 `resources/`；**初版用的是 `extraFiles`（exe 同级），加入 macOS / Linux 后改为 `extraResources` + 首次运行播种**，理由见 `design.md`「运行形态与数据根」）、NSIS 选项（`oneClick: false`、可选安装目录）、产物命名、`directories.output: dist/gui`
 - [x] `package.json` 增加 `dist` 脚本
 - [x] 构建期网络打通：先用镜像取到 `winCodeSign` / `nsis` 二进制（`ELECTRON_BUILDER_BINARIES_MIRROR`），确认构建不再因下载失败中断（镜像固化进 `.npmrc` + `electron-builder.yml`，`npm run dist` 全程走 npmmirror，exit 0）
 - [x] 产物自检：**zip 免安装包**启动不出现控制台（exe PE 头 `Subsystem=2` `WINDOWS_GUI`）、窗口正常（截图核对：5 个按钮 / 三列表格 / 底部路径栏 / 状态栏齐全，无错乱与截断；布局量得 47+32+625+30+30 = 764 正好填满视口）、状态正确。**NSIS 安装包未实机安装**（会写入系统，超出实测授权范围，留待发版前确认）
-- [x] 校验打包产物的 `dataRoot` 落在安装目录（备份写在该目录的 `tmp/backup/`）；字典从 exe 同级 `dictionaries/` 被读到（实测 `state.dataRoot` = `dist\gui\win-unpacked`，`dict.source` = `<exe 同级>\dictionaries\3.6.6\zh-CN.json`，备份落在 `<dataRoot>\tmp\backup\3.6.6\`）
+- [x] 校验打包产物的 `dataRoot` 落在安装目录（备份写在该目录的 `tmp/backup/`）；字典由首次运行**播种**到数据根（zip 产物实测：`state.dataRoot` = 解压目录，`dict.source` = `<解压目录>\dictionaries\3.6.6\zh-CN.json`，备份落在 `<数据根>\tmp\backup\3.6.6\`；播种前该目录无 `dictionaries/`）
 
 ## 六、文档同步
 
@@ -83,3 +83,34 @@
 - [x] 确认无临时配置残留（代码与配置：`gui/` 无调试端口 / 本机路径 / console 残留；实测在 `tmp/` 下生成的快照与探针均被 `.gitignore` 覆盖，不入库。实测中 CLI `patch` 自动生成的 `tmp/backup/3.6.6/` 已删除）
 - [x] 按单一职责拆分提交（GUI 主体 / 打包脚本 / 文档同步分开），显式 `git add <文件>`——`d9a743e` / `dfb2dac` / `8c3f517`
 - [x] 只做本地提交，不 push / 不建 PR
+
+## 九、随 Release 分发（v0.2.0 重发）
+
+初版把 GUI 产物定位为「自行构建」：CI 不动、Release 只含 SEA 单文件产物。用户要求 v0.2.0 的 Release 带上 GUI 产物后，改为**随 Release 分发、三平台全上**。
+
+- [x] `scripts/common.js`：`dataRoot()` 增加 **macOS 例外**——Electron 打包态在 darwin 上恒取用户数据目录（`.app` 包内写入会让签名失效、下次启动被 Gatekeeper 拒开）
+- [x] `gui/main.js`：`seedBundledDicts()` 把应用内 `resources/dictionaries` 里数据根缺失的版本复制过去（只补缺失，不覆盖用户替换或在线更新过的）；调用点在 `registerIpc()` **之前**——状态与字典表格读的就是数据根里的字典
+- [x] `electron-builder.yml` 重写：字典改 `extraResources`；目标扩为三平台（win `nsis`+`zip` / mac `dmg`+`zip` / linux `AppImage`+`deb`）；`artifactName` 用 `${platform}`（darwin / win32 / linux）与单文件产物同一套词序；`mac.identity: null` 明确不签名
+- [x] `build/check-gui-dist.js`：产物静态自检——`app.asar` 大小与 11 个必备文件（解析 asar 头）、内置字典至少一个版本、Windows 产物 PE `Subsystem=2`、至少一个可分发产物；有失败项时 exit 1
+- [x] `.github/workflows/build.yml`：新增 `gui` job（四平台矩阵；删 `.npmrc` 走官方源；`--config.electronDownload.mirror=` 覆盖回官方源；构建 → 自检 → 只上传最终产物），`release` 改为 `needs: [build, gui]`
+- [x] `.github/workflows/build.yml`：Release 改用 `secrets.RELEASE_TOKEN`（作者本人的 PAT）创建，不用内置 `GITHUB_TOKEN`——后者建出来的 Release 署名是 `github-actions[bot]`，而**作者事后无法修改**（只能删了重建），故须在创建前定好；另加「检查发布令牌」步骤，secret 缺失时在创建前打印可读原因
+- [x] 本地构建与自检：`npm run dist` exit 0，产出 `…-win32-x64.zip`（146 MB）与 `…-win32-x64-setup.exe`（106 MB）；`node build/check-gui-dist.js` 全绿（Subsystem=2、app.asar 141 KB、内置字典 3.6.5 / 3.6.6、asar 内 21 个文件齐全）
+- [x] **zip 产物运行态实测**（解压到 `tmp/gui-test/`，CDP 点界面里的真实按钮，见下表）
+- [x] 文档同步：`CHANGELOG.md`（0.2.0 条目按实际情形改写）、`README.md`（方式一改为随 Release 分发、目录结构补 `build/`、已知限制补 macOS 未签名打开方式）、`docs/打包与分发.md`（产物矩阵表、`extraResources` 理由、CI 构建小节、检查清单与常见问题）、`AGENTS.md`（CI 两类产物、Electron 打包态与 mac 例外）
+- [ ] **macOS / Linux 产物实机验证**：本机是 Windows，这两个平台的**构建与运行都没验证过**——CI 只做静态自检（runner 无桌面会话），窗口行为与播种链路要等产物出来后实机跑
+- [ ] **重发 v0.2.0**：删远端 tag → 提交本轮改动 → 重打注解 tag 推送 → CI 出四平台两类产物 → Release 一次成型含 GUI 附件
+
+### 打包产物（zip 免安装包）实测取证
+
+环境：解压到 `tmp/gui-test/`（解压后**无** `dictionaries/`），启动 `GitHubDesktopZhTool.exe --remote-debugging-port=9224`，用 CDP 点界面里的真实按钮。
+
+| 环节 | 界面自述 | 安装目录指纹（main.js / renderer.js） |
+| --- | --- | --- |
+| 启动 | 已识别 … 版本 3.6.6 · 字典 **1861** 条 · 未汉化 · 无备份 | `95dddacf7716` / `48788ecc8e22`（用户原状态，已汉化） |
+| 点「还原」（数据根无备份 → 按字典逆向还原） | 已按字典还原 **2242** 处 | `f786b08a817c` / `045f09c47e9a` |
+| 点「汉化」 | 命中 **2242** 处 | `95dddacf7716` / `48788ecc8e22` |
+
+两次 2242 处与开发态、CLI 完全一致，指纹回到实测前——**zip 产物与源码态行为一致**；播种链路成立（启动前无 `dictionaries/`，启动后 `dict.source` 指向数据根下的副本）。
+
+- 一次误判记录：首次点「汉化」时目标**已经是汉化态**，只命中 **2** 处，且探针在状态刷新前读到旧快照（显示「未汉化 · 无备份」）。等界面刷新后重读为「已汉化 · 有备份」，与磁盘一致——**是探针时序，不是产物缺陷**；`tmp/read-status.cjs` 即为此写的对照探针（同时读 DOM 状态栏与 `window.api.state()`）。
+- 收尾：`taskkill` 关闭产物进程、删除 `tmp/gui-test/`，安装目录回到 `95dddacf7716 / 48788ecc8e22`。
