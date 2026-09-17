@@ -23,7 +23,7 @@ github-desktop-zh-cn/
 ├── README.md               # 本项目
 ├── LICENSE                 # GPL-3.0
 ├── CHANGELOG.md            # 各版本变更（发版时新增条目，Release 正文取自这里）
-├── package.json            # 脚本入口（locate / patch / restore / verify / scan / tool / build）
+├── package.json            # 脚本入口（locate / patch / restore / verify / scan / tool / build / gui / dist）
 ├── AGENTS.md / CLAUDE.md   # agent 指引（唯一权威源为 AGENTS.md）
 ├── .claude/skills/         # 翻译维护技能（补译与纠错的流程、判定标准与探针模板）
 ├── .github/workflows/      # CI：矩阵构建各平台产物；推 tag 自动发 Release
@@ -42,13 +42,22 @@ github-desktop-zh-cn/
 │   ├── dict-sync.js        # 字典在线同步（缺失时下载、强制更新最新）
 │   ├── update.js           # 工具自更新（查 latest release → 下载 → 替换自身 → 重启）
 │   ├── restart.js          # 汉化 / 还原后重启 GitHub Desktop
-│   ├── cli.js              # 交互式中文菜单入口（打包产物的双击形态）
+│   ├── cli.js              # 交互式中文菜单入口（SEA 产物的双击形态）
 │   ├── bundle.js           # 零依赖 CJS 单文件打包器
 │   ├── build.js            # 打包成单文件可执行（Node SEA）
 │   └── changelog.js        # 从 CHANGELOG.md 提取指定版本段落（发版用）
+├── gui/                    # 图形界面（Electron 原生窗口；业务逻辑仍来自 scripts/，无第二份实现）
+│   ├── main.js             # 主进程：窗口 + IPC（直接 require ../scripts 的模块）
+│   ├── preload.js          # contextBridge 暴露 window.api（渲染进程无 Node 能力）
+│   ├── index.html          # 界面结构
+│   ├── renderer.js         # 渲染逻辑：状态 / 只读字典表格 / 搜索 / 按钮
+│   └── style.css           # 样式
+├── electron-builder.yml    # GUI 打包配置（npm run dist → dist/gui/）
+├── .npmrc                  # 构建期镜像（Electron 与 electron-builder 二进制走 npmmirror）
 ├── test/                   # 匹配器单元测试（npm test）
 └── docs/                   # 文档
     ├── 打包与分发.md        # 分发给普通用户：用法、构建、跨平台、常见问题
+    ├── gui/                # GUI 形态的方案 / 设计 / 任务清单
     └── README.md           # 文档索引
 ```
 
@@ -146,14 +155,37 @@ D:\工具\
 
 选 `2) 还原官方原版` 还原，然后删掉产物与数据目录即可——不写注册表、不装服务、不改系统设置。
 
-自己构建产物：`npm run build`（产物在 `dist/` 下，双击即用；跨平台构建方式见 [docs/打包与分发.md](docs/打包与分发.md)）。
+自己构建单文件产物：`npm run build`（产物在 `dist/` 下，双击即用；跨平台构建方式见 [docs/打包与分发.md](docs/打包与分发.md)）。图形界面版见下面的「方式二」。
 
-### 方式二：源码运行（开发者）
+### 方式二：图形界面（GUI 操作面板）
+
+不想碰命令行的话，本仓库另有一个 **Electron 图形界面**：汉化 / 还原 / 选择安装位置 / 检查更新都是按钮，下方列出当前字典的全部条目（只读、可按中英文搜索），底部显示安装位置与进度——控制台菜单的每一步「看提示 → 敲数字」都变成点一下。
+
+界面：工具栏（汉化 / 还原 / 选择 / 检查更新 / 刷新）+ 字典表格（英文 / 中文 / 类型）+ 底部路径与状态栏；操作前有确认框（提示会先自动备份），完成后窗口内提示命中处数与重启结果，运行期间显示进度阶段。
+
+GUI 产物需**自行构建**（尚未随 Release 分发）：
+
+```bash
+npm install       # 首次：安装 Electron 与 electron-builder（仅构建期依赖，不进产物逻辑）
+npm run gui       # 开发态：直接打开窗口，用仓库里的字典与备份
+npm run dist      # 打包到 dist/gui/：NSIS 安装包 + zip 免安装包
+```
+
+首次构建会下载 Electron 二进制与打包工具（国内直连 GitHub 较慢）。仓库已把镜像固化在 `.npmrc` 与 `electron-builder.yml` 里，**无需手动设环境变量**。
+
+GUI 与命令行是**同一套脚本**的两种界面——定位 / 替换 / 备份 / 还原规则完全一致，没有第二份实现。GUI 产物把数据目录定在**可执行文件所在目录**（与单文件产物相同），备份与 `config.json` 就地存放，两种界面可以随时换用。
+
+> 免安装包请用 **zip**（解压即用）。electron-builder 的 portable 目标会把自身解压到临时目录再运行，备份与配置会跟着写进临时目录、退出后可能被清理，本仓库不提供该目标。
+
+> GUI 产物放在**可写目录**使用（如 `D:\工具\`）。装进 `C:\Program Files` 时数据目录会按既有规则回退到用户数据目录，状态栏会如实显示当前数据根。
+
+### 方式三：源码运行（开发者）
 
 前置要求：本机已安装 Node.js 与对应版本的 GitHub Desktop（Windows 安装目录 `%LOCALAPPDATA%\GitHubDesktop`）。
 
 ```bash
-npm run tool           # 交互式中文菜单（等价于打包产物的双击运行）
+npm run tool           # 交互式中文菜单（等价于单文件产物的双击运行）
+npm run gui            # 图形界面操作面板（Electron 开发态，见「方式二」）
 npm run locate         # 定位安装目录，校验结构，备份原文件到 tmp/backup/<版本>/
 npm run patch          # 按字典替换 main.js / renderer.js 并写回
 npm run verify         # 校验版本一致性、字典命中率、补丁后 JS 语法
@@ -176,7 +208,7 @@ npm run scan           # 自查还有哪些界面文案没翻译（输出待补�
 ## 已知限制
 
 - 汉化后的 `main.js` / `renderer.js` 与官方文件不同，Windows 下可能触发 SmartScreen 提示（应用本体签名不受影响）；
-- 打包产物（单文件可执行）未做代码签名，首次运行可能触发 SmartScreen / 杀软提示——处理方式见 `docs/打包与分发.md`「系统提示怎么处理」；产物只能在构建平台运行，跨平台发布需各平台分别构建；
+- 打包产物（单文件可执行与 GUI 安装包）均未做代码签名，首次运行可能触发 SmartScreen / 杀软提示——处理方式见 `docs/打包与分发.md`「系统提示怎么处理」；产物只能在构建平台运行，跨平台发布需各平台分别构建；
 - 字典与版本强对应：错配可能导致应用无法启动，`patch` 前务必确认版本一致；
 - **没有备份时的还原**：工具按字典把中文反向替换回英文，个别词形可能与官方略有差异（同义、单复数、大小写），少数译文本身就是空格 / 标点等通用文本的位置保持原样——追求与官方逐字节一致时，请到 <https://desktop.github.com> 重装该版本；
 - **在线能力需要网络**：本地（或打包内嵌）没有对应版本字典时才会联网拉取；离线状态下首次使用某个新版本会失败，已有字典则完全离线可用；

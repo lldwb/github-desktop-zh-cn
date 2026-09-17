@@ -18,7 +18,9 @@ npm run patch          # 按字典替换 main.js / renderer.js 并写回（--dry
 npm run restore        # 还原官方原版（有备份用备份；没有则按字典逆向还原成英文）
 npm run verify         # 校验版本一致性、字典命中率、补丁后 JS 语法
 npm run scan           # 未翻译文案自查（读 sourcemap 里的官方源码，输出待补清单）
-npm run tool           # 交互式中文菜单（打包产物双击即此模式；带子命令时透传给对应脚本）
+npm run tool           # 交互式中文菜单（SEA 产物双击即此模式；带子命令时透传给对应脚本）
+npm run gui            # 图形界面操作面板（Electron 开发态；首次需 npm install）
+npm run dist           # 打包图形界面产物（electron-builder → dist/gui/，产出 NSIS 安装包与 zip 免安装包）
 npm run build          # 打包成单文件可执行（dist/ 下，双击即用，无需 Node）
 npm test               # 匹配器单元测试（node --test）
 ```
@@ -38,12 +40,13 @@ npm test               # 匹配器单元测试（node --test）
   - `dict-sync.js`：字典在线同步——`ensureDict()` 仅在本地（外部 + 内嵌）都没有该版本字典时下载，`syncLatest()` 供「检查更新」强制拉最新并覆盖；远程源按 `common.remoteDictUrls()` 顺序（raw → jsDelivr）尝试，落盘前先 `JSON.parse` 校验、写 `.part` 再改名。
   - `update.js`：工具自更新——查 latest release → 按 `<平台>-<架构>` 后缀选资产 → 下载并校验文件头（MZ / Mach-O / ELF）→ 改名替换自身 → 重启新版本；启动时 `cleanup()` 清理上次的 `.old` 残留。
   - `restart.js`：关闭并重启 GitHub Desktop（原本未运行则不动，避免替用户多开窗口）——界面文本在应用启动时载入内存，不重启看不到效果。
+- **界面层**（`gui/`，Electron 原生窗口，可选形态）：`main.js` 主进程（窗口生命周期 + IPC 处理器，直接 `require('../scripts/…')` 调业务）、`preload.js`（`contextBridge` 暴露 `window.api`）、`index.html` / `renderer.js` / `style.css` 渲染层。**GUI 只做表现层**——替换 / 备份 / 还原规则没有第二份实现；渲染进程无 Node 能力（`contextIsolation` + `sandbox`），字典表格只读，**不存在字典写盘通道**。打包配置见 `electron-builder.yml`（`npm run dist`），构建期下载走 `.npmrc` 与 yml 里固化的镜像。
 - **字典组织**：`dictionaries/<版本>/zh-CN.json`，扁平 `{"原文": "译文"}` 映射，`_` 开头的键为元信息（脚本跳过）；键以反引号开头结尾、含 `${}` 的为**整模板键**（值须是 JS 模板/字符串字面量，用于替换运行时拼接文案）；键写作 `<文件名>.js|原文` 的为**作用域键**（只对该文件生效，用于同名文本在两文件中语义不同的情况，如 `en-US`）。
 - **打包与分发**（`cli.js` / `bundle.js` / `build.js`，面向使用者的说明见 `docs/打包与分发.md`）：
   - `cli.js`：交互式中文菜单入口（无参数进菜单；带子命令则透传给对应脚本），`package.json` 的 `tool` 入口。菜单只输出**结果**（命中多少处、是否重启），中间过程不出现在菜单里——子命令走 `quiet` 参数控制（命令行入口仍输出明细）。
   - `bundle.js`：零依赖 CJS 单文件打包器，把 `scripts/` 合成一个自包含 `.js`。**依赖靠静态 `require('...')` 字面量扫描收集**——新增依赖必须写成字面量（模板字符串 / 变量拼接收集不到）；JSON 模块转成 `module.exports = <JSON>`。
   - `build.js`：Node SEA 打包（`node --experimental-sea-config` 生成 blob → postject 注入 node 可执行文件副本），把**最新版本**的字典（`dictionaries/<最新>/zh-CN.json`）作为内嵌资源打进产物——更早版本用到时由 `dict-sync` 联网拉取；产出 `dist/` 下单文件；构建后自动跑一次 `--help` 自检。
-  - **运行形态与数据根目录**：`common.dataRoot()` 是唯一来源——源码态 = 仓库根；打包态 = 可执行文件所在目录（不可写时回退用户数据目录）。备份、`config.json`、`dictionaries/`、`tmp/` 全在数据根下。
+  - **运行形态与数据根目录**：`common.dataRoot()` 是唯一来源，判据两条——`isPackaged()`（bundle / SEA 产物）与 `isElectronPackaged()`（Electron 打包产物，即 `isElectron() && !process.defaultApp`）。**源码态与 Electron 开发态**（`npm run gui`）= 仓库根；**SEA 产物与 Electron 打包产物** = 可执行文件所在目录（不可写时回退用户数据目录）。备份、`config.json`、`dictionaries/`、`tmp/` 全在数据根下。
   - **字典「外部优先、内嵌兜底」**：`<数据根>/dictionaries/<版本>/zh-CN.json` 存在则用它，否则取打包时内嵌的同名资源；都没有才联网下载（见下）。用户把字典目录放进数据根即可覆盖内嵌版本。
   - **构建与发布（CI）**：`.github/workflows/build.yml` 用矩阵在各平台原生 runner 上构建（`windows-latest` / `macos-latest`(arm64) / `macos-15-intel` / `ubuntu-latest`）——手动触发只构建，推 `v*` tag 则构建后自动发 Release 并附 `SHA256SUMS`。发布前先校验 tag 与 `package.json` 版本一致，不一致直接失败，**改版本号时两者必须同步**。
   - **产物去处：Artifacts 是构建中转，Release 才是成品**——手动触发构建后产物留在该次运行的 **Artifacts** 里，下载得到的是 **zip 压缩包**（GitHub 强制打包），解压后 macOS / Linux 产物可能**丢可执行位**，它只用来自己验证构建，别当成品发给使用者。推 tag 后 CI 建的 Release，附件是**原始文件**（不套 zip），名为 `github-desktop-zh-cn-v<版本>-<平台>-<架构>[.exe]`，另附 `SHA256SUMS`——给使用者的下载链接一律指向 Release 附件。
@@ -64,7 +67,7 @@ npm test               # 匹配器单元测试（node --test）
 
 - 版本号概念在 `dictionaries/` 目录名、`scripts/` 版本一致性校验、`docs/` 版本对应表三处出现，改版本组织方式时三处同步。
 - 字典文件仅含「原文 → 中文」映射数据，不含任何脚本逻辑；脚本不得在字典外硬编码翻译。
-- 「运行形态」只有 `common.isPackaged()` 一个判据（bundle 产物与 SEA 产物均视为打包态）；数据根目录只有 `common.dataRoot()` 一个来源——脚本不得自行拼 `__dirname` 或假定当前工作目录。面向用户的提示文案在打包态与源码态不同（打包态用户没有 npm），用 `isPackaged()` 分支。
+- 「运行形态」判据只有 `common.js` 的两处：`isPackaged()`（bundle / SEA 产物）与 `isElectronPackaged()`（Electron 打包产物）——别在调用方另立一套判断。数据根目录只有 `common.dataRoot()` 一个来源——脚本不得自行拼 `__dirname` 或假定当前工作目录。面向用户的提示文案在打包态与源码态不同（打包态用户没有 npm），用 `isPackaged()` 分支——这类分支只出现在各脚本的 `main()`（命令行入口）里，GUI 走的是 `run()`（结果文案由 `gui/main.js` 自备），所以 Electron 打包态下 `isPackaged()` 为假也不会让 GUI 用户看到 npm 提示。
 - 远程仓库地址只有 `common.js` 的 `GH_*` 一处定义，联网统一走 `net.js`（见「在线能力」一节）；逆向还原的判据只有 `common.isReversible()` 一处定义，别在调用方各写一份。
 
 ## 翻译维护（字典迭代）
@@ -117,10 +120,11 @@ npm test               # 匹配器单元测试（node --test）
   - **验收口径**：往返一致——官方原版 → 汉化 → 逆向还原 → 再汉化，两次汉化**逐字节哈希相同**；判据由 `test/reverse-entries.test.js` 覆盖，改 `reverseEntries` / `isReversible` / `stringLiterals` 后必须重跑（`npm test`）。
 - **机制细节（写探针前必读）**：`applyDictInStrings(content, entries)` 期望**已剥离作用域前缀**的键（传 `scopedEntries(entries,'renderer.js')` 的结果），直接塞 `renderer.js|Enabled` 会 0 命中；`stringLiterals` 返回的 `start` / `end` 指向**引号内内容**（不含引号），做「字面量后面紧跟什么」的判断时 post 串以**闭合引号**开头；字典条目**译文不得为空串**（`buildEntries` 抛错），需要消掉某段英文时用单空格 `" "`。
 - **打包态的进程环境与源码态不同（改脚本时注意）**：
-  - `process.execPath` 指向产物自身，**不能**再当 node 用——`verify` 的语法校验已从 `node --check` 子进程改为 `vm.Script` 解析（只解析不执行，两者在官方产物上结果一致）；
+  - `process.execPath` 指向产物自身（SEA / bundle 产物是单文件 exe，Electron 产物是应用 exe），**不能**再当 node 用——`verify` 的语法校验已从 `node --check` 子进程改为 `vm.Script` 解析（只解析不执行，两者在官方产物上结果一致）；
   - bundle 产物里 `require.main` 由打包器复刻（指向入口 `cli.js`），子脚本的 `if (require.main === module) main()` 在打包态**不成立**，`cli.js` 透传子命令时显式调用脚本导出的 `main()`（`patch.js` / `restore.js` 已导出；`locate` / `verify` / `scan` 是加载即执行）；
   - 打包态下 `__dirname` 被设为可执行文件所在目录，`path.resolve(__dirname, '..')` 不再指向仓库根；产物旁没有 `dictionaries/`，字典走内嵌资源；
   - 打包态用管道一次性喂入多行 stdin 会丢行（readline 预读），测菜单交互要分次输入。
+  - **Electron 打包态是另一套**（`npm run dist` 的产物）：`__dirname` 落在 `resources/app.asar` 内（asar 内 `require` 正常），`process.execPath` 是改名后的应用 exe；字典走 `extraFiles` 落在 **exe 同级**（不是内嵌资源——`node:sea` 在 Electron 里不可用），`dataRoot()/dictionaries` 的「外部字典优先」逻辑因此零改动命中。上面关于打包器复刻 `require.main`、stdin 预读的两条只适用于 bundle / SEA 产物。
 - **改 Release 正文的中文编码坑（实测发生过）**：用脚本改已发布 Release 的正文时，HTTP 响应**不要按数据块 `toString('utf8')` 解码**——多字节字符会在块边界被截断，正文出现 `还��` 这类替换符，而接口照样返回成功；要**按 `Buffer` 拼接后整体解码**。正文以本地 `CHANGELOG.md` 对应段落为准整体写回，写回后逐字复核（与 CHANGELOG 逐字一致、无替换符），别只看状态码。
 
 ## 提交规范

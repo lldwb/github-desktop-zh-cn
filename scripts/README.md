@@ -13,7 +13,7 @@
 | `dict-sync.js` | 字典在线同步：`ensureDict()` 本地（外部 + 内嵌）都没有才下载；`syncLatest()` 强制拉最新并覆盖（菜单第 5 项用） | 已实现 |
 | `update.js` | 工具自更新：查 latest release → 按平台 / 架构选资产 → 下载并校验文件头 → 改名替换自身 → 重启；启动时清理 `.old` 残留 | 已实现 |
 | `restart.js` | 关闭并重启 GitHub Desktop（原本未运行则不动）；汉化 / 还原后由它收尾 | 已实现 |
-| `cli.js` | 交互式中文菜单入口（打包产物的双击形态）：无参数进菜单（汉化 / 还原 / 详细信息 / 指定安装位置 / 检查更新），带子命令时透传给对应脚本 | 已实现 |
+| `cli.js` | 交互式中文菜单入口（SEA 产物的双击形态）：无参数进菜单（汉化 / 还原 / 详细信息 / 指定安装位置 / 检查更新），带子命令时透传给对应脚本 | 已实现 |
 | `bundle.js` | 零依赖 CJS 单文件打包器：把 `scripts/` 合成一个自包含 `.js`，供 `build.js` 打成单文件可执行 | 已实现 |
 | `build.js` | 打包成单文件可执行（Node SEA：bundle → blob → postject 注入，内嵌**最新版本**字典），产出 `dist/` 下产物并自动 `--help` 自检 | 已实现 |
 
@@ -51,6 +51,6 @@ node scripts/bundle.js  [--out <文件>]                    # 只生成单文件
 - **预览**：`patch --dry-run` 输出命中统计与 0 命中条目，不写盘。
 - **验证**：`verify` 对补丁后文件做 JS 语法校验（`vm.Script` 按脚本模式解析，只解析不执行；打包态下 `process.execPath` 是产物自身，不能再用 `node --check` 子进程）；已汉化状态下列出仍残留英文的条目，人工核对。
 - **自查（scan）**：官方产物的 sourcemap 里含 GitHub Desktop 自有源码，`scan` 从中提取界面文案候选（JSX 文本节点 + 字符串字面量），再回到产物核对是否存在，排除字典已收录项后输出待补清单。产物侧按「忽略大小写 + 折叠空白」匹配——产物文案经 `sentenceCase` 处理（`Confirm discard changes`）、源码是 Title Case（`Confirm Discard Changes`），且 JSX 多行文本在产物里带转义换行与缩进。清单里仍会有专有名词、代码键名、句子片段等噪声，需人工判断。
-- **运行形态与数据根目录**：`common.isPackaged()` 是唯一判据（bundle 产物与 SEA 产物都算打包态），`common.dataRoot()` 是唯一来源——源码态 = 仓库根，打包态 = 可执行文件所在目录（不可写时回退用户数据目录）。备份、`config.json`、`tmp/` 全在数据根下，脚本不自行拼 `__dirname`、不假定当前工作目录。面向用户的提示文案按 `isPackaged()` 分支（打包态用户没有 npm）。
+- **运行形态与数据根目录**：判据只有 `common.js` 两处——`isPackaged()`（bundle 产物与 SEA 产物）与 `isElectronPackaged()`（Electron 打包产物）；`common.dataRoot()` 是唯一来源——**源码态与 Electron 开发态**（`npm run gui`）= 仓库根，**SEA 产物与 Electron 打包产物** = 可执行文件所在目录（不可写时回退用户数据目录）。备份、`config.json`、`tmp/` 全在数据根下，脚本不自行拼 `__dirname`、不假定当前工作目录。面向用户的提示文案按 `isPackaged()` 分支（打包态用户没有 npm）——这类分支只出现在各脚本的 `main()` 里，GUI 走 `run()`，Electron 打包态下不会弹出 npm 提示。
 - **字典「外部优先、内嵌兜底」**：`<数据根>/dictionaries/<版本>/zh-CN.json` 存在则用它，否则取打包时内嵌的同名资源——单文件分发不丢字典，用户也能在数据根下放自定义字典覆盖内嵌版本。
-- **打包态的环境差异（改脚本时注意）**：`process.execPath` 指向产物自身（不能当 node 用）；`bundle.js` 复刻了 `require.main` 并指向入口 `cli.js`，因此子脚本的 `if (require.main === module) main()` 在打包态**不成立**——`cli.js` 透传子命令时显式调用脚本导出的 `main()`。打包器只收集静态 `require('...')` 字面量（模板字符串 / 变量拼接收集不到），JSON 模块会被转成 `module.exports = <JSON>`。
+- **打包态的环境差异（改脚本时注意）**：`process.execPath` 指向产物自身（不能当 node 用）；`bundle.js` 复刻了 `require.main` 并指向入口 `cli.js`，因此子脚本的 `if (require.main === module) main()` 在打包态**不成立**——`cli.js` 透传子命令时显式调用脚本导出的 `main()`。打包器只收集静态 `require('...')` 字面量（模板字符串 / 变量拼接收集不到），JSON 模块会被转成 `module.exports = <JSON>`。**Electron 打包态（`npm run dist`）是另一套**：`__dirname` 落在 `resources/app.asar` 内（asar 内 `require` 正常），字典经 `extraFiles` 落到 exe 同级而非内嵌（`node:sea` 在 Electron 里不可用），上面关于 `require.main` 复刻的说明只适用于 bundle / SEA 产物。
