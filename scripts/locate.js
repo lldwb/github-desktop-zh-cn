@@ -3,7 +3,7 @@
 
 const fs = require('fs');
 const path = require('path');
-const { locateApp, backupAppFiles } = require('./common');
+const { locateApp, backupAppFiles, backupDir, isPackaged } = require('./common');
 
 function parseArgs(argv) {
   const args = { explicitPath: null, version: null };
@@ -21,7 +21,7 @@ function printHelp() {
   console.log(`用法：node scripts/locate.js [选项]
 
 定位 GitHub Desktop 安装目录，校验 app/main.js、app/renderer.js、app/package.json 存在，
-并把原文件备份到 tmp/backup/<版本>/（已备份则跳过）。
+并把原文件备份到「数据目录/tmp/backup/<版本>/」（已备份则跳过）。
 
 选项：
   --path <目录>    显式指定 resources 目录（绕过自动探测，跨平台可用）
@@ -61,9 +61,13 @@ function main() {
 
     const backed = backupAppFiles(appDir, app.version);
     for (const { f, skipped } of backed) {
-      console.log(`${skipped ? '已存在，跳过' : '已备份'}：tmp/backup/${app.version}/${f}`);
+      console.log(`${skipped ? '已存在，跳过' : '已备份'}：${path.join(backupDir(app.version), f)}`);
     }
-    console.log('备份用于恢复官方版：npm run restore。');
+    console.log(
+      isPackaged()
+        ? '备份用于还原官方版：重新运行本工具选「还原官方原版」。'
+        : '备份用于恢复官方版：npm run restore。'
+    );
   } catch (e) {
     console.error(`错误：${e.message}`);
     process.exit(1);

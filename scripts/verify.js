@@ -3,7 +3,7 @@
 
 const fs = require('fs');
 const path = require('path');
-const { spawnSync } = require('child_process');
+const vm = require('vm');
 const { locateApp, listDictVersions, loadDict, scopedEntries, stringLiterals } = require('./common');
 
 const TARGETS = ['main.js', 'renderer.js'];
@@ -23,7 +23,7 @@ function parseArgs(argv) {
 function printHelp() {
   console.log(`用法：node scripts/verify.js [选项]
 
-校验补丁结果：字典与安装版本一致性、每条字典在文件中的命中次数、补丁后 JS 语法（node --check）。
+校验补丁结果：字典与安装版本一致性、每条字典在文件中的命中次数、补丁后 JS 语法。
 
 选项：
   --version <版本>  指定字典版本（默认取 dictionaries/ 下最新版本）
@@ -31,9 +31,15 @@ function printHelp() {
   -h, --help       显示本帮助`);
 }
 
+// 语法校验：用 vm.Script 按脚本模式解析，只解析不执行（等价于 node --check）。
+// 不用 `node --check` 子进程：打包态下 process.execPath 是产物自身，不具备该参数。
 function checkSyntax(file) {
-  const r = spawnSync(process.execPath, ['--check', file], { encoding: 'utf8' });
-  return { ok: r.status === 0, output: r.stderr.trim() };
+  try {
+    new vm.Script(fs.readFileSync(file, 'utf8'), { filename: file });
+    return { ok: true, output: '' };
+  } catch (e) {
+    return { ok: false, output: String(e.message || e) };
+  }
 }
 
 function main() {

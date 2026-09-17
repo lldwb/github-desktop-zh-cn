@@ -6,14 +6,93 @@ const os = require('os');
 const path = require('path');
 
 const REPO_ROOT = path.resolve(__dirname, '..');
-const TMP_DIR = path.join(REPO_ROOT, 'tmp');
 
 const RESOURCES_REL = ['resources'];
 const APP_SUBDIR = 'app';
+const APP_NAME = 'github-desktop-zh-cn';
+
+// —— 运行形态与数据根目录（SSOT）——
+// 源码态（node scripts/xxx.js）：数据根 = 仓库根，字典与备份位置与既有版本一致。
+// 打包态（scripts/build.js 产出的单文件可执行）：数据根 = 可执行文件所在目录——
+//   解压即用、字典可直接替换；该目录不可写（如放在 Program Files）时回退用户数据目录。
+// 字典一律「外部优先、内嵌兜底」：<数据根>/dictionaries/<版本>/zh-CN.json 存在则用它，
+//   否则取打包时内嵌进可执行文件的同名资源，保证单文件分发时字典不丢失。
+
+let _seaCache;
+// node:sea 在 Node <20.12 不存在，require 抛错时按源码态处理
+function seaApi() {
+  if (_seaCache === undefined) {
+    try { _seaCache = require('node:sea'); } catch { _seaCache = null; }
+  }
+  return _seaCache;
+}
+
+function isPackaged() {
+  if (globalThis.__BUNDLED__) return true; // bundle 产物（scripts/build.js 打出的单文件）
+  const sea = seaApi();
+  return !!(sea && sea.isSea());
+}
+
+function userDataDir() {
+  if (process.platform === 'win32') {
+    const appData = process.env.APPDATA || path.join(os.homedir(), 'AppData', 'Roaming');
+    return path.join(appData, APP_NAME);
+  }
+  if (process.platform === 'darwin') {
+    return path.join(os.homedir(), 'Library', 'Application Support', APP_NAME);
+  }
+  const share = process.env.XDG_DATA_HOME || path.join(os.homedir(), '.local', 'share');
+  return path.join(share, APP_NAME);
+}
+
+// 真写一个探针文件判断可写性：Windows 下 accessSync(W_OK) 不看 ACL，不可靠
+function isWritableDir(dir) {
+  const probe = path.join(dir, `.write-probe-${process.pid}`);
+  try {
+    fs.writeFileSync(probe, '');
+    fs.unlinkSync(probe);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+let _dataRoot;
+function dataRoot() {
+  if (_dataRoot) return _dataRoot;
+  if (!isPackaged()) {
+    _dataRoot = REPO_ROOT;
+    return _dataRoot;
+  }
+  const beside = path.dirname(process.execPath);
+  _dataRoot = isWritableDir(beside) ? beside : userDataDir();
+  fs.mkdirSync(_dataRoot, { recursive: true });
+  return _dataRoot;
+}
 
 function getTmpDir() {
-  fs.mkdirSync(TMP_DIR, { recursive: true });
-  return TMP_DIR;
+  const dir = path.join(dataRoot(), 'tmp');
+  fs.mkdirSync(dir, { recursive: true });
+  return dir;
+}
+
+// 用户配置（打包态与源码态共用）：目前只存手动指定的 resources 目录
+function configPath() {
+  return path.join(dataRoot(), 'config.json');
+}
+
+function readConfig() {
+  try {
+    return JSON.parse(fs.readFileSync(configPath(), 'utf8'));
+  } catch {
+    return {};
+  }
+}
+
+function writeConfig(patch) {
+  const cfg = { ...readConfig(), ...patch };
+  fs.writeFileSync(configPath(), `${JSON.stringify(cfg, null, 2)}\n`, 'utf8');
+  return cfg;
 }
 
 // 解析 app-3.6.5 形式的版本号，用于取最新安装目录
@@ -92,15 +171,45 @@ function readVersion(appDir) {
   return pkg.version;
 }
 
-// 列出 dictionaries/ 下的版本目录（目录名即版本号），返回按版本排序的数组
+// 内嵌资源读取（仅打包态）：key 形如 dictionaries/3.6.5/zh-CN.json
+function embeddedAsset(key) {
+  const sea = seaApi();
+  if (!sea || !sea.isSea()) return null;
+  try {
+    return sea.getAsset(key, 'utf8');
+  } catch {
+    return null;
+  }
+}
+
+// 内嵌字典的版本列表（打包时 build.js 把 dictionaries/*/zh-CN.json 全部内嵌）
+function embeddedDictVersions() {
+  const sea = seaApi();
+  if (!sea || !sea.isSea()) return [];
+  let keys;
+  try {
+    keys = sea.getAssetKeys();
+  } catch {
+    return [];
+  }
+  const out = [];
+  for (const k of keys) {
+    const m = /^dictionaries\/([^/]+)\/zh-CN\.json$/.exec(k);
+    if (m) out.push(m[1]);
+  }
+  return out;
+}
+
+// 列出可用字典版本：外部目录（数据根/dictionaries/）与内嵌资源合并去重，按版本排序
 function listDictVersions() {
-  const dir = path.join(REPO_ROOT, 'dictionaries');
-  if (!fs.existsSync(dir)) return [];
-  return fs
-    .readdirSync(dir, { withFileTypes: true })
-    .filter((e) => e.isDirectory())
-    .map((e) => e.name)
-    .sort(compareVersions);
+  const found = new Set(embeddedDictVersions());
+  const dir = path.join(dataRoot(), 'dictionaries');
+  if (fs.existsSync(dir)) {
+    for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
+      if (e.isDirectory() && fs.existsSync(path.join(dir, e.name, 'zh-CN.json'))) found.add(e.name);
+    }
+  }
+  return [...found].sort(compareVersions);
 }
 
 function compareVersions(a, b) {
@@ -158,15 +267,37 @@ function scopedEntries(entries, file) {
   return out;
 }
 
-// 读取字典：dictionaries/<version>/zh-CN.json，跳过 _ 开头的元信息键
+// 字典文件位置：<数据根>/dictionaries/<版本>/zh-CN.json
+function dictFile(version) {
+  return path.join(dataRoot(), 'dictionaries', version, 'zh-CN.json');
+}
+
+// 内嵌资源键（打包态）
+function dictAssetKey(version) {
+  return `dictionaries/${version}/zh-CN.json`;
+}
+
+// 字典来源：外部文件优先，其次打包内嵌资源；label 供日志展示「这份字典从哪来」
+function readDictSource(version) {
+  const file = dictFile(version);
+  if (fs.existsSync(file)) return { text: fs.readFileSync(file, 'utf8'), label: file };
+  const embedded = embeddedAsset(dictAssetKey(version));
+  if (embedded !== null) return { text: embedded, label: `内嵌字典 ${dictAssetKey(version)}` };
+  throw new Error(`字典不存在：${version}（已查找 ${file} 与内嵌资源）`);
+}
+
+// 字典来源的可读标签（不解析 JSON，供脚本日志用）
+function dictLabel(version) {
+  const file = dictFile(version);
+  return fs.existsSync(file) ? file : `内嵌字典 ${dictAssetKey(version)}`;
+}
+
+// 读取字典：外部文件或内嵌资源，跳过 _ 开头的元信息键
 function loadDict(version) {
-  const file = path.join(REPO_ROOT, 'dictionaries', version, 'zh-CN.json');
-  if (!fs.existsSync(file)) {
-    throw new Error(`字典不存在：${file}`);
-  }
-  const raw = JSON.parse(fs.readFileSync(file, 'utf8'));
+  const { text, label } = readDictSource(version);
+  const raw = JSON.parse(text);
   const entries = buildEntries(raw, version);
-  if (entries.size === 0) throw new Error(`字典为空：${file}`);
+  if (entries.size === 0) throw new Error(`字典为空：${label}`);
   return entries;
 }
 
@@ -197,6 +328,17 @@ function backupAppFiles(appDir, version) {
 function backupExists(version) {
   const dest = backupDir(version);
   return fs.existsSync(path.join(dest, 'main.js')) && fs.existsSync(path.join(dest, 'renderer.js'));
+}
+
+// 是否已汉化：备份存在，且当前产物与备份不完全一致（逐字节比较）
+function isPatched(appDir, version) {
+  if (!backupExists(version)) return false;
+  const backup = backupDir(version);
+  return ['main.js', 'renderer.js'].some((f) => {
+    const b = path.join(backup, f);
+    const cur = path.join(appDir, f);
+    return fs.existsSync(b) && fs.existsSync(cur) && !fs.readFileSync(b).equals(fs.readFileSync(cur));
+  });
 }
 
 // 关键字后可直接跟正则字面量（如 return/regex/、typeof/x/），此时 '/' 前是关键字末尾字母
@@ -355,15 +497,23 @@ function applyDictInStrings(content, entries) {
 
 module.exports = {
   REPO_ROOT,
-  TMP_DIR,
+  APP_NAME,
   getTmpDir,
+  dataRoot,
+  isPackaged,
+  configPath,
+  readConfig,
+  writeConfig,
   locateApp,
   readVersion,
   listDictVersions,
   loadDict,
+  dictLabel,
+  dictFile,
   backupDir,
   backupAppFiles,
   backupExists,
+  isPatched,
   stringLiterals,
   applyDictInStrings,
   buildEntries,
