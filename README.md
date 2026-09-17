@@ -39,7 +39,8 @@ github-desktop-zh-cn/
 │   ├── scan.js             # 未翻译文案自查（读官方 sourcemap，输出待补清单）
 │   ├── cli.js              # 交互式中文菜单入口（打包产物的双击形态）
 │   ├── bundle.js           # 零依赖 CJS 单文件打包器
-│   └── build.js            # 打包成单文件可执行（Node SEA）
+│   ├── build.js            # 打包成单文件可执行（Node SEA）
+│   └── changelog.js        # 从 CHANGELOG.md 提取指定版本段落（发版用）
 ├── test/                   # 匹配器单元测试（npm test）
 └── docs/                   # 文档
     ├── 打包与分发.md        # 分发给普通用户：用法、构建、跨平台、常见问题
