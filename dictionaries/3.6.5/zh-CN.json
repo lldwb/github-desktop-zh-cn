@@ -1430,7 +1430,6 @@
   "Thanks so much for all your hard work on GitHub Desktop": "非常感谢你为 GitHub Desktop 付出的所有努力",
   ". We're so grateful for your willingness to contribute and make the app better for everyone!": "。我们非常感激你愿意贡献力量，让这款应用对每个人都更好！",
   "your tool of choice, or close to resolve manually.": "你惯用的工具，或关闭以手动解决。",
-  " conflicted ": " 处冲突的 ",
   " been resolved.": " 已解决。",
   "Are you sure you want to abort this ": "确定要中止这次",
   "Are you sure you want to ": "确定要",
@@ -1766,5 +1765,19 @@
   "`${n}. A check run cannot be re-run if the check is more than one month old,\\n          the check or its dependent has not completed, or the check is not configured to be\\n          re-run.`": "`${n}。如果检查已超过一个月、检查或其依赖项尚未完成，或检查未配置为可重新运行，则无法重新运行。`",
   "A branch allows you to work on different versions of a repository at one time. Create a\\n                branch by going into the branch menu in the top bar and\\n              clicking \"New branch\".": "分支让你可以同时处理仓库的不同版本。在顶部栏的分支菜单中点击「新建分支」即可创建分支。",
   "`Branch name '${e}' is restricted by repo rules.`": "`分支名称 '${e}' 受仓库规则限制。`",
-  "`Branch name '${e}' is restricted by repo rules, but you can bypass them. Proceed with caution!`": "`分支名称 '${e}' 受仓库规则限制，但你可以绕过它们。请谨慎操作！`"
+  "`Branch name '${e}' is restricted by repo rules, but you can bypass them. Proceed with caution!`": "`分支名称 '${e}' 受仓库规则限制，但你可以绕过它们。请谨慎操作！`",
+  "renderer.js| changed ": " 个更改的",
+  "renderer.js|files": "文件",
+  "renderer.js| fails ": " 未通过 ",
+  "renderer.js| rule": " 条规则",
+  "renderer.js|file has": " ",
+  "renderer.js|files have": " ",
+  "renderer.js| conflicted ": " 处冲突文件",
+  "renderer.js|` ${n} conflicted ${s}`": "` ${n} 处冲突文件`",
+  "renderer.js|` ${GE(n)} conflicted ${s}`": "` ${GE(n)} 处冲突文件`",
+  "renderer.js|`${e} conflicted files`": "`${e} 个冲突文件`",
+  "renderer.js|`, but you can bypass ${1===i?\"it\":\"them\"}. Proceed with caution!`": "`，但你可以绕过它们。请谨慎操作！`",
+  "renderer.js|Use Copilot to suggest resolutions for conflicted files": "使用 Copilot 为冲突文件提供解决方案",
+  "renderer.js|Cannot resolve while operation is being aborted": "操作中止时无法解决",
+  "renderer.js|No resolvable conflicted files": "没有可解决的冲突文件"
 }
