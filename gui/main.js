@@ -3,6 +3,7 @@
 // 本文件只做两件事——开窗口、把 scripts 的返回值整理成渲染进程能直接渲染的结构。
 'use strict';
 
+const fs = require('fs');
 const path = require('path');
 const { app, BrowserWindow, ipcMain, dialog, Menu } = require('electron');
 
@@ -98,6 +99,25 @@ function collectDictEntries() {
     rows.push({ en: key, zh: v, type: key.startsWith('`') ? `模板 · ${scope}` : scope });
   }
   return { ok: true, version, count: rows.length, rows };
+}
+
+// 内置字典的播种：字典随包放在应用的 resources/dictionaries（electron-builder 的 extraResources），
+// 而数据根与它未必同处一地——Windows 的 zip 解压后就在旁边、NSIS 装到用户目录也可写，但 macOS 的数据根
+// 恒在用户数据目录（.app 包内不可写，见 common.dataRoot），Linux 的 AppImage 又挂在只读临时目录，
+// 两者都取不到旁边那份。首次运行时把数据根里缺的版本复制过去即可，此后一切照旧（外部字典优先）。
+// 只补缺失的版本：用户自己替换过、或在线更新过的字典不会被覆盖。
+function seedBundledDicts() {
+  if (!common.isElectronPackaged()) return;
+  const src = path.join(process.resourcesPath, 'dictionaries');
+  if (!fs.existsSync(src)) return;
+  const dest = path.join(common.dataRoot(), 'dictionaries');
+  for (const version of fs.readdirSync(src)) {
+    const from = path.join(src, version, 'zh-CN.json');
+    const to = path.join(dest, version, 'zh-CN.json');
+    if (fs.existsSync(to) || !fs.existsSync(from)) continue;
+    fs.mkdirSync(path.dirname(to), { recursive: true });
+    fs.copyFileSync(from, to);
+  }
 }
 
 // 主进程 → 渲染进程的进度推送（「正在汉化 …」）；task 为 null 表示回到空闲
@@ -292,6 +312,7 @@ if (!app.requestSingleInstanceLock()) {
   });
 
   app.whenReady().then(() => {
+    seedBundledDicts();      // 必须在 registerIpc 之前：状态与字典表格读的就是数据根里的字典
     registerIpc();
     createWindow();
     app.on('activate', () => {

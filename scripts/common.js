@@ -26,8 +26,11 @@ const GH_API = `https://api.github.com/repos/${GH_OWNER}/${GH_REPO}`;
 //   源码态（node scripts/xxx.js）与 Electron 开发态（electron .）：数据根 = 仓库根，字典与备份位置与既有版本一致；
 //   打包态（scripts/build.js 的 SEA 单文件产物 / electron-builder 的 GUI 产物）：数据根 = 可执行文件所在目录——
 //   解压即用、字典可直接替换；该目录不可写（如放在 Program Files）时回退用户数据目录。
+//   一个例外：macOS 的 Electron 产物（.app）数据根恒为用户数据目录——exe 在 .app 包内，包内写入会让签名失效。
 // 字典一律「外部优先、内嵌兜底」：<数据根>/dictionaries/<版本>/zh-CN.json 存在则用它，
 //   否则取打包时内嵌进可执行文件的同名资源（内嵌资源只有 SEA 产物具备），保证单文件分发时字典不丢失。
+//   Electron 产物没有内嵌资源（node:sea 不可用），字典随包放在应用的 resources/dictionaries，
+//   由 GUI 首次运行时播种到数据根（见 gui/main.js 的 seedBundledDicts）。
 
 let _seaCache;
 // node:sea 在 Node <20.12 不存在，require 抛错时按源码态处理
@@ -86,6 +89,14 @@ function dataRoot() {
   // 源码态与 Electron 开发态：数据根 = 仓库根（开发时字典、备份、config.json 都在仓库里）
   if (!isPackaged() && !isElectronPackaged()) {
     _dataRoot = REPO_ROOT;
+    return _dataRoot;
+  }
+  // macOS 的 Electron 产物：数据根不取 exe 所在目录——它在 .app 包的 Contents/MacOS 里，
+  // 往包内写一个字节就会让签名失效，下次启动被 Gatekeeper 当「已损坏」拒开（macOS 上包内不可写
+  // 也不是解法：那样备份与字典会散在只读区）。故恒取用户数据目录；随包内置的字典由 GUI 播种过去。
+  if (isElectronPackaged() && process.platform === 'darwin') {
+    _dataRoot = userDataDir();
+    fs.mkdirSync(_dataRoot, { recursive: true });
     return _dataRoot;
   }
   // 打包态（SEA 产物 / Electron 产物）：数据根 = 可执行文件所在目录。

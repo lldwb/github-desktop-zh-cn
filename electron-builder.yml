@@ -1,12 +1,15 @@
 # electron-builder.yml — GUI 产物打包配置（npm run dist）
 #
-# 两处刻意的选择（理由见 docs/gui/design.md）：
-#   1. 字典走 extraFiles（复制到 exe 同级）而不是 extraResources（进 resources/）：
-#      这样 common.dataRoot()/dictionaries 的「外部字典优先」逻辑零改动即可命中，
-#      不必为 Electron 新增内嵌资源读取路径（内嵌只对 SEA 产物有效）。
+# 三处刻意的选择（理由见 docs/gui/design.md）：
+#   1. 字典走 extraResources（进应用的 resources/dictionaries）而不是 extraFiles（exe 同级）：
+#      数据根与 exe 未必同处一地——macOS 的数据根恒在用户数据目录（.app 包内写入会让签名失效、
+#      下次启动被 Gatekeeper 拒开），Linux 的 AppImage 又挂在只读临时目录，两者都取不到 exe 旁边那份。
+#      改由 gui/main.js 首次运行时把数据根里缺的版本播种过去，三平台一条路径，
+#      common.dataRoot() 与字典查找逻辑零改动。
 #   2. 不做 portable 目标：portable 版运行时会把自己解压到临时目录，process.execPath
 #      指向那个临时位置，dataRoot() 会把备份与 config.json 写进临时目录里。
 #      免安装需求由 zip 目标满足——解压即用，数据根就落在解压目录。
+#   3. macOS 不做代码签名（identity: null）：本仓库没有证书。未签名产物的打开方式见 README「方式一」。
 
 appId: com.lldwb.github-desktop-zh-cn
 productName: GitHub Desktop 汉化工具
@@ -17,8 +20,9 @@ directories:
   output: dist/gui
   buildResources: build
 
-# 产物命名（NSIS 在下面单独覆盖为 …-setup.exe）
-artifactName: ${name}-${version}-${os}-${arch}.${ext}
+# 产物命名与单文件产物（SEA）同一套词序：<name>-v<版本>-<平台>-<架构>[...-setup].<扩展名>
+# 用 ${platform}（darwin / win32 / linux）而不是 ${os}（mac / win / linux），与 SEA 产物的平台词一致
+artifactName: ${name}-v${version}-${platform}-${arch}.${ext}
 
 # 应用代码：界面 + 业务逻辑（主进程直接 require scripts/ 下的模块）
 files:
@@ -26,12 +30,14 @@ files:
   - scripts/**/*
   - package.json
 
-# 字典：落到 exe 同级，与 common.dictFile() 的查找位置一致
-extraFiles:
+# 字典：进应用的 resources 目录，由 gui/main.js 首次运行时播种到数据根（见文件头说明 1）
+extraResources:
   - from: dictionaries
     to: dictionaries
 
-# 构建期网络：国内直连 GitHub 下载 Electron 二进制会超时，走 npmmirror
+# 构建期网络：国内直连 GitHub 下载 Electron 二进制会超时，走 npmmirror。
+# electron-builder 取 Electron 走的是 resolveAssetURL，只认这个 yml 键（不读 ELECTRON_MIRROR）；
+# CI 在境外，由 workflow 用 --config.electronDownload.mirror=… 覆盖回官方源。
 electronDownload:
   mirror: https://registry.npmmirror.com/-/binary/electron/
 
@@ -47,4 +53,21 @@ nsis:
   createDesktopShortcut: true
   createStartMenuShortcut: true
   shortcutName: GitHub Desktop 汉化工具
-  artifactName: ${name}-${version}-${os}-${arch}-setup.${ext}
+  # 与 zip 区分开，命名风格同 SEA 产物
+  artifactName: ${name}-v${version}-${platform}-${arch}-setup.${ext}
+
+mac:
+  target:
+    - dmg
+    - zip
+  category: public.app-category.developer-tools
+  identity: null
+
+linux:
+  target:
+    - AppImage
+    - deb
+  category: Development
+  maintainer: lldwb <lldwb@users.noreply.github.com>
+  synopsis: GitHub Desktop 中文汉化工具（字典驱动）
+  description: 定位 GitHub Desktop 安装目录，按 JSON 语言字典替换界面文本，可随时还原；字典可自定义、可在线更新。
