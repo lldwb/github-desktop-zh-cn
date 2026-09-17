@@ -7,20 +7,21 @@
 ### 新增
 
 - **图形界面（操作面板）**（`gui/`，Electron 原生窗口）：工具栏（汉化 / 还原 / 选择 / 检查更新 / 刷新）+ 只读字典表格（英文 / 中文 / 类型，中英双向、大小写不敏感搜索）+ 底部路径与进度 + 状态栏。操作前有确认框（提示原文件会先自动备份，还原区分「从备份精确还原」与「按字典还原」），完成后窗口内显示命中处数与重启结果，运行期间显示进度阶段；出错时错误与提示在窗口内可见，不弹原始栈。渲染进程无 Node 能力（`contextIsolation: true` + `nodeIntegration: false` + `sandbox: true`），**表格只读，不存在字典写盘通道**。
-- **GUI 打包**（`electron-builder.yml` + `npm run dist`）：产出 NSIS 安装包（`oneClick: false`，可选安装目录）与 **zip 免安装包**到 `dist/gui/`。`gui/` + `scripts/` + `package.json` 进 `app.asar`，`dictionaries/` 经 `extraFiles` 落到 **exe 同级**——`node:sea` 在 Electron 里不可用，字典不能像单文件产物那样内嵌；`dataRoot()/dictionaries` 的「外部字典优先」逻辑因此零改动命中。
+- **GUI 打包**（`electron-builder.yml` + `npm run dist`）：产出 Windows（NSIS 安装包，`oneClick: false` 可选安装目录，另有 **zip 免安装包**）、macOS（dmg + zip）与 Linux（AppImage + deb）产物到 `dist/gui/`。`gui/` + `scripts/` + `package.json` 进 `app.asar`，`dictionaries/` 经 `extraResources` 进应用的 `resources/`（`node:sea` 在 Electron 里不可用，字典不能像单文件产物那样内嵌），GUI 首次运行时把数据根里缺的版本播种过去——macOS 的 `.app` 包内与 Linux 的 AppImage 运行目录都取不到 exe 旁那份；`dataRoot()/dictionaries` 的「外部字典优先」逻辑因此零改动命中。
+- **CI 构建 GUI 产物**（`.github/workflows/build.yml`）：新增 `gui` job，与单文件产物并行跑同一套四平台矩阵（Windows x64 / macOS arm64 / macOS x64 / Linux x64，`release` job 等两类产物齐了再建 Release）。每平台构建后先跑静态自检（`build/check-gui-dist.js`：应用包结构、内置字典、Windows 产物是否 GUI 子系统），结构不对就不上传。
 - **构建期镜像固化**（`.npmrc` + `electron-builder.yml`）：Electron 二进制与 electron-builder 的 `winCodeSign` / `nsis` 工具包走 npmmirror，国内构建不必手动设环境变量（electron-builder 取 Electron 走 `resolveAssetURL`、**不读** `ELECTRON_MIRROR`，故 yml 里另配一处 `electronDownload.mirror`）。
 
 ### 变更
 
 - **运行形态判据扩为两条**（`scripts/common.js`）：新增 `isElectron()` / `isElectronPackaged()`，与既有 `isPackaged()` 互斥地描述「数据根是否落在可执行文件旁」。**源码态与 Electron 开发态**（`npm run gui`）数据根仍是仓库根，**Electron 打包产物**与单文件产物一样取可执行文件所在目录。既有子命令、字典格式与单文件产物行为均未变。
-- **文档**：`README.md` 的「使用方式」新增图形界面一节（排在**方式一**，原「下载现成产物」顺延为方式二、「源码运行」为方式三），目录结构与已知限制同步；`AGENTS.md` 补「界面层」与运行形态两态、打包态进程环境差异（asar 内 `__dirname`、`extraFiles` 字典、`node:sea` 不可用）；`docs/打包与分发.md` 增加「图形界面（GUI）产物」小节、发布前检查项与常见问题；`docs/gui/` 收录方案 / 设计 / 任务清单（含开发态往返一致性取证）。
+- **文档**：`README.md` 的「使用方式」新增图形界面一节（排在**方式一**，原「下载现成产物」顺延为方式二、「源码运行」为方式三），目录结构与已知限制同步；`AGENTS.md` 补「界面层」与运行形态两态、打包态进程环境差异（asar 内 `__dirname`、`extraResources` 字典与首次运行播种、macOS 数据根例外、`node:sea` 不可用）；`docs/打包与分发.md` 增加「图形界面（GUI）产物」小节、发布前检查项与常见问题；`docs/gui/` 收录方案 / 设计 / 任务清单（含开发态往返一致性取证）。
 
 ### 说明
 
 - 本次新增一整套界面形态与打包流程（工具链能力扩展），既有行为未破坏，故取**中版本** 0.2.0。
-- **GUI 产物尚未随 Release 分发**，需自行 `npm run dist` 构建（见 `README.md`「方式一」）；Release 附件仍是 CI 矩阵构建的单文件产物。
+- **GUI 产物随 Release 分发**：CI 在四个 runner 上分别构建，与单文件产物一并作为 Release 附件（`…-win32-x64-setup.exe` / `…-win32-x64.zip` / `…-darwin-arm64.dmg` / `…-darwin-x64.zip` / `…-linux-x64.AppImage` / `…-linux-x64.deb` 等），附 `SHA256SUMS`。也可自行 `npm run dist` 构建（见 `README.md`「方式一」）。
 - 分发 GUI 请用 **zip 免安装包**：electron-builder 的 portable 目标会把自身解压到临时目录再运行，`process.execPath` 指向临时位置，备份与 `config.json` 会跟着写进临时目录、退出后可能被清理，本仓库不配置该目标。
-- 开发态往返一致性实测：逆向还原 → 再汉化、GUI 汉化与 CLI 汉化，产物两文件均逐字节一致（sha256 取证见 `docs/gui/tasks.md`）。NSIS 安装包未实机安装（会写入系统），zip 免安装包与 `win-unpacked/` 已实测。
+- 实测：开发态往返一致性（逆向还原 → 再汉化、GUI 汉化与 CLI 汉化）产物两文件逐字节一致（sha256 取证见 `docs/gui/tasks.md`）；**zip 免安装包解压后实机走完整界面链路**——首次运行播种字典（表格 1861 条、字典取自数据根）、汉化命中 2242 处、按字典还原 2242 处、再汉化回到同一指纹，数据根与状态栏均落在解压目录。NSIS 安装包未实机安装（会写入系统）。
 - `package.json` 版本号 0.1.1 → 0.2.0
 
 ## [0.1.1] - 2026-09-17
