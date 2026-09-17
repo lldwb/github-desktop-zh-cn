@@ -14,8 +14,8 @@ GitHub Desktop 中文汉化补丁工具仓库（字典驱动、开源）。GitHu
 
 ```bash
 npm run locate         # 定位安装目录，校验结构，备份原文件到 tmp/backup/<版本>/
-npm run patch          # 按字典替换 main.js / renderer.js 并写回（--dry-run 预览不写盘）
-npm run restore        # 从 tmp/backup/<版本>/ 还原官方原版（字典有删改时先还原再重打）
+npm run patch          # 按字典替换 main.js / renderer.js 并写回（--dry-run 预览不写盘；缺字典时联网取）
+npm run restore        # 还原官方原版（有备份用备份；没有则按字典逆向还原成英文）
 npm run verify         # 校验版本一致性、字典命中率、补丁后 JS 语法
 npm run scan           # 未翻译文案自查（读 sourcemap 里的官方源码，输出待补清单）
 npm run tool           # 交互式中文菜单（打包产物双击即此模式；带子命令时透传给对应脚本）
@@ -30,25 +30,41 @@ npm test               # 匹配器单元测试（node --test）
 - **替换对象**：官方 Windows 3.6.x 安装目录 `%LOCALAPPDATA%\GitHubDesktop\app-<版本>\resources\app\` 下的 `main.js` 与 `renderer.js`——官方产物为**免打包裸目录**（无 `app.asar`，3.6.4 / 3.6.5 已实测；robotze/GithubDesktopZhTool 的 Mac/Linux 方案同样直接替换 `Resources/app` 下文件）。
 - **工具链**（`scripts/`，Node.js 零依赖，仅内置模块）：
   - `locate.js`：定位安装目录（Windows 自动探测取最新版本；macOS/Linux 走 `--path`）→ 校验 `main.js`/`renderer.js`/`package.json` 存在 → 备份原文件到 `tmp/backup/<版本>/`（已备份则跳过）。
-  - `patch.js`：版本一致性校验（字典目录名 ≠ 安装版本即拒绝，错配可能导致应用无法启动）→ 逐条整串替换（只在字符串字面量区间内、内容与键完全相等才替换；整模板键整段替换模板源码）→ 统计命中 → 写回前自动备份。
-  - `restore.js`：把 `tmp/backup/<版本>/` 下的官方原版复制回安装目录，覆盖已汉化文件。**字典条目被删除或修改后必须先 `restore` 再 `patch`**——`patch` 只替换命中的字面量，不会把已删条目的旧译文从产物里退出。
+  - `patch.js`：版本一致性校验（字典目录名 ≠ 安装版本即拒绝，错配可能导致应用无法启动）→ 本地无该版本字典时联网取（`dict-sync.ensureDict`）→ 逐条整串替换（只在字符串字面量区间内、内容与键完全相等才替换；整模板键整段替换模板源码）→ 统计命中 → 写回前自动备份 → 完成后重启 GitHub Desktop。
+  - `restore.js`：优先把 `tmp/backup/<版本>/` 下的官方原版复制回安装目录；**备份不存在时按字典逆向还原**（`common.reverseEntries` 生成「译文 → 原文」再走同一套替换逻辑）→ 完成后重启 GitHub Desktop。**字典条目被删除或修改后必须先 `restore` 再 `patch`**——`patch` 只替换命中的字面量，不会把已删条目的旧译文从产物里退出。
   - `verify.js`：版本一致性、字典条目在两个文件中的命中率（0 命中 = 两个文件均未出现）、补丁后 `node --check` 语法校验。
   - `scan.js`：**未翻译文案自查**——读安装目录 `renderer.js.map` 中的官方自有源码（`app/src/**`），提取界面文案候选（JSX 文本 + 字面量），与产物、字典对照后输出待补清单（产物侧忽略大小写与空白差异，因产物文案经 `sentenceCase` 处理）。字典迭代时先用它自查，别只依赖截图。
+  - `net.js`：零依赖 HTTP(S) GET（文本 / JSON / 二进制），带超时、重定向与进度回调；非 2xx 抛可读错误。在线能力都走它，不引三方库。
+  - `dict-sync.js`：字典在线同步——`ensureDict()` 仅在本地（外部 + 内嵌）都没有该版本字典时下载，`syncLatest()` 供「检查更新」强制拉最新并覆盖；远程源按 `common.remoteDictUrls()` 顺序（raw → jsDelivr）尝试，落盘前先 `JSON.parse` 校验、写 `.part` 再改名。
+  - `update.js`：工具自更新——查 latest release → 按 `<平台>-<架构>` 后缀选资产 → 下载并校验文件头（MZ / Mach-O / ELF）→ 改名替换自身 → 重启新版本；启动时 `cleanup()` 清理上次的 `.old` 残留。
+  - `restart.js`：关闭并重启 GitHub Desktop（原本未运行则不动，避免替用户多开窗口）——界面文本在应用启动时载入内存，不重启看不到效果。
 - **字典组织**：`dictionaries/<版本>/zh-CN.json`，扁平 `{"原文": "译文"}` 映射，`_` 开头的键为元信息（脚本跳过）；键以反引号开头结尾、含 `${}` 的为**整模板键**（值须是 JS 模板/字符串字面量，用于替换运行时拼接文案）；键写作 `<文件名>.js|原文` 的为**作用域键**（只对该文件生效，用于同名文本在两文件中语义不同的情况，如 `en-US`）。
 - **打包与分发**（`cli.js` / `bundle.js` / `build.js`，面向使用者的说明见 `docs/打包与分发.md`）：
-  - `cli.js`：交互式中文菜单入口（无参数进菜单；带子命令则透传给对应脚本），`package.json` 的 `tool` 入口。
+  - `cli.js`：交互式中文菜单入口（无参数进菜单；带子命令则透传给对应脚本），`package.json` 的 `tool` 入口。菜单只输出**结果**（命中多少处、是否重启），中间过程不出现在菜单里——子命令走 `quiet` 参数控制（命令行入口仍输出明细）。
   - `bundle.js`：零依赖 CJS 单文件打包器，把 `scripts/` 合成一个自包含 `.js`。**依赖靠静态 `require('...')` 字面量扫描收集**——新增依赖必须写成字面量（模板字符串 / 变量拼接收集不到）；JSON 模块转成 `module.exports = <JSON>`。
-  - `build.js`：Node SEA 打包（`node --experimental-sea-config` 生成 blob → postject 注入 node 可执行文件副本），把 `dictionaries/*/zh-CN.json` 全部作为内嵌资源打进产物，产出 `dist/` 下单文件；构建后自动跑一次 `--help` 自检。
-  - **运行形态与数据根目录**：`common.dataRoot()` 是唯一来源——源码态 = 仓库根；打包态 = 可执行文件所在目录（不可写时回退用户数据目录）。备份、`config.json`、`tmp/` 全在数据根下。
-  - **字典「外部优先、内嵌兜底」**：`<数据根>/dictionaries/<版本>/zh-CN.json` 存在则用它，否则取打包时内嵌的同名资源；用户把字典目录放进数据根即可覆盖内嵌版本。
+  - `build.js`：Node SEA 打包（`node --experimental-sea-config` 生成 blob → postject 注入 node 可执行文件副本），把**最新版本**的字典（`dictionaries/<最新>/zh-CN.json`）作为内嵌资源打进产物——更早版本用到时由 `dict-sync` 联网拉取；产出 `dist/` 下单文件；构建后自动跑一次 `--help` 自检。
+  - **运行形态与数据根目录**：`common.dataRoot()` 是唯一来源——源码态 = 仓库根；打包态 = 可执行文件所在目录（不可写时回退用户数据目录）。备份、`config.json`、`dictionaries/`、`tmp/` 全在数据根下。
+  - **字典「外部优先、内嵌兜底」**：`<数据根>/dictionaries/<版本>/zh-CN.json` 存在则用它，否则取打包时内嵌的同名资源；都没有才联网下载（见下）。用户把字典目录放进数据根即可覆盖内嵌版本。
   - **构建与发布（CI）**：`.github/workflows/build.yml` 用矩阵在各平台原生 runner 上构建（`windows-latest` / `macos-latest`(arm64) / `macos-15-intel` / `ubuntu-latest`）——手动触发只构建，推 `v*` tag 则构建后自动发 Release 并附 `SHA256SUMS`。发布前先校验 tag 与 `package.json` 版本一致，不一致直接失败，**改版本号时两者必须同步**。
 - **跨平台**：`--path` 可指向任意平台的 resources 目录；自动探测仅实现 Windows。打包产物只能在构建平台运行（Windows 构建 .exe、macOS 构建 Mach-O、Linux 构建 ELF）——基底是构建机的 node 可执行文件，macOS 还必须在 macOS 上注入与签名，**因此没有交叉构建这条路**。跨平台发布走 CI 矩阵（每个平台一个原生 runner），或在各平台各跑一次 `npm run build`。
+
+### 在线能力（改这些代码前先读）
+
+产物分发的现实是「旧产物遇到新版本 GitHub Desktop」，所以字典不能只靠内嵌。约定：
+
+- **远程地址只有一处定义**：`common.js` 的 `GH_OWNER` / `GH_REPO` / `GH_BRANCH` 及其派生 `GH_RAW` / `GH_CDN` / `GH_API`——换仓库、换分支只改这里；字典地址由 `common.remoteDictUrls(version)` 拼，其余脚本不得自行拼 URL。
+- **只在缺的时候联网**：`ensureDict()` 的顺序是「外部文件 → 内嵌资源 → 联网下载」，前两者命中就完全不碰网络（已有字典时离线完全可用）；只有用户主动点菜单 `5) 检查更新` 才走 `syncLatest()` 强制覆盖。**联网失败不能静默降级**——报可读错误（列出尝试过的源）并拒绝汉化，绝不拿别的版本字典凑合。
+- **零依赖**：HTTP(S) 只用 `node:https` / `node:http`（`net.js`）。不引三方库——产物是零依赖单文件，引入依赖会同时影响 `bundle.js` 的静态 `require` 收集与产物体积。
+- **下载内容先校验再落盘**：字典落盘前先 `JSON.parse`（避免把错误页 / 半截内容写成坏字典），并写 `.part` 再改名（原子落盘）；自更新下载的产物校验**文件头**（MZ / Mach-O / ELF）后才替换自身。
+- **自更新替换策略**：Windows 不允许删除或覆盖**正在运行**的可执行文件，但允许改名——自身改名 `.old`、新文件改名到原位，任一步失败把旧文件改回来；新进程启动时 `update.cleanup()` 清 `.old`。源码态不支持自更新（提示用 `git pull`）。
+- **重启而非静默**：汉化 / 还原后由 `restart.js` 重启 GitHub Desktop（原本未运行则只提示）——不重启看不到效果，这是使用者最容易误判「没生效」的点。
 
 ### 跨模块共用约定（改代码时别破坏）
 
 - 版本号概念在 `dictionaries/` 目录名、`scripts/` 版本一致性校验、`docs/` 版本对应表三处出现，改版本组织方式时三处同步。
 - 字典文件仅含「原文 → 中文」映射数据，不含任何脚本逻辑；脚本不得在字典外硬编码翻译。
 - 「运行形态」只有 `common.isPackaged()` 一个判据（bundle 产物与 SEA 产物均视为打包态）；数据根目录只有 `common.dataRoot()` 一个来源——脚本不得自行拼 `__dirname` 或假定当前工作目录。面向用户的提示文案在打包态与源码态不同（打包态用户没有 npm），用 `isPackaged()` 分支。
+- 远程仓库地址只有 `common.js` 的 `GH_*` 一处定义，联网统一走 `net.js`（见「在线能力」一节）；逆向还原的判据只有 `common.isReversible()` 一处定义，别在调用方各写一份。
 
 ## 翻译维护（字典迭代）
 
@@ -91,6 +107,13 @@ npm test               # 匹配器单元测试（node --test）
   - **数组元素被译**：`-1===["Syntax","Type","Range"].indexOf(t)` 里的 `"Type"` 译成中文后 `indexOf` 恒为 -1，条件与方法原文左右反转（re2js 库内部，错误类型表全乱）。因整串替换分不开该字面量的另一处表单 label，`"Type"` 只能整体保持英文。
   - **查表键只译一半**：Dexie 错误名表 `e[t+"Error"]=qM[t]`——使用点用英文名查表，只译 `"Unknown"` / `"Abort"` 会让查表永远失败。凡「拼接成标识符」的常量，要么整组一起译、要么整组不动。
   - 教训：**收录前必做「是否参与比较/查表/拼接」判定**，判定方法见「翻译维护」一节。
+- **逆向还原（没有备份时的 `restore`）**：
+  - **逆向键就是译文原样，不做任何加工**：正向替换是把「区间内容」整体换成译文——落在字符串字面量里就是引号之间的内容，落在整模板键上就是含两侧反引号的整段源码；两种情况下产物里该区间的 `content` 都恰好等于译文本体，故按 `content` 直查即可命中。剥引号、去反引号之类的「加工」会让整模板条目全部失配。
+  - **`stringLiterals` 对模板整段区间一律收集（含插值与否）**：只收集含插值的，会让「译文变成无插值模板」的条目在还原时失配——含反引号的原文塞回文本段会提前闭合反引号，产生语法错误（实测 `Unexpected token ','`，整段收下后消失）。
+  - **无辨识度译文必须排除**：译文本身就是原版里到处都有的文本（`" "`、`" / "`、`"…"`）当键逆替换会**误伤没被汉化过的位置**——实测 `"that " → " "` 会让原版所有空格字面量变成 `"that "`；`"automatically…" → "…"` 让官方 11 处省略号全被改写。判据是 `common.isReversible()`：含字母数字（`zh-CN`、`` `${t} ${n}` ``），或含非 ASCII 且不属于 `SHARED_PUNCT`（英文排版同样会用到的 Unicode 标点：弯引号 / 破折号 / 省略号 / 项目符号…）。新增 `SHARED_PUNCT` 成员前先想清代价。
+  - **代价（刻意付的）**：官方原文是 `The "` 的位置会保留中文弯引号（3.6.6 实测 1 处）——若让 `“` 参与还原，它落到双引号字符串里会提前闭合引号，语法校验不过、还原被整体拒绝，比留一个弯引号严重得多。
+  - **歧义按确定性规则取舍**：同一译文对应多个不同原文（3.6.6 实测 main.js 70 组 / renderer.js 72 组）时字典无从判断，取候选的规则是「作用域键优先 → 更短原文优先 → 字典书写顺序先入者」，保证「汉化 → 还原 → 再汉化」往返稳定、不漂移（词形可能与官方略有差异，如 `Parameters` / ` arguments` 同译「参数」）。
+  - **验收口径**：往返一致——官方原版 → 汉化 → 逆向还原 → 再汉化，两次汉化**逐字节哈希相同**；判据由 `test/reverse-entries.test.js` 覆盖，改 `reverseEntries` / `isReversible` / `stringLiterals` 后必须重跑（`npm test`）。
 - **机制细节（写探针前必读）**：`applyDictInStrings(content, entries)` 期望**已剥离作用域前缀**的键（传 `scopedEntries(entries,'renderer.js')` 的结果），直接塞 `renderer.js|Enabled` 会 0 命中；`stringLiterals` 返回的 `start` / `end` 指向**引号内内容**（不含引号），做「字面量后面紧跟什么」的判断时 post 串以**闭合引号**开头；字典条目**译文不得为空串**（`buildEntries` 抛错），需要消掉某段英文时用单空格 `" "`。
 - **打包态的进程环境与源码态不同（改脚本时注意）**：
   - `process.execPath` 指向产物自身，**不能**再当 node 用——`verify` 的语法校验已从 `node --check` 子进程改为 `vm.Script` 解析（只解析不执行，两者在官方产物上结果一致）；
