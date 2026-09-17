@@ -46,6 +46,7 @@ npm test               # 匹配器单元测试（node --test）
   - **运行形态与数据根目录**：`common.dataRoot()` 是唯一来源——源码态 = 仓库根；打包态 = 可执行文件所在目录（不可写时回退用户数据目录）。备份、`config.json`、`dictionaries/`、`tmp/` 全在数据根下。
   - **字典「外部优先、内嵌兜底」**：`<数据根>/dictionaries/<版本>/zh-CN.json` 存在则用它，否则取打包时内嵌的同名资源；都没有才联网下载（见下）。用户把字典目录放进数据根即可覆盖内嵌版本。
   - **构建与发布（CI）**：`.github/workflows/build.yml` 用矩阵在各平台原生 runner 上构建（`windows-latest` / `macos-latest`(arm64) / `macos-15-intel` / `ubuntu-latest`）——手动触发只构建，推 `v*` tag 则构建后自动发 Release 并附 `SHA256SUMS`。发布前先校验 tag 与 `package.json` 版本一致，不一致直接失败，**改版本号时两者必须同步**。
+  - **产物去处：Artifacts 是构建中转，Release 才是成品**——手动触发构建后产物留在该次运行的 **Artifacts** 里，下载得到的是 **zip 压缩包**（GitHub 强制打包），解压后 macOS / Linux 产物可能**丢可执行位**，它只用来自己验证构建，别当成品发给使用者。推 tag 后 CI 建的 Release，附件是**原始文件**（不套 zip），名为 `github-desktop-zh-cn-v<版本>-<平台>-<架构>[.exe]`，另附 `SHA256SUMS`——给使用者的下载链接一律指向 Release 附件。
 - **跨平台**：`--path` 可指向任意平台的 resources 目录；自动探测仅实现 Windows。打包产物只能在构建平台运行（Windows 构建 .exe、macOS 构建 Mach-O、Linux 构建 ELF）——基底是构建机的 node 可执行文件，macOS 还必须在 macOS 上注入与签名，**因此没有交叉构建这条路**。跨平台发布走 CI 矩阵（每个平台一个原生 runner），或在各平台各跑一次 `npm run build`。
 
 ### 在线能力（改这些代码前先读）
@@ -120,6 +121,7 @@ npm test               # 匹配器单元测试（node --test）
   - bundle 产物里 `require.main` 由打包器复刻（指向入口 `cli.js`），子脚本的 `if (require.main === module) main()` 在打包态**不成立**，`cli.js` 透传子命令时显式调用脚本导出的 `main()`（`patch.js` / `restore.js` 已导出；`locate` / `verify` / `scan` 是加载即执行）；
   - 打包态下 `__dirname` 被设为可执行文件所在目录，`path.resolve(__dirname, '..')` 不再指向仓库根；产物旁没有 `dictionaries/`，字典走内嵌资源；
   - 打包态用管道一次性喂入多行 stdin 会丢行（readline 预读），测菜单交互要分次输入。
+- **改 Release 正文的中文编码坑（实测发生过）**：用脚本改已发布 Release 的正文时，HTTP 响应**不要按数据块 `toString('utf8')` 解码**——多字节字符会在块边界被截断，正文出现 `还��` 这类替换符，而接口照样返回成功；要**按 `Buffer` 拼接后整体解码**。正文以本地 `CHANGELOG.md` 对应段落为准整体写回，写回后逐字复核（与 CHANGELOG 逐字一致、无替换符），别只看状态码。
 
 ## 提交规范
 
@@ -148,6 +150,8 @@ npm test               # 匹配器单元测试（node --test）
 6. CI（`.github/workflows/build.yml`）随即构建各平台产物并发 Release，**正文取自 `CHANGELOG.md` 对应段落**（`scripts/changelog.js` 提取，不是自动生成的变更列表）。
 
 **tag 推送与 Release 创建是同一个发版动作的两半，须配套完成、一次做完**：只推 tag 不建 Release 时首页 Releases 区块收不到该版本，只建 Release 不推 tag 时远端没有对应 ref（`/tree/<tag>` 是 404）——任一中间态都算发版未完成。**不留只存在于本地的 tag**；tag 还须指向已在远程 `main` 上的提交，避免「tag 打得开、`main` 上却看不到」的错位。
+
+**已发布的 Release 不再改动**：CI 只**创建**缺失的 Release——该 tag 的 Release 已存在时，发布步骤直接跳过、正文也不动。因此**改已发布版本的正文不能靠重跑 CI**，只能直接改 Release（`gh release edit <tag> --notes-file <文件>`，只换正文、不碰附件）。历史改写等场景**强推 tag 会再触发一次 CI**（tag 推送即触发），发布步骤同样按设计跳过，产物与正文都不被覆盖。
 
 CI 在发版前校验三处是否一致（tag ≠ `package.json` 版本、或 CHANGELOG 缺该版本条目时直接失败），但**不定级**——该升哪一位由人按上述规则判断。
 
