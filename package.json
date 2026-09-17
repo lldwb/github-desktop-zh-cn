@@ -15,7 +15,7 @@
     "scan": "node scripts/scan.js",
     "tool": "node scripts/cli.js",
     "gui": "electron .",
-    "dist": "electron-builder",
+    "dist": "electron-builder --publish never",
     "bundle": "node scripts/bundle.js --out tmp/build/bundle.js",
     "build": "node scripts/build.js"
   },

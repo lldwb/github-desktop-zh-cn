@@ -1,6 +1,6 @@
 # electron-builder.yml — GUI 产物打包配置（npm run dist）
 #
-# 三处刻意的选择（理由见 docs/gui/design.md）：
+# 四处刻意的选择（理由见 docs/gui/design.md）：
 #   1. 字典走 extraResources（进应用的 resources/dictionaries）而不是 extraFiles（exe 同级）：
 #      数据根与 exe 未必同处一地——macOS 的数据根恒在用户数据目录（.app 包内写入会让签名失效、
 #      下次启动被 Gatekeeper 拒开），Linux 的 AppImage 又挂在只读临时目录，两者都取不到 exe 旁边那份。
@@ -10,6 +10,10 @@
 #      指向那个临时位置，dataRoot() 会把备份与 config.json 写进临时目录里。
 #      免安装需求由 zip 目标满足——解压即用，数据根就落在解压目录。
 #   3. macOS 不做代码签名（identity: null）：本仓库没有证书。未签名产物的打开方式见 README「方式一」。
+#   4. 本文件里**没有** publish 配置，且 package.json 的 dist 脚本固定带 `--publish never`：
+#      electron-builder 26 只要在 CI 上跑就隐式开发布（检出 tag 时按 onTag、仅检测到 CI 时按
+#      onTagOrDraft），缺 GH_TOKEN 会在构建**全部跑完之后**才报错退出——本仓库的 Release 由
+#      `gh release create` 创建，不走 electron-builder，所以这里显式关掉，见 AGENTS.md「已知坑」。
 
 appId: com.lldwb.github-desktop-zh-cn
 productName: GitHub Desktop 汉化工具
