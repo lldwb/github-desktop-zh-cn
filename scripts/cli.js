@@ -25,7 +25,7 @@ const LINE = '─'.repeat(64);
 function printHelp() {
   console.log(`用法：github-desktop-zh-cn [子命令] [选项]
 
-不带子命令时进入中文交互菜单（双击运行即此模式）。
+不带子命令时进入中文交互菜单（双击运行即此模式），菜单里可汉化 / 还原 / 指定安装位置 / 检查更新。
 
 子命令（等价于直接运行对应脚本）：
   locate    定位安装目录并备份原文件
@@ -99,25 +99,31 @@ function printStatus(state) {
   console.log(` 备份目录：${backupExists(app.version) ? backupDir(app.version) : '（无——首次汉化时自动生成）'}`);
 }
 
+// 重启结果的一句话说明（汉化与还原共用）
+function restartLine(restarted) {
+  return restarted === 'restarted'
+    ? ' 已重启 GitHub Desktop，现在看到的就是新界面。'
+    : ' 启动 GitHub Desktop 即可看到效果。';
+}
+
 async function doPatch(rl, state) {
   if (state.error) {
     console.log('\n 未找到 GitHub Desktop，请先选择「4) 指定安装位置」。');
     return;
   }
   const version = state.app.version;
-  const versions = listDictVersions();
-  if (!versions.includes(version)) {
-    console.log(`\n 没有与安装版本 ${version} 对应的字典${versions.length ? `（现有：${versions.join(' / ')}）` : ''}。`);
-    console.log(' 字典与版本强对应，错配可能导致应用无法启动，已中止。');
-    return;
-  }
-  if (!(await confirm(rl, `\n 即将汉化 GitHub Desktop ${version}（原文件会先自动备份），继续？[Y/n] `))) {
+  // 本地（含内嵌）没有对应字典时**不中止**：交给 patch 联网取，取不到再报错
+  const local = listDictVersions().includes(version);
+  const tip = local ? '' : `（本地无 ${version} 字典，将联网获取）`;
+  if (!(await confirm(rl, `\n 即将汉化 GitHub Desktop ${version}${tip}（原文件会先自动备份），继续？[Y/n] `))) {
     console.log(' 已取消。');
     return;
   }
   try {
-    require('./patch.js').run({ explicitPath: state.explicitPath, version });
-    console.log('\n 汉化完成。请重启 GitHub Desktop 查看效果（运行中的实例仍是旧界面）。');
+    // quiet：中间过程不出现在菜单里，只留最终结果（命令行入口仍输出明细）
+    const r = await require('./patch.js').run({ explicitPath: state.explicitPath, version, quiet: true });
+    console.log(`\n 汉化完成：命中 ${r.total} 处。`);
+    console.log(restartLine(r.restarted));
   } catch (e) {
     console.log(`\n 汉化失败：${e.message}`);
     if (e.hint) console.log(` ${e.hint}`);
@@ -130,20 +136,67 @@ async function doRestore(rl, state) {
     return;
   }
   const version = state.app.version;
-  if (!backupExists(version)) {
-    console.log(`\n 没有 ${version} 的备份——备份在首次汉化时自动生成，当前无需还原。`);
-    return;
-  }
-  if (!(await confirm(rl, `\n 即将把 ${version} 还原为官方原版（覆盖当前已汉化文件），继续？[Y/n] `))) {
+  // 没有备份也能还原：按字典逆向替换（中文 → 英文），只是少数词形可能与官方略有差异
+  const tip = backupExists(version) ? '（从备份精确还原）' : '（没有备份，将按字典还原为英文）';
+  if (!(await confirm(rl, `\n 即将把 ${version} 还原为官方原版${tip}，继续？[Y/n] `))) {
     console.log(' 已取消。');
     return;
   }
   try {
-    require('./restore.js').run({ explicitPath: state.explicitPath, version });
-    console.log('\n 还原完成。请重启 GitHub Desktop 查看效果。');
+    const r = await require('./restore.js').run({ explicitPath: state.explicitPath, version, quiet: true });
+    const how = r.source === 'backup' ? '已从备份精确还原' : `已按字典还原 ${r.total} 处`;
+    console.log(`\n 还原完成：${how}。`);
+    if (r.source === 'reverse' && (r.ambiguous > 0 || r.skipped > 0)) {
+      const parts = [];
+      if (r.ambiguous > 0) parts.push(`${r.ambiguous} 条译文有多个英文写法`);
+      if (r.skipped > 0) parts.push(`${r.skipped} 条译文是空格/标点等通用文本，保持原样`);
+      console.log(` 注：${parts.join('；')}，个别词形可能与官方略有差异。`);
+    }
+    console.log(restartLine(r.restarted));
   } catch (e) {
     console.log(`\n 还原失败：${e.message}`);
     if (e.hint) console.log(` ${e.hint}`);
+  }
+}
+
+// 检查更新：先看工具自身有无新版本，再拉当前安装版本的字典
+async function doUpdate(rl, state) {
+  console.log('');
+
+  if (!state.error) {
+    const version = state.app.version;
+    try {
+      const r = await require('./dict-sync.js').syncLatest(version);
+      console.log(r.changed ? ` 字典已更新：${version}` : ` 字典已是最新（${version}）。`);
+    } catch (e) {
+      console.log(` 更新字典失败：${e.message}`);
+    }
+  }
+
+  if (!isPackaged()) {
+    console.log(' 源码模式不支持自更新——请用 git pull 更新本工具。');
+    return;
+  }
+
+  try {
+    const info = await require('./update.js').check();
+    if (!info.hasUpdate) {
+      console.log(` 本工具已是最新版本（v${info.current}）。`);
+      return;
+    }
+    if (!info.asset) {
+      console.log(` 发现新版本 v${info.latest}，但没有本平台（${process.platform}-${process.arch}）的产物。`);
+      console.log(` 可到 ${info.releaseUrl} 查看。`);
+      return;
+    }
+    if (!(await confirm(rl, ` 发现新版本 v${info.latest}（当前 v${info.current}），现在更新并重启？[Y/n] `))) {
+      console.log(' 已跳过工具更新。');
+      return;
+    }
+    // apply 成功后进程已退出、新版本已启动，不会返回
+    await require('./update.js').apply(info.asset);
+  } catch (e) {
+    console.log(` 检查更新失败：${e.message}`);
   }
 }
 
@@ -198,6 +251,7 @@ async function menu() {
       console.log(LINE);
       console.log(' 1) 汉化 GitHub Desktop       2) 还原官方原版');
       console.log(' 3) 详细信息                  4) 指定安装位置');
+      console.log(' 5) 检查更新（工具 + 字典）');
       console.log(' 0) 退出');
       const choice = await ask(rl, ' 请选择：');
       if (choice === '0' || choice === 'q' || choice === '') break;
@@ -205,7 +259,8 @@ async function menu() {
       if (choice === '2') { await doRestore(rl, state); state = resolveTarget(); continue; }
       if (choice === '3') { await showDetail(state); continue; }
       if (choice === '4') { state = await setPath(rl); continue; }
-      console.log(' 输入无效，请输入 0-4 的数字。');
+      if (choice === '5') { await doUpdate(rl, state); state = resolveTarget(); continue; }
+      console.log(' 输入无效，请输入 0-5 的数字。');
     }
     console.log(' 已退出。');
   } finally {
@@ -234,6 +289,12 @@ function main() {
     }
     runSubcommand(cmd, rest);
     return;
+  }
+  // 上次自更新可能留下 .old 残留，启动时清理（仅打包态；失败不影响使用）
+  try {
+    require('./update.js').cleanup();
+  } catch (e) {
+    /* 清理失败无妨，下次启动再试 */
   }
   menu().catch(async (e) => {
     console.error(`错误：${e.message}`);

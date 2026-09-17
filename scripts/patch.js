@@ -1,11 +1,28 @@
 // patch.js — 按字典替换 main.js / renderer.js 中的界面文本
 // 策略：只在字符串字面量内做整串替换（common.applyDictInStrings），
-// 保护标识符 / 属性名 / 正则 / 注释，并避免子串误伤协议串与拼接片段
+// 保护标识符 / 属性名 / 正则 / 注释，并避免子串误伤协议串与拼接片段。
+// 字典来源：本地外部字典 → 内嵌字典 → 联网下载（dict-sync.js）；汉化后重启应用（restart.js）。
 'use strict';
 
 const fs = require('fs');
 const path = require('path');
-const { locateApp, listDictVersions, loadDict, dictLabel, scopedEntries, backupAppFiles, backupExists, backupDir, isPatched, isPackaged, applyDictInStrings } = require('./common');
+const common = require('./common.js');
+const dictSync = require('./dict-sync.js');
+const restart = require('./restart.js');
+
+const {
+  locateApp,
+  listDictVersions,
+  loadDict,
+  dictLabel,
+  scopedEntries,
+  backupAppFiles,
+  backupExists,
+  backupDir,
+  isPatched,
+  isPackaged,
+  applyDictInStrings,
+} = common;
 
 const TARGETS = ['main.js', 'renderer.js'];
 
@@ -27,6 +44,7 @@ function printHelp() {
 
 按 dictionaries/<版本>/zh-CN.json 替换安装目录中 main.js / renderer.js 的界面文本。
 写回前自动备份原文件到「数据目录/tmp/backup/<版本>/」（源码态数据目录即仓库根）。
+本地没有该版本字典时会联网获取；汉化完成后重启 GitHub Desktop。
 
 选项：
   --dry-run        预览替换结果，不写盘
@@ -35,9 +53,12 @@ function printHelp() {
   -h, --help       显示本帮助`);
 }
 
-// 执行汉化（CLI 与交互式入口共用）：args = { dryRun, explicitPath, version }
-// 成功返回 { version, total }；版本不一致抛 exitCode=2 的错误，其余错误按 exitCode=1 处理。
-function run(args) {
+// 执行汉化（CLI 与交互式入口共用）：args = { dryRun, explicitPath, version, quiet }
+// quiet 为真时不输出中间过程，只留最终结果（交互式菜单用）。
+// 成功返回 { version, total, app, dryRun, restarted, downloaded }；
+// 版本不一致抛 exitCode=2 的错误，其余错误按 exitCode=1 处理。
+async function run(args = {}) {
+  const log = args.quiet ? () => {} : console.log;
   const versions = listDictVersions();
   if (versions.length === 0) throw new Error('dictionaries/ 下没有版本目录');
   const version = args.version || versions[versions.length - 1];
@@ -50,9 +71,13 @@ function run(args) {
     throw e;
   }
 
+  // 字典就位：本地有外部字典或内嵌字典都不联网；两者都没有（如汉化旧版本）才下载
+  const synced = await dictSync.ensureDict(version);
+  if (synced.downloaded) log(`已下载字典：${synced.path}`);
+
   const entries = loadDict(version);
-  console.log(`字典：${dictLabel(version)}（${entries.size} 条）`);
-  console.log(`目标版本：${app.version}（${app.appDir}）`);
+  log(`字典：${dictLabel(version)}（${entries.size} 条）`);
+  log(`目标版本：${app.version}（${app.appDir}）`);
 
   // 「已汉化」判定必须在写回之前做：首次汉化时备份与当前文件相同（都是官方原版），
   // 判定为未汉化，0 命中条目才会作为「需人工核对」报出来，而不是被当成预期
@@ -67,18 +92,18 @@ function run(args) {
     // 生效条目 = 全局键 + 作用域指向本文件的键（同名文本在两个文件中语义不同时按文件隔离）
     const { content: patched, total, perKey } = applyDictInStrings(content, scopedEntries(entries, f));
     perFile[f] = perKey;
-    console.log(`\n${f}：命中 ${total} 处`);
+    log(`\n${f}：命中 ${total} 处`);
     totalAll += total;
 
     if (args.dryRun) continue;
     if (!backupExists(version)) {
       const backed = backupAppFiles(app.appDir, version);
       for (const { f: bf, skipped } of backed) {
-        console.log(`${skipped ? '已存在，跳过' : '已备份'}：${path.join(backupDir(version), bf)}`);
+        log(`${skipped ? '已存在，跳过' : '已备份'}：${path.join(backupDir(version), bf)}`);
       }
     }
     fs.writeFileSync(file, patched, 'utf8');
-    console.log(`已写回：${file}`);
+    log(`已写回：${file}`);
   }
 
   // 两个文件都未命中的条目（真正缺失，可能为版本错配或条目失效）
@@ -94,17 +119,29 @@ function run(args) {
     (k) => !perFile['main.js'].has(k) && !perFile['renderer.js'].has(k)
   );
   if (globalMisses.length > 0 && !alreadyPatched) {
-    console.log(`\n两个文件均 0 命中的条目 ${globalMisses.length} 条（需人工核对，可暂不处理）：`);
-    for (const k of globalMisses) console.log(`    - ${k}`);
+    log(`\n两个文件均 0 命中的条目 ${globalMisses.length} 条（需人工核对，可暂不处理）：`);
+    for (const k of globalMisses) log(`    - ${k}`);
   } else if (globalMisses.length > 0) {
-    console.log(`\n（已汉化状态，0 命中条目 ${globalMisses.length} 条属预期——英文串已被此前补丁替换）`);
+    log(`\n（已汉化状态，0 命中条目 ${globalMisses.length} 条属预期——英文串已被此前补丁替换）`);
   }
 
-  console.log(`\n合计命中 ${totalAll} 处。`);
-  return { version, total: totalAll, app, dryRun: !!args.dryRun };
+  log(`\n合计命中 ${totalAll} 处。`);
+
+  // 汉化后重启：Electron 已把旧代码载入内存，不重启看不到效果。
+  // 应用原本没在运行时不动它（避免替用户多开窗口），只提示。
+  const restarted = args.dryRun ? 'skipped' : restart.restartApp(app.resourcesDir);
+
+  return {
+    version,
+    total: totalAll,
+    app,
+    dryRun: !!args.dryRun,
+    restarted,
+    downloaded: synced.downloaded,
+  };
 }
 
-function main() {
+async function main() {
   let args;
   try {
     args = parseArgs(process.argv);
@@ -118,13 +155,15 @@ function main() {
   }
 
   try {
-    run(args);
+    const r = await run(args);
     if (args.dryRun) {
       console.log('（--dry-run 预览，未写盘）');
+    } else if (r.restarted === 'restarted') {
+      console.log('汉化完成，已重启 GitHub Desktop。');
     } else {
       console.log(
         isPackaged()
-          ? '汉化完成。请重启 GitHub Desktop 查看效果；还原官方版：重新运行本工具选「还原官方原版」。'
+          ? '汉化完成。启动 GitHub Desktop 即可看到中文界面；还原官方版：重新运行本工具选「还原官方原版」。'
           : '汉化完成。启动 GitHub Desktop 查看效果；恢复官方版：npm run restore。'
       );
     }

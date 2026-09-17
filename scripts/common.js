@@ -4,12 +4,22 @@
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
+const vm = require('vm');
 
 const REPO_ROOT = path.resolve(__dirname, '..');
 
 const RESOURCES_REL = ['resources'];
 const APP_SUBDIR = 'app';
 const APP_NAME = 'github-desktop-zh-cn';
+
+// —— 远程仓库（在线字典与自更新，SSOT）——
+// 字典按候选顺序尝试：GitHub raw 为权威源，jsDelivr 兜底（部分地区可达性更好）。
+const GH_OWNER = 'lldwb';
+const GH_REPO = 'github-desktop-zh-cn';
+const GH_BRANCH = 'main';
+const GH_RAW = `https://raw.githubusercontent.com/${GH_OWNER}/${GH_REPO}/${GH_BRANCH}`;
+const GH_CDN = `https://cdn.jsdelivr.net/gh/${GH_OWNER}/${GH_REPO}@${GH_BRANCH}`;
+const GH_API = `https://api.github.com/repos/${GH_OWNER}/${GH_REPO}`;
 
 // —— 运行形态与数据根目录（SSOT）——
 // 源码态（node scripts/xxx.js）：数据根 = 仓库根，字典与备份位置与既有版本一致。
@@ -267,6 +277,90 @@ function scopedEntries(entries, file) {
   return out;
 }
 
+// 远程字典候选地址（按序尝试：权威源 → CDN 兜底）
+function remoteDictUrls(version) {
+  const rel = `dictionaries/${version}/zh-CN.json`;
+  return [`${GH_RAW}/${rel}`, `${GH_CDN}/${rel}`];
+}
+
+// 英文排版同样会用到的 Unicode 标点：官方原版里本来就可能存在，不能当「来自汉化」的凭据。
+// 实测教训——「…」译文（省略号）单靠「非 ASCII」判据会通过，而官方原版里 11 处省略号
+// 并未被汉化，逆替换后全变成 "automatically…"。
+// 代价：官方原文是 `The "` 的位置会保留中文弯引号（3.6.6 实测 1 处）。这个代价是刻意付的——
+// 若让 `“` 参与还原，一旦它落到双引号字符串里就会把引号提前闭合，语法校验不过、还原被整体拒绝，
+// 比留一个弯引号严重得多。
+const SHARED_PUNCT = new Set([
+  '\u00a0', // 不换行空格
+  '\u00b7', // 间隔号
+  '\u2013', '\u2014', // 短破折号 / 长破折号
+  '\u2018', '\u2019', // 弯单引号
+  '\u201c', '\u201d', // 弯双引号
+  '\u2022', // 项目符号
+  '\u2026', // 省略号
+]);
+
+// 「该译文能安全地当逆向键用吗」的判据。译文本身**在官方原版里不会自然出现**才安全——
+// 否则拿它当键做逆替换，会误伤原版里本来就有的同名文本（实测 "that " → " " 会让原版
+// 所有空格字面量都变成 "that "）。满足其一即可：
+//   - 含字母数字（如 "zh-CN"、整模板译文 "`${t} ${n}`"）：原版对应位置是 "en-US" 之类；
+//   - 含非 ASCII 且不属于 SHARED_PUNCT（汉字、全角标点）：官方是纯英文界面，不会有这类文本。
+// 其余一律排除：空格、ASCII 标点，以及只由通用 Unicode 标点组成的译文（" "、" / "、"…"）。
+function isReversible(v) {
+  if (/[A-Za-z0-9]/.test(v)) return true;
+  for (const ch of v) {
+    if (ch > '\x7e' && !SHARED_PUNCT.has(ch)) return true;
+  }
+  return false;
+}
+
+// 构建「译文 → 原文」的逆向条目，供没有备份时按字典还原。
+// 返回 { entries, ambiguous, skipped }：
+//   entries     译文 → 原文（键为译文原样，与产物里该字面量的 content 逐字符相同）；
+//   ambiguous   存在多个原文候选的译文条数；
+//   skipped     未参与还原的条目数（纯 ASCII 译文，见下）。
+// **逆向键就是译文本身，不做任何加工**：正向替换是把「区间内容」整体换成译文文本——
+// 落在字符串字面量里就是引号之间的内容，落在整模板键上就是含两侧反引号的整段源码。
+// 两种情况下产物里该区间的 content 都恰好等于译文本体，故按 content 直查即可命中
+// （整模板译文含反引号，与无插值模板的整段区间形态一致，见 stringLiterals）。
+//
+// 同一译文可能对应多个原文（如 Account / Accounts 都译作「账户」），字典本身无从判断某处
+// 原本是哪一个——按确定性规则取候选，保证「汉化 → 还原 → 再汉化」往返稳定、不漂移：
+//   1) 作用域键优先：它为特定文件而定，比全局键更精确；
+//   2) 更短的原文优先：通常是词根形式（Account 优于 Accounts）；
+//   3) 先入者优先（字典中的书写顺序），保证结果唯一。
+// 纯 ASCII 译文（如 " "、" / "）不参与：它们本身就是原版里到处都有的文本，
+// 当作键逆替换会**误伤没被汉化过的位置**——实测 "that " → " " 会让原版所有空格字面量
+// 变成 "that "。这类条目列入 skipped，文件对应位置保持原样（多为中性，不影响界面）。
+// 判据详见 REVERSIBLE：含非 ASCII 或含字母数字的译文才参与。
+// file 省略时收全部（含各文件的作用域键），取舍同 scopedEntries。
+function reverseEntries(entries, file) {
+  const best = new Map(); // 译文 → { text, scoped }
+  const conflicting = new Set();
+  let skipped = 0;
+  const wins = (next, prev) =>
+    next.scoped !== prev.scoped ? next.scoped > prev.scoped : next.text.length < prev.text.length;
+
+  for (const [k, v] of entries) {
+    const m = SCOPED_KEY.exec(k);
+    if (m && file && m[1] !== file) continue;
+    if (!isReversible(v)) {
+      if (k !== v) skipped++; // 原文与译文相同的条目跳过也不产生差异
+      continue;
+    }
+    const next = { text: m ? m[2] : k, scoped: m ? 1 : 0 };
+    const prev = best.get(v);
+    if (!prev) {
+      best.set(v, next);
+    } else if (prev.text !== next.text) {
+      // 原文不同才算歧义；全局键与作用域键指向同一原文属正常共存
+      conflicting.add(v);
+      if (wins(next, prev)) best.set(v, next);
+    }
+  }
+
+  return { entries: new Map([...best].map(([v, info]) => [v, info.text])), ambiguous: conflicting.size, skipped };
+}
+
 // 字典文件位置：<数据根>/dictionaries/<版本>/zh-CN.json
 function dictFile(version) {
   return path.join(dataRoot(), 'dictionaries', version, 'zh-CN.json');
@@ -284,6 +378,11 @@ function readDictSource(version) {
   const embedded = embeddedAsset(dictAssetKey(version));
   if (embedded !== null) return { text: embedded, label: `内嵌字典 ${dictAssetKey(version)}` };
   throw new Error(`字典不存在：${version}（已查找 ${file} 与内嵌资源）`);
+}
+
+// 是否存在该版本的内嵌字典（打包态为真；源码态恒为假）
+function hasEmbeddedDict(version) {
+  return embeddedAsset(dictAssetKey(version)) !== null;
 }
 
 // 字典来源的可读标签（不解析 JSON，供脚本日志用）
@@ -365,17 +464,21 @@ function isRegexStart(src, i) {
   return true;
 }
 
-// 提取 JS 源码中的可替换区间，返回 [{ start, end, content, template }]：
-//   - 字符串字面量内容区间（不含引号/反引号；模板字符串剔除 ${} 插值部分），template=false；
-//   - 含插值的模板字符串整体区间（含两侧反引号），template=true——供「整模板替换」使用。
+// 提取 JS 源码中的可替换区间，返回 [{ start, end, content, template, inTemplate }]：
+//   - 字符串字面量内容区间（不含引号），template=false；
+//   - 模板字符串**整体**区间（含两侧反引号），template=true——整模板键按它匹配。
+//     含插值与否都收集：只收集含插值的会让「译文变成无插值模板」的条目在还原时失配
+//     （成品里只剩文本段，含反引号的原文塞回文本段会提前闭合反引号，产生语法错误）。
+//   - inTemplate 标出该区间的文本来自模板（整段区间与其内部的文本段），供上游区分
+//     「模板文本段」与「引号字符串」——两者 content 可能相同，但所属容器不同。
 // 替换只应发生在这些区间内，避免误伤标识符/属性名/正则/注释。
 // 递归处理：模板插值内是完整代码（含嵌套字符串/模板/正则/注释/花括号），其中的字符串与模板不收集
 // （插值内是代码，替换单段文本会破坏逻辑；需要替换插值内整段文本时按整模板键处理外层模板）。
 function stringLiterals(src) {
   const out = [];
   const n = src.length;
-  const push = (start, end) => {
-    if (end > start) out.push({ start, end, content: src.slice(start, end), template: false });
+  const push = (start, end, inTemplate = false) => {
+    if (end > start) out.push({ start, end, content: src.slice(start, end), template: false, inTemplate });
   };
 
   // 扫描代码；stopOnBrace 时在花括号深度归零的 '}' 处返回（用于模板插值）。
@@ -430,25 +533,23 @@ function stringLiterals(src) {
 
   // 扫描模板字符串（i 指向反引号），返回闭合反引号后的位置；
   // collect=false 时不提取文本段（插值内的嵌套模板同样是代码）；
-  // 含插值的模板额外整段收集一个区间（content 含两侧反引号），供给整模板键匹配。
+  // 整段区间（含两侧反引号）一律收集，供整模板键按整段匹配。
   function scanTemplate(i, collect) {
     const tStart = i;
-    let hasInterp = false;
     let j = i + 1;
     let segStart = j;
     while (j < n) {
       if (src[j] === '\\') j += 2;
       else if (src[j] === '`') {
         if (collect) {
-          push(segStart, j);
-          if (hasInterp) {
-            out.push({ start: tStart, end: j + 1, content: src.slice(tStart, j + 1), template: true });
-          }
+          push(segStart, j, true);
+          out.push({
+            start: tStart, end: j + 1, content: src.slice(tStart, j + 1), template: true, inTemplate: true,
+          });
         }
         return j + 1;
       } else if (src[j] === '$' && src[j + 1] === '{') {
-        hasInterp = true;
-        if (collect) push(segStart, j);
+        if (collect) push(segStart, j, true);
         j = scanCode(j + 2, true, false);
         if (j < n) j++; // 跳过插值闭合的 '}'
         segStart = j;
@@ -495,6 +596,18 @@ function applyDictInStrings(content, entries) {
   return { content: out, total, perKey };
 }
 
+// 语法校验：用 vm.Script 按脚本模式解析，只解析不执行（等价于 node --check）。
+// 不用 `node --check` 子进程：打包态下 process.execPath 是产物自身，不具备该参数。
+// 接收源码文本而非路径——调用方可以在落盘之前先校验。
+function checkSyntax(source, file = '<string>') {
+  try {
+    new vm.Script(source, { filename: file });
+    return { ok: true, output: '' };
+  } catch (e) {
+    return { ok: false, output: String(e.message || e) };
+  }
+}
+
 module.exports = {
   REPO_ROOT,
   APP_NAME,
@@ -516,6 +629,14 @@ module.exports = {
   isPatched,
   stringLiterals,
   applyDictInStrings,
+  checkSyntax,
   buildEntries,
   scopedEntries,
+  reverseEntries,
+  remoteDictUrls,
+  hasEmbeddedDict,
+  compareVersions,
+  GH_API,
+  GH_OWNER,
+  GH_REPO,
 };

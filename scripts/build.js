@@ -15,6 +15,7 @@ const fs = require('fs');
 const path = require('path');
 const { execFileSync } = require('child_process');
 const { bundle } = require('./bundle');
+const { compareVersions } = require('./common.js');
 
 const REPO_ROOT = path.resolve(__dirname, '..');
 const PKG = require('../package.json');
@@ -46,17 +47,21 @@ function printHelp() {
   -h, --help       显示本帮助`);
 }
 
-// 收集全部字典作为内嵌资源：dictionaries/<版本>/zh-CN.json
+// 只内嵌最新版本的字典：产物保持单文件、体积最小。其余版本由运行时的 dict-sync
+// 从仓库获取（见 AGENTS.md 的「在线能力」）——汉化最新版本无需联网。
 function collectAssets() {
   const dir = path.join(REPO_ROOT, 'dictionaries');
-  const assets = {};
-  for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
-    if (!e.isDirectory()) continue;
-    const file = path.join(dir, e.name, 'zh-CN.json');
-    if (fs.existsSync(file)) assets[`dictionaries/${e.name}/zh-CN.json`] = file;
+  const versions = fs
+    .readdirSync(dir, { withFileTypes: true })
+    .filter((e) => e.isDirectory() && fs.existsSync(path.join(dir, e.name, 'zh-CN.json')))
+    .map((e) => e.name)
+    .sort(compareVersions);
+  if (versions.length === 0) throw new Error('dictionaries/ 下没有可用字典，无法内嵌');
+  const latest = versions[versions.length - 1];
+  if (versions.length > 1) {
+    console.log(`     内嵌字典只取最新版本 ${latest}（其余 ${versions.length - 1} 个版本运行时在线获取）`);
   }
-  if (Object.keys(assets).length === 0) throw new Error('dictionaries/ 下没有可用字典，无法内嵌');
-  return assets;
+  return { [`dictionaries/${latest}/zh-CN.json`]: path.join(dir, latest, 'zh-CN.json') };
 }
 
 // 优先用本地安装的 postject，其次 npx 拉取固定版本
