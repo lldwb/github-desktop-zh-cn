@@ -1,0 +1,50 @@
+# electron-builder.yml — GUI 产物打包配置（npm run dist）
+#
+# 两处刻意的选择（理由见 docs/gui/design.md）：
+#   1. 字典走 extraFiles（复制到 exe 同级）而不是 extraResources（进 resources/）：
+#      这样 common.dataRoot()/dictionaries 的「外部字典优先」逻辑零改动即可命中，
+#      不必为 Electron 新增内嵌资源读取路径（内嵌只对 SEA 产物有效）。
+#   2. 不做 portable 目标：portable 版运行时会把自己解压到临时目录，process.execPath
+#      指向那个临时位置，dataRoot() 会把备份与 config.json 写进临时目录里。
+#      免安装需求由 zip 目标满足——解压即用，数据根就落在解压目录。
+
+appId: com.lldwb.github-desktop-zh-cn
+productName: GitHub Desktop 汉化工具
+executableName: GitHubDesktopZhTool
+copyright: GPL-3.0
+
+directories:
+  output: dist/gui
+  buildResources: build
+
+# 产物命名（NSIS 在下面单独覆盖为 …-setup.exe）
+artifactName: ${name}-${version}-${os}-${arch}.${ext}
+
+# 应用代码：界面 + 业务逻辑（主进程直接 require scripts/ 下的模块）
+files:
+  - gui/**/*
+  - scripts/**/*
+  - package.json
+
+# 字典：落到 exe 同级，与 common.dictFile() 的查找位置一致
+extraFiles:
+  - from: dictionaries
+    to: dictionaries
+
+# 构建期网络：国内直连 GitHub 下载 Electron 二进制会超时，走 npmmirror
+electronDownload:
+  mirror: https://registry.npmmirror.com/-/binary/electron/
+
+win:
+  target:
+    - nsis
+    - zip
+
+nsis:
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: true
+  createStartMenuShortcut: true
+  shortcutName: GitHub Desktop 汉化工具
+  artifactName: ${name}-${version}-${os}-${arch}-setup.${ext}
