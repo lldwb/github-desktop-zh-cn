@@ -161,6 +161,7 @@ jobs:
     needs: [build, gui]
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
+    timeout-minutes: 45        # 上传卡死时的兜底：附件传完只需几分钟，超过这个数多半是传输卡住了
     permissions:
       contents: read          # Release 由 RELEASE_TOKEN 创建，内置 token 只需读仓库
     steps:
@@ -190,7 +191,7 @@ jobs:
           GH_TOKEN: ${{ secrets.RELEASE_TOKEN }}
         run: |
           # 只创建缺失的：已发布的 Release 与它的正文都不再改动。
-          # 草稿则是上一次跑到一半被取消留下的残骸（gh release create 先建草稿、传完附件才发布），
+          # 草稿则是上一次跑到一半被中断留下的残骸（gh release create 先建草稿、传完附件才发布），
           # 附件多半不全且可能来自旧提交——删掉重建。不带 --cleanup-tag，tag 保留。
           if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
             if [ "$(gh release view "$GITHUB_REF_NAME" --json isDraft --jq .isDraft)" = "true" ]; then
@@ -201,7 +202,32 @@ jobs:
               exit 0
             fi
           fi
-          gh release create "$GITHUB_REF_NAME" \
+
+          # 先建草稿，附件全部传成功才发布——中途失败时留下的草稿由下次运行删掉重建，
+          # 不会出现「已发布但附件不全」的 Release。
+          gh release create "$GITHUB_REF_NAME" --draft \
             --title "$GITHUB_REF_NAME" \
-            --notes-file notes.md \
-            dist/*
+            --notes-file notes.md
+
+          # 逐个上传、逐个重试：一次性 gh release create dist/* 是串行传完所有附件，
+          # 任一附件失败整条命令作废、已传的也只能重来（v0.2.0 首次带 GUI 产物时，
+          # 10 个附件约 1.5 GB 在 27 分钟后失败，正是栽在这里）。单次上传加超时，
+          # 免得一条卡死的连接把 job 拖到天荒地老。
+          for f in dist/*; do
+            name="$(basename "$f")"
+            for attempt in 1 2 3; do
+              if timeout 900 gh release upload "$GITHUB_REF_NAME" "$f" --clobber; then
+                echo "已上传 $name（$(du -h "$f" | cut -f1)）"
+                break
+              fi
+              if [ "$attempt" = 3 ]; then
+                echo "::error::附件 $name 连续 3 次上传失败"
+                exit 1
+              fi
+              echo "附件 $name 第 $attempt 次上传失败，10 秒后重试"
+              sleep 10
+            done
+          done
+
+          gh release edit "$GITHUB_REF_NAME" --draft=false
+          echo "Release $GITHUB_REF_NAME 已发布，附件 $(gh release view "$GITHUB_REF_NAME" --json assets --jq '.assets | length') 个"

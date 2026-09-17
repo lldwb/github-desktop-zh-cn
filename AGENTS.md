@@ -162,6 +162,8 @@ npm test               # 匹配器单元测试（node --test）
 
 **草稿要删掉重建**（实测踩过）：`gh release create` 是**先建草稿、传完附件才发布**，中途被取消（或上传失败）就留下一个附件不全、还可能是旧提交产物的草稿。草稿对匿名接口不可见（`/releases` 列不出、`/releases/tags/<tag>` 返 404），但 `gh release view` 用写权限令牌**看得见**——不处理的话下次发布步骤会误判「已存在」而跳过，表面成功、实际什么都没发（表现：**发布步骤 0 秒过、Release 列表里却没有这个版本**）。故发布步骤只对**已发布**的跳过，草稿一律 `gh release delete <tag> --yes` 后重建（不带 `--cleanup-tag`，tag 保留）。
 
+**附件逐个上传、逐个重试，全部成功才发布**（v0.2.0 首次带 GUI 产物时踩到）：一次性 `gh release create <tag> dist/*` 是串行传完所有附件、**任一附件失败整条命令作废**，已传的部分只能重来——实测 10 个附件约 1.5 GB 跑了 **27 分钟后失败**（对照 v0.1.1 的 5 个附件约 420 MB 只用 8 秒，说明不是带宽上限、而是某条传输卡死或失败），且失败后远端状态无从查证（草稿对匿名接口不可见、job 日志要有权限才读得到）。故发布步骤改成三步：`gh release create --draft` 建草稿 → 循环 `gh release upload --clobber`（每个附件最多 3 次、单次 `timeout 900`）→ 全部成功才 `gh release edit --draft=false` 发布。这样**失败的附件名会直接打进日志**，也不会出现「已发布但附件不全」的 Release。
+
 CI 在发版前校验三处是否一致（tag ≠ `package.json` 版本、或 CHANGELOG 缺该版本条目时直接失败），但**不定级**——该升哪一位由人按上述规则判断。
 
 **CHANGELOG 条目格式**（`scripts/changelog.js` 按此格式提取，改动格式须同步它）：
