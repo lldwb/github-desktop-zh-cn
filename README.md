@@ -25,6 +25,7 @@ github-desktop-zh-cn/
 ├── package.json            # 脚本入口（locate / patch / restore / verify / scan / tool / build）
 ├── AGENTS.md / CLAUDE.md   # agent 指引（唯一权威源为 AGENTS.md）
 ├── .claude/skills/         # 翻译维护技能（补译与纠错的流程、判定标准与探针模板）
+├── .github/workflows/      # CI：矩阵构建各平台产物；推 tag 自动发 Release
 ├── dictionaries/           # 语言字典（核心资产），按版本目录组织
 │   ├── 3.6.5/zh-CN.json    # 首个版本字典
 │   ├── 3.6.6/zh-CN.json    # 当前版本字典

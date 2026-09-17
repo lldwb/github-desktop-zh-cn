@@ -5,8 +5,10 @@
 //       → 复制当前 node 可执行文件 → postject 注入 → 产出 dist/ 下的单文件。
 // 说明：产物只能在「构建平台」运行（Windows 构建出 .exe，macOS 构建出 Mach-O，Linux 构建出 ELF）；
 //       跨平台发布用 GitHub Actions 的矩阵构建，或在各平台各跑一次本脚本。
-//       要求 Node ≥ 20.12（assets 与 getAssetKeys 的支持版本）。Node ≥ 24 也可改用官方
-//       `node --build-sea=sea-config.json` 一步到位，本脚本按兼容 20.12+ 的流程实现。
+//       要求 Node ≥ 20.12（SEA 的 assets 支持版本）。其中 getAssetKeys()（列出内嵌字典版本）
+//       是更晚才加的：低版本构建出的产物字典本身仍可用，但菜单里列不出内嵌版本，构建时告警。
+//       Node ≥ 24 也可改用官方 `node --build-sea=sea-config.json` 一步到位，本脚本按兼容
+//       20.12+ 的流程实现。
 'use strict';
 
 const fs = require('fs');
@@ -74,11 +76,20 @@ function runPostject(args) {
   return 'npx';
 }
 
-// macOS：注入会破坏原有签名，未重签的可执行文件会被 Gatekeeper 直接杀掉
-function adhocSign(file) {
+// macOS：Node 官方 SEA 步骤要求「先移除签名 → 再注入 → 再重签」——已签名的 Mach-O
+// 注入不进去，而未重签的可执行文件又会被 Gatekeeper 直接杀掉，两步都不能省
+function removeSignature(file) {
   if (process.platform !== 'darwin') return;
   try {
     execFileSync('codesign', ['--remove-signature', file], { stdio: 'ignore' });
+  } catch (e) {
+    console.warn('警告：codesign --remove-signature 失败，注入可能不成功。');
+  }
+}
+
+function adhocSign(file) {
+  if (process.platform !== 'darwin') return;
+  try {
     execFileSync('codesign', ['--sign', '-', file], { stdio: 'inherit' });
     console.log('已做 ad-hoc 签名（codesign --sign -）');
   } catch (e) {
@@ -103,6 +114,21 @@ function main() {
   if (major < 20 || (major === 20 && Number(process.versions.node.split('.')[1]) < 12)) {
     console.error(`错误：单文件打包要求 Node ≥ 20.12（当前 ${process.versions.node}）`);
     process.exit(1);
+  }
+
+  // 按能力探测而非版本号：getAssetKeys() 缺失时，产物内嵌的字典仍能读到（getAsset 一直有），
+  // 但 common.embeddedDictVersions() 会退化成空列表——菜单里看不到内嵌版本，先提醒构建者
+  let hasAssetKeys = false;
+  try {
+    hasAssetKeys = typeof require('node:sea').getAssetKeys === 'function';
+  } catch (e) {
+    // node:sea 不可用：按源码态处理，与 common.seaApi() 一致
+  }
+  if (!hasAssetKeys) {
+    console.warn(
+      `警告：当前 Node（${process.versions.node}）没有 sea.getAssetKeys()，` +
+        '产物将列不出内嵌字典版本（字典本身仍可用）；建议改用 Node ≥ 22.20 构建。'
+    );
   }
 
   try {
@@ -149,8 +175,16 @@ function main() {
     fs.chmodSync(outFile, 0o755);
     console.log(`3/5 已复制运行时：${path.relative(REPO_ROOT, outFile)}`);
 
-    // 5. 注入 blob
-    const via = runPostject([outFile, 'NODE_SEA_BLOB', blobFile, '--sentinel-fuse', SENTINEL_FUSE]);
+    // 5. 注入 blob（macOS 的 Mach-O 必须指定段名 NODE_SEA，且注入前要先移除原签名）
+    removeSignature(outFile);
+    const via = runPostject([
+      outFile,
+      'NODE_SEA_BLOB',
+      blobFile,
+      '--sentinel-fuse',
+      SENTINEL_FUSE,
+      ...(process.platform === 'darwin' ? ['--macho-segment-name', 'NODE_SEA'] : []),
+    ]);
     console.log(`4/5 已注入代码与字典（postject via ${via}）`);
     adhocSign(outFile);
 

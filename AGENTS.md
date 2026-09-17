@@ -41,7 +41,8 @@ npm test               # 匹配器单元测试（node --test）
   - `build.js`：Node SEA 打包（`node --experimental-sea-config` 生成 blob → postject 注入 node 可执行文件副本），把 `dictionaries/*/zh-CN.json` 全部作为内嵌资源打进产物，产出 `dist/` 下单文件；构建后自动跑一次 `--help` 自检。
   - **运行形态与数据根目录**：`common.dataRoot()` 是唯一来源——源码态 = 仓库根；打包态 = 可执行文件所在目录（不可写时回退用户数据目录）。备份、`config.json`、`tmp/` 全在数据根下。
   - **字典「外部优先、内嵌兜底」**：`<数据根>/dictionaries/<版本>/zh-CN.json` 存在则用它，否则取打包时内嵌的同名资源；用户把字典目录放进数据根即可覆盖内嵌版本。
-- **跨平台**：`--path` 可指向任意平台的 resources 目录；自动探测仅实现 Windows。打包产物只能在构建平台运行（Windows 构建 .exe、macOS 构建 Mach-O、Linux 构建 ELF），跨平台发布用 CI 矩阵构建或各平台各跑一次 `npm run build`。
+  - **构建与发布（CI）**：`.github/workflows/build.yml` 用矩阵在各平台原生 runner 上构建（`windows-latest` / `macos-latest`(arm64) / `macos-15-intel` / `ubuntu-latest`）——手动触发只构建，推 `v*` tag 则构建后自动发 Release 并附 `SHA256SUMS`。发布前先校验 tag 与 `package.json` 版本一致，不一致直接失败，**改版本号时两者必须同步**。
+- **跨平台**：`--path` 可指向任意平台的 resources 目录；自动探测仅实现 Windows。打包产物只能在构建平台运行（Windows 构建 .exe、macOS 构建 Mach-O、Linux 构建 ELF）——基底是构建机的 node 可执行文件，macOS 还必须在 macOS 上注入与签名，**因此没有交叉构建这条路**。跨平台发布走 CI 矩阵（每个平台一个原生 runner），或在各平台各跑一次 `npm run build`。
 
 ### 跨模块共用约定（改代码时别破坏）
 

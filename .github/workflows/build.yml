@@ -1,0 +1,103 @@
+# 构建与发布：把工具链打成各平台单文件产物；打 tag 时自动建 Release 并附产物。
+#
+# 触发：
+#   - 手动（Actions 页面 → Run workflow）：只构建，产物留在该次运行的 Artifacts 里；
+#   - 推 tag（git tag v0.1.0 && git push origin v0.1.0）：构建 + 发 Release。
+#
+# 为什么用矩阵、不做交叉构建：产物基底是构建机上的 node 可执行文件（Node SEA），
+# 只能在构建平台运行；macOS 产物还必须在 macOS 上注入与签名。故每个平台各用一个
+# 原生 runner 构建，不在一台机器上交叉产出。
+#
+# 扩展：需要 arm64 产物时，往 matrix.include 里加 `ubuntu-24.04-arm`（Linux arm64）
+# 或 `windows-11-arm`（Windows arm64）即可，其余无需改动。
+
+name: 构建与发布
+
+on:
+  workflow_dispatch:
+  push:
+    tags: ['v*']
+
+# 默认最小权限；发布 Release 的 job 再单独提权
+permissions:
+  contents: read
+
+# 同一 ref 不并发，避免重复往同一个 tag 发 Release
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  # 打 tag 时先校验 tag 与 package.json 版本一致，避免版本错配的产物被发出去
+  check-version:
+    name: 校验版本
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: 校验 tag 与 package.json 一致
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          pkg="$(node -p 'require("./package.json").version')"
+          if [ "$tag" != "$pkg" ]; then
+            echo "::error::tag v$tag 与 package.json 的版本 $pkg 不一致"
+            exit 1
+          fi
+          echo "版本一致：$pkg"
+
+  build:
+    name: 构建（${{ matrix.os }}）
+    needs: check-version
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false        # 单个平台失败不打断其余平台，一次看清全部结果
+      matrix:
+        include:
+          - os: windows-latest   # Windows x64
+          - os: macos-latest     # macOS arm64（Apple Silicon）
+          - os: macos-15-intel   # macOS Intel x64
+          - os: ubuntu-latest    # Linux x64
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          # 不开 cache: npm —— 本仓库无 dependencies，没有 package-lock.json
+      - name: 单元测试
+        run: npm test
+      - name: 构建单文件产物
+        run: npm run build
+      - name: 上传产物
+        uses: actions/upload-artifact@v7
+        with:
+          name: dist-${{ matrix.os }}
+          path: dist/*
+          if-no-files-found: error
+
+  release:
+    name: 发布 Release
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write         # 建 Release 需要写权限
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0      # --generate-notes 需要完整历史
+      - uses: actions/download-artifact@v8
+        with:
+          path: dist
+          merge-multiple: true
+      - name: 生成 SHA256 校验和
+        working-directory: dist
+        run: sha256sum github-desktop-zh-cn-* > SHA256SUMS
+      - name: 创建 Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" \
+            --title "$GITHUB_REF_NAME" \
+            --generate-notes \
+            dist/*
