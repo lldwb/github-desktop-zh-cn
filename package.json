@@ -3,7 +3,9 @@
   "version": "0.1.1",
   "description": "GitHub Desktop 中文汉化补丁工具（字典驱动）：定位安装目录，按 JSON 语言字典替换 resources/app 下 main.js / renderer.js 中的界面文本",
   "license": "GPL-3.0",
+  "author": "lldwb",
   "type": "commonjs",
+  "main": "gui/main.js",
   "scripts": {
     "locate": "node scripts/locate.js",
     "patch": "node scripts/patch.js",
@@ -12,10 +14,16 @@
     "test": "node --test",
     "scan": "node scripts/scan.js",
     "tool": "node scripts/cli.js",
+    "gui": "electron .",
+    "dist": "electron-builder",
     "bundle": "node scripts/bundle.js --out tmp/build/bundle.js",
     "build": "node scripts/build.js"
   },
   "engines": {
     "node": ">=18"
+  },
+  "devDependencies": {
+    "electron": "^44.4.1",
+    "electron-builder": "^26.15.3"
   }
 }

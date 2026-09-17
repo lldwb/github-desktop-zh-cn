@@ -22,11 +22,12 @@ const GH_CDN = `https://cdn.jsdelivr.net/gh/${GH_OWNER}/${GH_REPO}@${GH_BRANCH}`
 const GH_API = `https://api.github.com/repos/${GH_OWNER}/${GH_REPO}`;
 
 // —— 运行形态与数据根目录（SSOT）——
-// 源码态（node scripts/xxx.js）：数据根 = 仓库根，字典与备份位置与既有版本一致。
-// 打包态（scripts/build.js 产出的单文件可执行）：数据根 = 可执行文件所在目录——
+// 四种运行形态，判据只有 isPackaged()（SEA / bundle 产物）与 isElectronPackaged()（Electron 产物）两个：
+//   源码态（node scripts/xxx.js）与 Electron 开发态（electron .）：数据根 = 仓库根，字典与备份位置与既有版本一致；
+//   打包态（scripts/build.js 的 SEA 单文件产物 / electron-builder 的 GUI 产物）：数据根 = 可执行文件所在目录——
 //   解压即用、字典可直接替换；该目录不可写（如放在 Program Files）时回退用户数据目录。
 // 字典一律「外部优先、内嵌兜底」：<数据根>/dictionaries/<版本>/zh-CN.json 存在则用它，
-//   否则取打包时内嵌进可执行文件的同名资源，保证单文件分发时字典不丢失。
+//   否则取打包时内嵌进可执行文件的同名资源（内嵌资源只有 SEA 产物具备），保证单文件分发时字典不丢失。
 
 let _seaCache;
 // node:sea 在 Node <20.12 不存在，require 抛错时按源码态处理
@@ -41,6 +42,18 @@ function isPackaged() {
   if (globalThis.__BUNDLED__) return true; // bundle 产物（scripts/build.js 打出的单文件）
   const sea = seaApi();
   return !!(sea && sea.isSea());
+}
+
+// Electron 运行态：process.versions.electron 由 Electron 运行时注入，纯 Node 下不存在。
+// 判据只读运行时字段、不 require('electron')——common.js 被 CLI 与 GUI 共用，不能依赖 GUI 的依赖。
+function isElectron() {
+  return !!process.versions.electron;
+}
+
+// Electron 打包产物（改名后的应用 exe）；开发态（`electron .`）下 process.defaultApp 为 true 故为假。
+// 与 isPackaged() 的关系：两者互斥地描述「是否需要把数据根放到可执行文件旁」。
+function isElectronPackaged() {
+  return isElectron() && !process.defaultApp;
 }
 
 function userDataDir() {
@@ -70,10 +83,13 @@ function isWritableDir(dir) {
 let _dataRoot;
 function dataRoot() {
   if (_dataRoot) return _dataRoot;
-  if (!isPackaged()) {
+  // 源码态与 Electron 开发态：数据根 = 仓库根（开发时字典、备份、config.json 都在仓库里）
+  if (!isPackaged() && !isElectronPackaged()) {
     _dataRoot = REPO_ROOT;
     return _dataRoot;
   }
+  // 打包态（SEA 产物 / Electron 产物）：数据根 = 可执行文件所在目录。
+  // Electron 里 process.execPath 即应用 exe 自身，故同样取 dirname。
   const beside = path.dirname(process.execPath);
   _dataRoot = isWritableDir(beside) ? beside : userDataDir();
   fs.mkdirSync(_dataRoot, { recursive: true });
@@ -236,6 +252,13 @@ function compareVersions(a, b) {
 // 如 "en-US" 在 renderer 是相对时间语言、在 main.js 是拼写检查逻辑）。
 const SCOPED_KEY = /^([A-Za-z0-9._-]+\.js)\|([\s\S]+)$/;
 
+// 拆解一个字典键：作用域键返回 { file: 文件名, key: 去掉前缀的原文 }，
+// 全局键返回 { file: null, key: 原键 }。键的两种形态只在这里解析，调用方不再自己碰正则。
+function splitScopedKey(k) {
+  const m = SCOPED_KEY.exec(k);
+  return m ? { file: m[1], key: m[2] } : { file: null, key: k };
+}
+
 // 把字典原始对象整理为「原样键 → 译文」的 Map，并校验条目合法性。
 // 整模板键（以反引号开头、含 ${}）的译文必须是 JS 字符串/模板字面量。
 function buildEntries(raw, version) {
@@ -245,8 +268,7 @@ function buildEntries(raw, version) {
     if (typeof v !== 'string' || v.length === 0) {
       throw new Error(`字典条目非法（${version}）：${k} 的译文必须是非空字符串`);
     }
-    const m = SCOPED_KEY.exec(k);
-    const key = m ? m[2] : k;
+    const { key } = splitScopedKey(k);
     if (key.startsWith('`')) {
       const q = v[0];
       if ((q !== '`' && q !== '"' && q !== "'") || v[v.length - 1] !== q) {
@@ -265,13 +287,13 @@ function buildEntries(raw, version) {
 function scopedEntries(entries, file) {
   const out = new Map();
   for (const [k, v] of entries) {
-    const m = SCOPED_KEY.exec(k);
-    if (!m) {
+    const { file: scope, key } = splitScopedKey(k);
+    if (!scope) {
       out.set(k, v);
     } else if (!file) {
       out.set(k, v);
-    } else if (m[1] === file) {
-      out.set(m[2], v);
+    } else if (scope === file) {
+      out.set(key, v);
     }
   }
   return out;
@@ -614,6 +636,8 @@ module.exports = {
   getTmpDir,
   dataRoot,
   isPackaged,
+  isElectron,
+  isElectronPackaged,
   configPath,
   readConfig,
   writeConfig,
@@ -632,6 +656,7 @@ module.exports = {
   checkSyntax,
   buildEntries,
   scopedEntries,
+  splitScopedKey,
   reverseEntries,
   remoteDictUrls,
   hasEmbeddedDict,

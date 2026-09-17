@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <!-- 渲染进程没有任何网络与 Node 能力：CSP 收紧到「只允许自带资源」 -->
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:;"
+    />
+    <title>GitHub Desktop - 汉化工具</title>
+    <link rel="stylesheet" href="style.css" />
+  </head>
+  <body>
+    <header class="toolbar">
+      <button id="btn-patch" class="btn primary" type="button">汉化</button>
+      <button id="btn-restore" class="btn" type="button">还原</button>
+      <button id="btn-pick" class="btn" type="button">选择</button>
+      <button id="btn-update" class="btn" type="button">检查更新</button>
+      <button id="btn-refresh" class="btn" type="button">刷新</button>
+    </header>
+
+    <div class="tabbar">
+      <span id="tab-label" class="tab active">汉化字典</span>
+    </div>
+
+    <main class="content">
+      <div class="searchbar">
+        <label for="search">搜索</label>
+        <input id="search" type="search" placeholder="按英文或中文过滤…" autocomplete="off" spellcheck="false" />
+      </div>
+
+      <div class="table-wrap">
+        <!-- 只读展示：无输入控件、无编辑入口 -->
+        <table id="dict-table">
+          <thead>
+            <tr>
+              <th class="col-en">英文（程序文件中的英文）</th>
+              <th class="col-zh">中文</th>
+              <th class="col-type">类型</th>
+            </tr>
+          </thead>
+          <tbody id="dict-body"></tbody>
+        </table>
+        <p id="table-empty" class="empty" hidden>正在读取字典…</p>
+      </div>
+    </main>
+
+    <footer class="bottombar">
+      <span class="field-label">路径</span>
+      <span id="root-path" class="path">—</span>
+      <span class="spacer"></span>
+      <span id="progress" class="progress">
+        <span class="bar"></span>
+        <span id="progress-text" class="progress-text">空闲</span>
+      </span>
+    </footer>
+
+    <div id="statusbar" class="statusbar">正在识别 GitHub Desktop 安装位置…</div>
+
+    <div id="toast" class="toast" hidden></div>
+
+    <script src="renderer.js"></script>
+  </body>
+</html>
