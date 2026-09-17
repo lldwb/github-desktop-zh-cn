@@ -1,18 +1,19 @@
-# 构建与发布：把工具链打成各平台单文件产物；打 tag 时自动建 Release 并附产物。
+# 构建与发布：把工具链打成各平台产物；打 tag 时自动建 Release 并附产物。
 #
 # 触发：
 #   - 手动（Actions 页面 → Run workflow）：只构建，产物留在该次运行的 Artifacts 里；
-#   - 推注解 tag（git tag -a v0.1.0 -m "..." && git push origin main --follow-tags）：构建 + 发 Release。
+#   - 推注解 tag（git tag -a v0.2.0 -m "..." && git push origin main --follow-tags）：构建 + 发 Release。
 #
 # 发版规范见 AGENTS.md「发版」一节：CHANGELOG.md 顶部条目 / package.json 的 version /
 # 注解 tag 三处对齐；Release 正文取自 CHANGELOG.md 对应段落（scripts/changelog.js 提取），
 # 不是自动生成的变更列表。
 #
-# 为什么用矩阵、不做交叉构建：产物基底是构建机上的 node 可执行文件（Node SEA），
-# 只能在构建平台运行；macOS 产物还必须在 macOS 上注入与签名。故每个平台各用一个
-# 原生 runner 构建，不在一台机器上交叉产出。
+# 两种产物形态各跑一遍矩阵，都是「每平台一个原生 runner」：
+#   - build：单文件可执行（Node SEA）——基底是构建机上的 node 可执行文件，只能在构建平台运行；
+#   - gui：Electron 图形界面（electron-builder）——macOS 的 dmg 与签名只能在 macOS 上做。
+#   两者都不做交叉构建，理由见 docs/打包与分发.md。
 #
-# 扩展：需要 arm64 产物时，往 matrix.include 里加 `ubuntu-24.04-arm`（Linux arm64）
+# 扩展：需要 arm64 产物时，往两个矩阵的 matrix.include 里加 `ubuntu-24.04-arm`（Linux arm64）
 # 或 `windows-11-arm`（Windows arm64）即可，其余无需改动。
 
 name: 构建与发布
@@ -84,13 +85,60 @@ jobs:
           path: dist/*
           if-no-files-found: error
 
+  # GUI 产物：Electron 打包，每平台一套（Windows 安装包 + zip / macOS dmg + zip / Linux AppImage + deb）。
+  # 运行态实测在本地做（runner 无桌面会话，起不了窗口），这里只做静态自检——结构对了才上传，
+  # 免得「构建成功但产物缺东西」混进 Release。
+  gui:
+    name: 构建 GUI（${{ matrix.os }}）
+    needs: check-version
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest   # Windows x64
+          - os: macos-latest     # macOS arm64（Apple Silicon）
+          - os: macos-15-intel   # macOS Intel x64
+          - os: ubuntu-latest    # Linux x64
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+      # .npmrc 的镜像（Electron 二进制、electron-builder 工具包）是给国内本机构建用的；
+      # CI 在境外，依赖 tarball 与二进制都在 npmmirror 上，反而慢——删掉让它走官方源
+      - name: 移除国内镜像配置
+        shell: bash
+        run: rm -f .npmrc
+      - name: 安装构建期依赖
+        run: npm install --registry=https://registry.npmjs.org/ --replace-registry-host=always --no-audit --no-fund
+      # electronDownload.mirror 固化在 electron-builder.yml 里（electron-builder 不读 ELECTRON_MIRROR，
+      # 只认这个键），CI 上覆盖回官方源
+      - name: 打包 GUI 产物
+        run: npm run dist -- --config.electronDownload.mirror=https://github.com/electron/electron/releases/download/
+      - name: 产物自检
+        run: node build/check-gui-dist.js
+      - name: 上传产物
+        uses: actions/upload-artifact@v7
+        with:
+          name: gui-${{ matrix.os }}
+          # 只收最终产物，不收 win-unpacked / mac / linux-unpacked 这些中间目录
+          path: |
+            dist/gui/*.exe
+            dist/gui/*.zip
+            dist/gui/*.dmg
+            dist/gui/*.AppImage
+            dist/gui/*.deb
+          if-no-files-found: error
+
   release:
     name: 发布 Release
-    needs: build
+    needs: [build, gui]
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     permissions:
-      contents: write         # 建 Release 需要写权限
+      contents: read          # Release 由 RELEASE_TOKEN 创建，内置 token 只需读仓库
     steps:
       - uses: actions/checkout@v7     # 只为读 CHANGELOG.md，不需要完整历史
       - uses: actions/download-artifact@v8
@@ -102,9 +150,20 @@ jobs:
         run: sha256sum github-desktop-zh-cn-* > SHA256SUMS
       - name: 生成 Release 正文（取自 CHANGELOG.md 对应段落）
         run: node scripts/changelog.js "${GITHUB_REF_NAME#v}" > notes.md
+      - name: 检查发布令牌
+        env:
+          RELEASE_TOKEN: ${{ secrets.RELEASE_TOKEN }}
+        run: |
+          # Release 用作者本人的 PAT 创建：内置 GITHUB_TOKEN 建出来的 Release 署名是
+          # github-actions[bot]，观感上不像作者发布（且作者事后无法修改，只能删了重建）。
+          # 没配 secret 时在这里给出可读原因，免得后面报一句看不懂的 401。
+          if [ -z "$RELEASE_TOKEN" ]; then
+            echo "::error::未配置 RELEASE_TOKEN secret——Release 须由作者身份创建，配置方法见 AGENTS.md「发版」一节"
+            exit 1
+          fi
       - name: 创建 Release
         env:
-          GH_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ secrets.RELEASE_TOKEN }}
         run: |
           # 只创建缺失的：已发布的 Release 与它的正文都不再改动
           if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
