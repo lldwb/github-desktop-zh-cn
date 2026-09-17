@@ -15,13 +15,14 @@ const SAMPLE = [
   'const f=`outer ${cond?`${GE(i)} of `:""} ${GE(m)} changed file${xU(m)}`;',
 ].join('\n');
 
-test('stringLiterals：含插值的模板整段收集，无插值模板不收集整段', () => {
+test('stringLiterals：模板整段一律收集（含插值与否），文本段另计', () => {
   const tmpl = stringLiterals(SAMPLE)
     .filter((l) => l.template)
     .map((l) => l.content);
   assert.deepStrictEqual(tmpl, [
     '`${GE(n)} changed file${xU(n)}`',
     '`${i} of ${j}`',
+    '`plain`',
     '`seg ${x} tail`',
     '`outer ${cond?`${GE(i)} of `:""} ${GE(m)} changed file${xU(m)}`',
   ]);
