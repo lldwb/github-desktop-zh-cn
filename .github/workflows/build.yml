@@ -2,7 +2,11 @@
 #
 # 触发：
 #   - 手动（Actions 页面 → Run workflow）：只构建，产物留在该次运行的 Artifacts 里；
-#   - 推 tag（git tag v0.1.0 && git push origin v0.1.0）：构建 + 发 Release。
+#   - 推注解 tag（git tag -a v0.1.0 -m "..." && git push origin main --follow-tags）：构建 + 发 Release。
+#
+# 发版规范见 AGENTS.md「发版」一节：CHANGELOG.md 顶部条目 / package.json 的 version /
+# 注解 tag 三处对齐；Release 正文取自 CHANGELOG.md 对应段落（scripts/changelog.js 提取），
+# 不是自动生成的变更列表。
 #
 # 为什么用矩阵、不做交叉构建：产物基底是构建机上的 node 可执行文件（Node SEA），
 # 只能在构建平台运行；macOS 产物还必须在 macOS 上注入与签名。故每个平台各用一个
@@ -28,13 +32,14 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  # 打 tag 时先校验 tag 与 package.json 版本一致，避免版本错配的产物被发出去
+  # 打 tag 时先校验三处对齐（CHANGELOG 条目 / package.json 版本 / tag），
+  # 避免版本错配、或 CHANGELOG 漏写条目的版本被发出去
   check-version:
     name: 校验版本
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-      - name: 校验 tag 与 package.json 一致
+      - name: 校验三处对齐
         if: startsWith(github.ref, 'refs/tags/v')
         run: |
           tag="${GITHUB_REF_NAME#v}"
@@ -43,7 +48,11 @@ jobs:
             echo "::error::tag v$tag 与 package.json 的版本 $pkg 不一致"
             exit 1
           fi
-          echo "版本一致：$pkg"
+          if ! node scripts/changelog.js "$tag" > /dev/null; then
+            echo "::error::CHANGELOG.md 里没有 $tag 的条目"
+            exit 1
+          fi
+          echo "三处对齐：CHANGELOG.md 条目 / package.json $pkg / tag v$tag"
 
   build:
     name: 构建（${{ matrix.os }}）
@@ -83,9 +92,7 @@ jobs:
     permissions:
       contents: write         # 建 Release 需要写权限
     steps:
-      - uses: actions/checkout@v7
-        with:
-          fetch-depth: 0      # --generate-notes 需要完整历史
+      - uses: actions/checkout@v7     # 只为读 CHANGELOG.md，不需要完整历史
       - uses: actions/download-artifact@v8
         with:
           path: dist
@@ -93,11 +100,18 @@ jobs:
       - name: 生成 SHA256 校验和
         working-directory: dist
         run: sha256sum github-desktop-zh-cn-* > SHA256SUMS
+      - name: 生成 Release 正文（取自 CHANGELOG.md 对应段落）
+        run: node scripts/changelog.js "${GITHUB_REF_NAME#v}" > notes.md
       - name: 创建 Release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          # 只创建缺失的：已发布的 Release 与它的正文都不再改动
+          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            echo "Release $GITHUB_REF_NAME 已存在，跳过"
+            exit 0
+          fi
           gh release create "$GITHUB_REF_NAME" \
             --title "$GITHUB_REF_NAME" \
-            --generate-notes \
+            --notes-file notes.md \
             dist/*
