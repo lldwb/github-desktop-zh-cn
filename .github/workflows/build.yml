@@ -40,6 +40,30 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
+      # 发布令牌在这里就验一次——真调 API 确认身份与写权限，别等几十分钟构建跑完
+      # 才发现令牌失效或权限不够（release job 里还会再查一次非空，防的是 secret 被删）
+      - name: 校验发布令牌
+        env:
+          GH_TOKEN: ${{ secrets.RELEASE_TOKEN }}
+        run: |
+          if [ -z "$GH_TOKEN" ]; then
+            echo "::error::未配置 RELEASE_TOKEN secret——Release 须由作者身份创建，配置方法见 AGENTS.md「发版」一节"
+            exit 1
+          fi
+          login="$(gh api user --jq .login 2>/dev/null)" || {
+            echo "::error::RELEASE_TOKEN 无效或已过期（调 /user 失败）"
+            exit 1
+          }
+          if [ "$login" = "github-actions[bot]" ]; then
+            echo "::error::RELEASE_TOKEN 拿到的是内置 token，建出的 Release 仍会署名 github-actions[bot]"
+            exit 1
+          fi
+          push="$(gh api "repos/${{ github.repository }}" --jq .permissions.push 2>/dev/null)"
+          if [ "$push" != "true" ]; then
+            echo "::error::RELEASE_TOKEN 对 ${{ github.repository }} 没有写权限（Fine-grained 需把 Contents 设为 Read and write）"
+            exit 1
+          fi
+          echo "发布令牌有效：$login（对 ${{ github.repository }} 有写权限）"
       - name: 校验三处对齐
         if: startsWith(github.ref, 'refs/tags/v')
         run: |
