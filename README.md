@@ -22,6 +22,7 @@ GitHub Desktop（Electron 应用）官方未提供简体中文界面——其界
 github-desktop-zh-cn/
 ├── README.md               # 本项目
 ├── LICENSE                 # GPL-3.0
+├── CHANGELOG.md            # 各版本变更（发版时新增条目，Release 正文取自这里）
 ├── package.json            # 脚本入口（locate / patch / restore / verify / scan / tool / build）
 ├── AGENTS.md / CLAUDE.md   # agent 指引（唯一权威源为 AGENTS.md）
 ├── .claude/skills/         # 翻译维护技能（补译与纠错的流程、判定标准与探针模板）
