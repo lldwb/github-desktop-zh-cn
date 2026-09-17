@@ -3,8 +3,9 @@
 
 const fs = require('fs');
 const path = require('path');
-const vm = require('vm');
-const { locateApp, listDictVersions, loadDict, scopedEntries, stringLiterals } = require('./common');
+const {
+  locateApp, listDictVersions, loadDict, scopedEntries, stringLiterals, checkSyntax, backupDir,
+} = require('./common');
 
 const TARGETS = ['main.js', 'renderer.js'];
 
@@ -29,17 +30,6 @@ function printHelp() {
   --version <版本>  指定字典版本（默认取 dictionaries/ 下最新版本）
   --path <目录>    显式指定 resources 目录
   -h, --help       显示本帮助`);
-}
-
-// 语法校验：用 vm.Script 按脚本模式解析，只解析不执行（等价于 node --check）。
-// 不用 `node --check` 子进程：打包态下 process.execPath 是产物自身，不具备该参数。
-function checkSyntax(file) {
-  try {
-    new vm.Script(fs.readFileSync(file, 'utf8'), { filename: file });
-    return { ok: true, output: '' };
-  } catch (e) {
-    return { ok: false, output: String(e.message || e) };
-  }
 }
 
 function main() {
@@ -97,7 +87,7 @@ function main() {
     }
 
     // 已汉化判定：备份存在且与当前文件不一致
-    const backup = path.join(__dirname, '..', 'tmp', 'backup', version);
+    const backup = backupDir(version);
     const patched = TARGETS.some((f) => {
       const b = path.join(backup, f);
       return fs.existsSync(b) && !fs.readFileSync(b).equals(fs.readFileSync(path.join(app.appDir, f)));
@@ -126,7 +116,7 @@ function main() {
     // 3. 语法校验（补丁后文件是否仍是合法 JS）
     for (const f of TARGETS) {
       const file = path.join(app.appDir, f);
-      const { ok, output } = checkSyntax(file);
+      const { ok, output } = checkSyntax(fs.readFileSync(file, 'utf8'), file);
       if (ok) {
         console.log(`语法校验 ${f}：通过 ✓`);
       } else {
