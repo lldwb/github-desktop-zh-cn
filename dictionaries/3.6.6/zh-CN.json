@@ -1881,7 +1881,8 @@
     "{{count}} years": "{{count}} 年",
     " as determined by your": "，取决于你的",
     "…and ": "……以及另外 ",
-    "renderer.js|Not Now": "暂不"
+    "renderer.js|Not Now": "暂不",
+    "`Continue ${p}`": "`继续 ${p}`"
   },
   "windows": {},
   "macos": {
