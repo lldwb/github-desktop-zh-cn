@@ -24,9 +24,10 @@ directories:
   output: dist/gui
   buildResources: build
 
-# 产物命名与单文件产物（SEA）同一套词序：<name>-v<版本>-<平台>-<架构>[...-setup].<扩展名>
+# 产物命名与单文件产物（SEA）同一套词序：<name>-<通道>-v<版本>-<平台>-<架构>[...-setup].<扩展名>
+# 通道词 gui 紧跟项目名（单文件产物是 cli，见 scripts/build.js）——附件列表里同类相邻、一眼分得出
 # 用 ${platform}（darwin / win32 / linux）而不是 ${os}（mac / win / linux），与 SEA 产物的平台词一致
-artifactName: ${name}-v${version}-${platform}-${arch}.${ext}
+artifactName: ${name}-gui-v${version}-${platform}-${arch}.${ext}
 
 # 应用代码：界面 + 业务逻辑（主进程直接 require scripts/ 下的模块）
 files:
@@ -57,8 +58,8 @@ nsis:
   createDesktopShortcut: true
   createStartMenuShortcut: true
   shortcutName: GitHub Desktop 汉化工具
-  # 与 zip 区分开，命名风格同 SEA 产物
-  artifactName: ${name}-v${version}-${platform}-${arch}-setup.${ext}
+  # 与 zip 区分开，命名风格同单文件产物
+  artifactName: ${name}-gui-v${version}-${platform}-${arch}-setup.${ext}
 
 mac:
   target:

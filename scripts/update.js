@@ -19,10 +19,13 @@ const MAGIC = {
   linux: ['7f454c46'], // \x7fELF
 };
 
-// Release 资产名形如 <name>-<tag>-<platform>-<arch>[.exe]；按后缀匹配，不拼死名字
+// Release 资产名形如 <name>-cli-v<版本>-<platform>-<arch>[.exe|.bin]；按「-平台-架构」后缀匹配，不拼死名字。
+// 后缀随平台：Windows 是 .exe，macOS / Linux 是 .bin（v0.2.0 起）；无后缀的老产物也认，
+// 免得还留在旧版本上的使用者更新时找不到附件。
 function pickAsset(assets) {
-  const suffix = `-${process.platform}-${process.arch}${process.platform === 'win32' ? '.exe' : ''}`;
-  return assets.find((a) => String(a.name).endsWith(suffix)) || null;
+  const suffix = `-${process.platform}-${process.arch}`;
+  const exts = process.platform === 'win32' ? ['.exe'] : ['.bin', ''];
+  return assets.find((a) => exts.some((e) => String(a.name).endsWith(suffix + e))) || null;
 }
 
 async function check() {

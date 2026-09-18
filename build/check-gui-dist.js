@@ -167,11 +167,18 @@ function checkLinux() {
   if (asar) checkAsarContents(asar);
 }
 
-// 产物文件：任何平台都至少要有一个能直接分发的（不能只有中间目录）
+// 产物文件：任何平台都至少要有一个能直接分发的（不能只有中间目录），且名字必须走 gui 通道命名
+//（<项目名>-gui-v<版本>-<平台>-<架构>…，规范见 AGENTS.md「发版」一节）
 function checkArtifacts() {
   const files = listDir(OUT).filter((f) => /\.(exe|zip|dmg|AppImage|deb)$/.test(f));
-  if (files.length) ok(`可分发产物 ${files.length} 个：${files.join(' / ')}`);
-  else bad('dist/gui 下没有任何可分发产物（只有中间目录？）');
+  if (!files.length) {
+    bad('dist/gui 下没有任何可分发产物（只有中间目录？）');
+    return;
+  }
+  ok(`可分发产物 ${files.length} 个：${files.join(' / ')}`);
+  const offName = files.filter((f) => !/^github-desktop-zh-cn-gui-v\d+\.\d+\.\d+-/.test(f));
+  if (offName.length) bad(`产物名不符合命名规范（应为 github-desktop-zh-cn-gui-v<版本>-…）：${offName.join(' / ')}`);
+  else ok('产物名符合 gui 通道命名规范');
 }
 
 console.log(`检查目录：${OUT}`);

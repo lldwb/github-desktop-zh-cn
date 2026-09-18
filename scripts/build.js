@@ -43,7 +43,7 @@ function printHelp() {
 
 选项：
   --out <目录>     产物输出目录（默认 dist/）
-  --name <文件名>   自定义产物文件名（默认 github-desktop-zh-cn-v<版本>-<平台>-<架构>[.exe]）
+  --name <文件名>   自定义产物文件名（默认 github-desktop-zh-cn-cli-v<版本>-<平台>-<架构>[.exe|.bin]）
   -h, --help       显示本帮助`);
 }
 
@@ -173,8 +173,11 @@ function main() {
     execFileSync(process.execPath, ['--experimental-sea-config', configFile], { stdio: 'inherit' });
 
     // 4. 复制 node 可执行文件作为产物基底
-    const ext = process.platform === 'win32' ? '.exe' : '';
-    const name = args.name || `${PKG.name}-v${PKG.version}-${process.platform}-${process.arch}${ext}`;
+    // 产物名带通道词：单文件可执行是 cli（图形界面是 gui，由 electron-builder 出，见 electron-builder.yml）。
+    // macOS / Linux 也带后缀（.bin）——不带后缀的附件在 Release 页面里看不出是什么文件；
+    // scripts/update.js 的自更新按「-平台-架构 + 平台后缀」匹配附件（.exe / .bin）。
+    const ext = process.platform === 'win32' ? '.exe' : '.bin';
+    const name = args.name || `${PKG.name}-cli-v${PKG.version}-${process.platform}-${process.arch}${ext}`;
     const outFile = path.join(args.outDir, name);
     fs.copyFileSync(process.execPath, outFile);
     fs.chmodSync(outFile, 0o755);
