@@ -282,6 +282,10 @@ function currentPlatform() {
 // 条目段名：common 加三个平台段。groups 不是条目段——它只描述分组，不参与替换。
 const SEGMENT_NAMES = ['common', ...PLATFORM_SEGMENTS];
 
+// 没被任何组收录的条目的兜底组名。GUI 的组名列与 dict-groups 的推断共用它——
+// 字面量在两处各写一份，改一处忘一处就是静默的不一致。
+const UNGROUPED = '待分组';
+
 // 拆解一个字典键：作用域键返回 { file: 文件名, key: 去掉前缀的原文 }，
 // 全局键返回 { file: null, key: 原键 }。键的两种形态只在这里解析，调用方不再自己碰正则。
 function splitScopedKey(k) {
@@ -500,6 +504,27 @@ function loadDict(version, platform) {
   const entries = buildEntries(raw, version, platform);
   if (entries.size === 0) throw new Error(`字典为空：${label}`);
   return entries;
+}
+
+// groups 段（「组名 → 键数组」的正排，便于整组重建与人工阅读）翻成「键 → 组名」反查表。
+// 消费方要的都是反查，转换只此一处——GUI 的组名列与 CI 的分组统计都走它，各写一遍必然漂移。
+// 同键落在两个组里时取首见：分组不参与替换，不值得为它抛错中断读取。
+function reverseGroups(seg) {
+  const groups = new Map();
+  if (!seg || typeof seg !== 'object' || Array.isArray(seg)) return groups;
+  for (const [group, keys] of Object.entries(seg)) {
+    if (!Array.isArray(keys)) continue;
+    for (const k of keys) if (!groups.has(k)) groups.set(k, group);
+  }
+  return groups;
+}
+
+// 读取字典的组名（键 → 组名）。段里的键就是字典的原样键（含作用域前缀），查表时不要剥前缀。
+// 旧扁平格式没有 groups 段，返回空 Map 而非报错——分组只是参考，不该拦住宿主字典的读取。
+function loadGroups(version) {
+  const { text } = readDictSource(version);
+  const raw = JSON.parse(text);
+  return reverseGroups(raw && raw._meta && raw._meta.formatVersion === 2 ? raw.groups : null);
 }
 
 // 备份目录：tmp/backup/<version>/
@@ -725,6 +750,9 @@ module.exports = {
   readVersion,
   listDictVersions,
   loadDict,
+  loadGroups,
+  reverseGroups,
+  UNGROUPED,
   dictLabel,
   dictFile,
   backupDir,

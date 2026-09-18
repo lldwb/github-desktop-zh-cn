@@ -83,7 +83,8 @@ const DIR_GROUPS = {
   'main-process': '主进程',
 };
 
-const UNGROUPED = '待分组';
+// 兜底组名的 SSOT 在 common（GUI 的组名列同样用它）
+const UNGROUPED = common.UNGROUPED;
 const MENU_FILE = 'main-process/menu/build-default-menu.ts';
 
 // 父菜单译名：Windows 分支的 label 去掉 & 助记符后的英文 → 中文

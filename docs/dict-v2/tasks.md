@@ -51,10 +51,14 @@
 
 ## 5. GUI 组名列
 
-- [ ] `gui/main.js`：`collectDictEntries()` 读 `groups`，建"键 → 组名"反查表，行数据加 `group` 字段（查不到落 `待分组`）
-- [ ] `gui/index.html`：表头加「组名」列；`gui/style.css` 补列宽
-- [ ] `gui/renderer.js`：`renderRows` 增加组名单元格
-- [ ] 实测：窗口内出现组名列，搜索过滤不受影响，条目总数与迁移前一致
+- [x] `gui/main.js`：`collectDictEntries()` 读 `groups`，建"键 → 组名"反查表，行数据加 `group` 字段（查不到落 `待分组`）
+      ——反查表的构建落在 `common.loadGroups()` / `common.reverseGroups()`（GUI 只消费，不自己解析 JSON：外部字典优先与内嵌资源回退那套逻辑只在 `readDictSource` 里有一份）；兜底组名提为 `common.UNGROUPED`，原先 `dict-groups.js` 与 `dict-edit.js` 各写一份字面量，已统一。查表用字典的**原样键**（含作用域前缀），剥了前缀反而查不到
+- [x] `gui/index.html`：表头加「组名」列；`gui/style.css` 补列宽
+      ——列序按参考截图：英文 45% / 中文 25% / 组名 15% / 类型 15%
+- [x] `gui/renderer.js`：`renderRows` 增加组名单元格
+      ——同时把组名纳入 `applyFilter` 的匹配范围：组名列的用途就是按界面区域定位，搜「菜单-帮助」应当能筛出整组
+- [x] 实测：窗口内出现组名列，搜索过滤不受影响，条目总数与迁移前一致
+      ——`npx electron` 起真实 GUI 读 DOM 取证：表头为「英文（程序文件中的英文） | 中文 | 组名 | 类型」，表格 **1867 行**（与迁移前一致），状态栏「字典 1867 条」；按组名搜「菜单-帮助」命中 6 行（与该组行数一致）、按译文搜「撤销」命中 13 行（既有行为不变）、搜不存在的词落空态；`npm test` **53/53 全绿**（新增 `reverseGroups` 两个用例：反查与作用域前缀保留、缺段/非对象/组值非数组的宽容降级与同键取首见）
 
 ## 6. CI 定时字典（`dict-auto.yml`）
 

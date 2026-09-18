@@ -78,6 +78,8 @@ function collectState() {
 
 // 字典表格的数据源。「类型」列只从键推导（design.md 的规则），不扫描产物：
 //   全局键 → main.js / renderer.js（两个文件都生效）；作用域键 → 该文件名；整模板键额外加「模板 · 」前缀
+// 「组名」列取自字典的 groups 段（dict-groups.js 推断，仅作核对参考、不参与替换），
+// 段里没有的条目落「待分组」。
 function collectDictEntries() {
   const target = resolveTarget();
   if (target.error) return { ok: false, error: target.error, rows: [] };
@@ -87,8 +89,10 @@ function collectDictEntries() {
     return { ok: false, version, error: `本地无 ${version} 对应字典`, rows: [] };
   }
   let entries;
+  let groupOf;
   try {
     entries = common.loadDict(version);
+    groupOf = common.loadGroups(version);
   } catch (e) {
     return { ok: false, version, error: e.message, rows: [] };
   }
@@ -96,7 +100,13 @@ function collectDictEntries() {
   for (const [k, v] of entries) {
     const { file, key } = common.splitScopedKey(k);
     const scope = file || 'main.js / renderer.js';
-    rows.push({ en: key, zh: v, type: key.startsWith('`') ? `模板 · ${scope}` : scope });
+    rows.push({
+      en: key,
+      zh: v,
+      // 用原样键 k 反查：groups 段存的就是字典键本身，剥掉作用域前缀反而查不到
+      group: groupOf.get(k) || common.UNGROUPED,
+      type: key.startsWith('`') ? `模板 · ${scope}` : scope,
+    });
   }
   return { ok: true, version, count: rows.length, rows };
 }

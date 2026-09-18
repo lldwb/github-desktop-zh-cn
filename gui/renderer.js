@@ -73,7 +73,13 @@ function renderRows(list) {
   const frag = document.createDocumentFragment();
   for (const r of list) {
     const tr = document.createElement('tr');
-    for (const [cls, text] of [['col-en', r.en], ['col-zh', r.zh], ['col-type', r.type]]) {
+    // 列顺序与 index.html 的表头一致：英文 / 中文 / 组名 / 类型
+    for (const [cls, text] of [
+      ['col-en', r.en],
+      ['col-zh', r.zh],
+      ['col-group', r.group],
+      ['col-type', r.type],
+    ]) {
       const td = document.createElement('td');
       td.className = cls;
       td.textContent = text; // 一律 textContent：字典内容不会被当成 HTML 解析
@@ -87,8 +93,14 @@ function renderRows(list) {
 function applyFilter() {
   const query = els.search.value.trim();
   const needle = query.toLowerCase();
+  // 组名一并参与匹配：组名列的用途就是按界面区域定位，搜「菜单」「设置」应当能筛出整组
   const list = needle
-    ? rows.filter((r) => r.en.toLowerCase().includes(needle) || r.zh.toLowerCase().includes(needle))
+    ? rows.filter(
+        (r) =>
+          r.en.toLowerCase().includes(needle) ||
+          r.zh.toLowerCase().includes(needle) ||
+          r.group.toLowerCase().includes(needle)
+      )
     : rows;
 
   renderRows(list);

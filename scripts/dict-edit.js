@@ -588,7 +588,7 @@ function main() {
           group: args.group,
           keyword: args.keyword,
         });
-        for (const r of rows) console.log(`${r.platform}\t${r.group || '待分组'}\t${r.key}\t${r.zh}`);
+        for (const r of rows) console.log(`${r.platform}\t${r.group || common.UNGROUPED}\t${r.key}\t${r.zh}`);
         console.log(`共 ${rows.length} 条`);
         break;
       }

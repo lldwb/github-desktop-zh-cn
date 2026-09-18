@@ -3,7 +3,7 @@
 
 const test = require('node:test');
 const assert = require('node:assert');
-const { buildEntries, scopedEntries } = require('../scripts/common');
+const { buildEntries, scopedEntries, reverseGroups, UNGROUPED } = require('../scripts/common');
 
 const RAW = {
   _meta: { version: '3.6.5' },
@@ -127,4 +127,27 @@ test('buildEntries：无 formatVersion 的扁平字典仍按原逻辑解析（�
   const entries = buildEntries(RAW, '3.6.5', 'windows');
   assert.strictEqual(entries.size, 6);
   assert.strictEqual(entries.get('Sign in'), '登录');
+});
+
+// —— groups 段的反查（GUI 组名列的数据源）——
+test('reverseGroups：组名正排翻成「键 → 组名」反查表，作用域前缀原样保留', () => {
+  const idx = reverseGroups(SEGMENTED.groups);
+  assert.strictEqual(idx.get('&File'), '菜单-文件');
+  assert.strictEqual(idx.get('label:"Open &with…"'), '菜单-文件');
+  assert.strictEqual(idx.get('renderer.js|en-US'), '待分组');
+  assert.strictEqual(idx.size, 3);
+  // 查表用的是字典的原样键：剥掉作用域前缀反而查不到
+  assert.ok(idx.has('renderer.js|en-US'));
+  assert.ok(!idx.has('en-US'));
+});
+
+test('reverseGroups：缺段 / 非对象 / 组值不是数组都宽容降级，同键取首见', () => {
+  assert.strictEqual(reverseGroups(null).size, 0);
+  assert.strictEqual(reverseGroups(undefined).size, 0);
+  assert.strictEqual(reverseGroups([]).size, 0);
+  assert.strictEqual(reverseGroups({ 菜单: '不是数组' }).size, 0);
+  // 同键落在两个组里（人工编辑可能造成）不抛错，取首见
+  assert.strictEqual(reverseGroups({ 甲: ['k'], 乙: ['k'] }).get('k'), '甲');
+  // 字典里写的兜底组名与 common 的常量是同一个
+  assert.strictEqual(reverseGroups({ [UNGROUPED]: ['k'] }).get('k'), UNGROUPED);
 });

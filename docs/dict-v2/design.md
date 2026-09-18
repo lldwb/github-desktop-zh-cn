@@ -213,16 +213,16 @@ migrate(version)                                   // 扁平 → formatVersion 2
 ### `common.js` 变化
 
 - `buildEntries(raw, version, platform)` 增加 `platform` 参数（默认取 `process.platform` 映射），按 `formatVersion` 分派。
-- `loadDict(version, platform)` 透传。
-- 新增 `PLATFORM_NAME`（`process.platform` → 段名）与 `PLATFORM_SEGMENTS` 常量，作为 SSOT。
+- `loadDict(version, platform)` 透传；新增 `loadGroups(version)`（键 → 组名反查表）与 `reverseGroups(seg)`（正排转反查的纯函数，可单测）、`UNGROUPED` 常量——GUI 组名列与 CI 分组统计共用，字面量各写一份必然漂移。
+- 新增 `PLATFORM_SEGMENTS` / `SEGMENT_NAMES` 常量与 `currentPlatform()`（`process.platform` → 段名），作为段名的 SSOT。
 - `remoteDictUrls(version)` 增加 Gitee raw。
 - **`dictFile` / `dictAssetKey` / `readDictSource` / `embeddedAsset` / `embeddedDictVersions` / `listDictVersions` 全部不变**——文件名仍是 `zh-CN.json`。
 
 ### GUI
 
-- `gui/index.html` 表头加 `<th class="col-group">组名</th>`。
-- `gui/main.js` 的 `collectDictEntries()` 从 `common.read()` 拿 `groups`，建"键 → 组名"反查表，行数据加 `group` 字段（查不到则 `待分组`）。
-- `gui/renderer.js` 的 `renderRows` 增加一列。
+- `gui/index.html` 表头加 `<th class="col-group">组名</th>`（列序：英文 / 中文 / 组名 / 类型）。
+- `gui/main.js` 的 `collectDictEntries()` 用 `common.loadGroups(version)` 拿「键 → 组名」反查表，行数据加 `group` 字段（查不到落 `common.UNGROUPED`）。查表用的是字典的原样键（含作用域前缀），剥了前缀反而查不到。
+- `gui/renderer.js` 的 `renderRows` 增加一列，`applyFilter` 的匹配范围一并纳入组名——组名列的用途就是按界面区域定位，搜「菜单」「设置」应当能筛出整组。
 
 ## 影响面
 
