@@ -417,15 +417,22 @@ function groupOfFile(file) {
   return null;
 }
 
-function infer(version, { explicitPath } = {}) {
+// keys：可选的键集。给了就用它，不再读磁盘上的字典——dict-auto 在写入前调用（overwrite 与
+// diff 模式），此刻磁盘上还是旧字典或根本没有，读它会拿错键集。
+function infer(version, { explicitPath, keys } = {}) {
   const app = common.locateApp({ explicitPath });
   if (version !== app.version) {
     throw new Error(`版本不一致：字典版本 ${version} ≠ 安装版本 ${app.version}`);
   }
-  // 遍历所有平台段的键，而不是 loadDict 的平台合并结果：分段字典里非本机平台的条目
-  // （如 macOS 的 Title Case 变体）不在合并结果里，漏掉会让它们永远落「待分组」。
-  const raw = JSON.parse(fs.readFileSync(dictEdit.dictPath(version), 'utf8'));
-  const allKeys = [...new Set(common.SEGMENT_NAMES.flatMap((s) => Object.keys(raw[s] || {})))];
+  let allKeys;
+  if (keys) {
+    allKeys = [...new Set(keys)];
+  } else {
+    // 遍历所有平台段的键，而不是 loadDict 的平台合并结果：分段字典里非本机平台的条目
+    // （如 macOS 的 Title Case 变体）不在合并结果里，漏掉会让它们永远落「待分组」。
+    const raw = JSON.parse(fs.readFileSync(dictEdit.dictPath(version), 'utf8'));
+    allKeys = [...new Set(common.SEGMENT_NAMES.flatMap((s) => Object.keys(raw[s] || {})))];
+  }
 
   const menuMap = new Map();
   const menuMapFile = path.join(app.appDir, 'main.js.map');

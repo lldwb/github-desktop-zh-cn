@@ -62,6 +62,17 @@ const PLATFORMS = ['windows', 'macos'];
 const TARGETS = ['main.js', 'renderer.js'];
 // 最低候选长度，与 scan.js 的默认值一致
 const MIN_LENGTH = 8;
+
+// 已有字典时怎么办：
+//   skip（默认）——跳过。定时任务靠它保持幂等：每日跑一次不会重跑已产出的版本、白烧 tokens；
+//   diff        ——照常产出但**不写盘**，把产出与磁盘上那份逐键比一遍报差异（纯只读，零风险）；
+//   overwrite   ——产出后整体覆盖。失败时恢复原内容而非删除，否则「覆盖」会把原有的那份一起弄丢。
+const ON_EXIST = 'skip';
+const ON_EXIST_MODES = ['skip', 'diff', 'overwrite'];
+
+// diff 报告里每类差异最多留多少条明细。差异通常只有几十条，上限防的是「换了继承来源」这类
+// 整体性变化——那时报告 JSON 会被几千条明细撑大，而人真正要看的是总数与分布。
+const DIFF_LIMIT = 500;
 // 汉字判据：译文里一个都没有，说明它压根没被翻译（AI 原样返回了英文、或返回了别的拉丁文）
 const CJK = /[㐀-䶿一-鿿豈-﫿]/;
 
@@ -72,7 +83,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 function parseArgs(argv) {
   const args = {
     version: null, arch: 'x64', work: null, report: null,
-    dryRun: false, noAi: false, reuse: false,
+    dryRun: false, noAi: false, reuse: false, onExist: ON_EXIST,
     aiBase: null, aiKey: null, aiModel: null, aiEffort: null, aiTimeout: null, token: null,
   };
   for (let i = 2; i < argv.length; i++) {
@@ -81,6 +92,7 @@ function parseArgs(argv) {
     else if (a === '--arch') args.arch = argv[++i];
     else if (a === '--work') args.work = argv[++i];
     else if (a === '--report') args.report = argv[++i];
+    else if (a === '--on-exist') args.onExist = argv[++i];
     else if (a === '--ai-base') args.aiBase = argv[++i];
     else if (a === '--ai-key') args.aiKey = argv[++i];
     else if (a === '--ai-model') args.aiModel = argv[++i];
@@ -93,6 +105,9 @@ function parseArgs(argv) {
     else if (a === '--help' || a === '-h') args.help = true;
     else throw new Error(`未知参数：${a}（--help 查看用法）`);
   }
+  if (!ON_EXIST_MODES.includes(args.onExist)) {
+    throw new Error(`--on-exist 取值非法：${args.onExist}（可用：${ON_EXIST_MODES.join(' / ')}）`);
+  }
   return args;
 }
 
@@ -102,13 +117,20 @@ function printHelp() {
 按官方产物自动产出字典：取两平台产物 → 以历史字典为锚核对每条键在新产物里的形态 →
 官方新增的界面文案走 AI 翻译 → 经 dict-edit 事务写入 → 推断组名 → 干跑校验。
 
-版本已有字典则跳过（幂等）；传多个版本按升序逐个产出，前一个正好是后一个的继承来源。
+版本已有字典默认跳过（幂等）；传多个版本按升序逐个产出，前一个正好是后一个的继承来源。
+要重跑一个已有字典的版本，用 --on-exist 显式说明意图。
 
 选项：
   --version <版本>   官方版本号，逗号分隔可传多个（默认取官方最新正式版）
   --arch <架构>      取哪个架构的产物（默认 x64；同版本各架构的文案相同）
   --work <目录>      产物与中间文件目录（默认 tmp/release）
   --report <文件>    把统计写成 JSON（CI 据此拼提交信息与判断是否继续）
+  --on-exist <模式>  已有字典时怎么办（默认 skip）：
+                       skip      跳过——定时任务靠它保持幂等，不会重跑已产出的版本
+                       diff      照常产出但不写盘，与磁盘上那份逐键对比后报差异。只读操作，
+                                 跑完磁盘毫无变化。照常调 AI：跳过的话新增候选会全变成
+                                 「未译」而被剔除，对比结果里将尽是并不存在的「删除」
+                       overwrite 产出后整体覆盖；失败则恢复原内容，不会把旧的弄丢
   --dry-run          算完就停，不写字典（本地验证用）
   --no-ai            只继承不翻译（缺译文的新增条目记为未译）
   --reuse            复用 --work 下已提取的产物，不重新下载
@@ -560,16 +582,148 @@ function dryRunPlatform(appDir, version, segments, platform, idx) {
   };
 }
 
+// ============================ 与已有字典对比 ============================
+
+// 键 → 所在段。字典不允许同键跨段（validate 列为 error），所以一张表就够。
+function segmentIndex(doc) {
+  const m = new Map();
+  for (const seg of common.SEGMENT_NAMES) {
+    for (const k of Object.keys(doc[seg] || {})) m.set(k, seg);
+  }
+  return m;
+}
+
+// 键 → 组名。groups 段是「组名 → 键数组」，这里翻过来查。
+function groupIndex(groups) {
+  const m = new Map();
+  for (const [g, keys] of Object.entries(groups || {})) {
+    for (const k of keys || []) if (!m.has(k)) m.set(k, g);
+  }
+  return m;
+}
+
+// 对比两份字典（existing = 磁盘上那份，produced = 本次产出）。纯函数，不碰磁盘。
+// 按「键」而不是按「段 + 键」对齐：同键换段（common ↔ macos）若按段对齐会表现成一删一增，
+// 看着像两条无关的变化；单列成 moved 才看得出「这条只是换了归属」。
+function diffDicts(existing, produced) {
+  const before = segmentIndex(existing);
+  const after = segmentIndex(produced);
+  const added = [];
+  const removed = [];
+  const changed = [];
+  const moved = [];
+
+  for (const [key, seg] of after) {
+    const was = before.get(key);
+    if (was === undefined) added.push({ seg, key, zh: produced[seg][key] });
+    else if (was !== seg) moved.push({ key, from: was, to: seg, zh: produced[seg][key] });
+    else if (existing[seg][key] !== produced[seg][key]) {
+      changed.push({ seg, key, from: existing[seg][key], to: produced[seg][key] });
+    }
+  }
+  for (const [key, seg] of before) {
+    if (!after.has(key)) removed.push({ seg, key, zh: existing[seg][key] });
+  }
+
+  // 组归属只对两边都在的键比——新增/删除的键各自的归属没有「变化」可言
+  const ga = groupIndex(existing.groups);
+  const gb = groupIndex(produced.groups);
+  const groupsChanged = [];
+  for (const [key] of after) {
+    if (!before.has(key)) continue;
+    const from = ga.get(key) || common.UNGROUPED;
+    const to = gb.get(key) || common.UNGROUPED;
+    if (from !== to) groupsChanged.push({ key, from, to });
+  }
+  return { added, removed, changed, moved, groupsChanged };
+}
+
+// 明细进报告前的整形：每类截到 DIFF_LIMIT 条，同时保留总数——截断了多少要看得出来，
+// 否则「报告里只有 500 条」会被读成「一共就 500 条」。
+function shapeDiff(d) {
+  const out = {};
+  for (const [name, rows] of Object.entries(d)) {
+    out[name] = rows.slice(0, DIFF_LIMIT);
+    out[`${name}Count`] = rows.length;
+  }
+  out.limit = DIFF_LIMIT;
+  return out;
+}
+
+// 差异摘要。明细可能上千条，日志里每类只给前几条当样本，全量在报告 JSON 里。
+function logDiff(d, log) {
+  const parts = [
+    ['新增', d.added],
+    ['删除', d.removed],
+    ['译文变化', d.changed],
+    ['换段', d.moved],
+    ['组归属变化', d.groupsChanged],
+  ];
+  if (!parts.some(([, rows]) => rows.length)) {
+    log('  与磁盘上的字典完全一致：键、译文、段归属、组归属都没有变化');
+    return;
+  }
+  for (const [name, rows] of parts) {
+    if (!rows.length) continue;
+    const sample = rows.slice(0, 5).map((r) => JSON.stringify(r.key)).join('、');
+    log(`  ${name} ${rows.length} 条：${sample}${rows.length > 5 ? ' …' : ''}`);
+  }
+}
+
 // ============================ 单个版本 ============================
+
+// 把字典恢复成本次产出之前的样子：此前没有字典就删掉，有就写回原字节。返回一句可打印的描述。
+// 这是「撤销一次未完成的写入」，不是修改字典内容——故不走 dict-edit 的事务模型：字节级还原
+// 比重序列化更可靠，也不该再触发一遍校验（校验刚失败过，正是要撤回去的时候）。
+function restoreDict(dictFile, previous) {
+  if (previous !== null) {
+    fs.writeFileSync(dictFile, previous, 'utf8');
+    return '已恢复原有字典';
+  }
+  fs.rmSync(dictFile, { force: true });
+  try {
+    fs.rmdirSync(path.dirname(dictFile));
+  } catch {
+    /* 目录非空或已被删，忽略 */
+  }
+  return '已删除刚产出的字典';
+}
 
 async function buildOne(version, args, log) {
   const dictFile = common.dictFile(version);
-  if (fs.existsSync(dictFile)) {
-    return { version, ok: true, skipped: true, reason: `已有字典 ${dictFile}，跳过` };
+  const mode = args.onExist || ON_EXIST;
+  // 覆盖模式失败时要把原有的那份放回去，所以先把字节读进内存。diff 模式不写盘，用不上它。
+  const previous = fs.existsSync(dictFile) ? fs.readFileSync(dictFile, 'utf8') : null;
+
+  if (previous !== null && mode === 'skip') {
+    return {
+      version,
+      ok: true,
+      skipped: true,
+      reason: `已有字典 ${dictFile}，跳过（--on-exist=diff 只对比、=overwrite 覆盖）`,
+    };
+  }
+
+  // diff 要拿磁盘上那份逐键对比，读不了就没得比。这道校验放在最前面而不是第 7 步：
+  // 「读不了」这件事一开始就知道，没道理等产物下载完、AI 也调完才报——那是白烧几分钟
+  // 与一轮 tokens（实测在旧格式字典上踩到）。overwrite 不读它（覆盖掉就是了），不受影响。
+  if (previous !== null && mode === 'diff') {
+    try {
+      dictEdit.read(version);
+    } catch (e) {
+      return { version, ok: false, reason: `磁盘上的字典读不了，无法对比：${e.message}` };
+    }
   }
 
   const workRoot = path.join(args.work, version);
   log(`\n=== ${version} ===`);
+  if (previous !== null) {
+    log(
+      mode === 'diff'
+        ? '已有字典，diff 模式：照常产出并与磁盘上那份逐键对比，全程不写盘'
+        : '已有字典，overwrite 模式：产出后整体覆盖（任一步失败则恢复原内容）'
+    );
+  }
   log('1/7 取产物与索引');
   const appDirs = {};
   const indexes = {};
@@ -606,7 +760,11 @@ async function buildOne(version, args, log) {
   }
 
   log('3/7 以历史字典为锚核对新产物');
-  const { table, versions } = inheritTable([version]);
+  // 重跑已有版本时把自己也算作继承来源——它的译文正是最该保住的东西。排除自己的话产出会
+  // 退化成「从零翻译」：实测重跑 3.6.6 时继承 0 条、产出只剩 140 条，overwrite 会把原有
+  // 1963 条的好字典换成这份残缺品，diff 也会把「继承不到」误报成「删除 1833 条」。
+  // 官方删掉的键仍会被正确剔除：核对的锚是键集，新产物里没有的照样进 dropped。
+  const { table, versions } = inheritTable(previous !== null ? [] : [version]);
   log(`  历史字典：${versions.length ? versions.join(' / ') : '（无）'}，共 ${table.size} 条`);
   const { perPlatform, stats, pending, dropped } = buildCandidates({ indexes, history: table, jsxFound });
   log(
@@ -712,7 +870,36 @@ async function buildOne(version, args, log) {
     return report;
   }
 
-  log('7/7 写入字典并推断组名');
+  log('7/7 推断组名并写入');
+  // 键集从内存里的 segments 取，而不是让 infer 去读磁盘上的字典——写入前磁盘上还是旧字典
+  // （overwrite 模式）或根本没有（新版本），读它会拿错键集。顺带让 diff 模式能在不写盘的前提下推断。
+  let groups;
+  let gs;
+  try {
+    ({ groups, stats: gs } = dictGroups.infer(version, {
+      explicitPath: path.dirname(appDirs.windows),
+      keys: common.SEGMENT_NAMES.flatMap((s) => Object.keys(segments[s] || {})),
+    }));
+  } catch (e) {
+    report.reason = `组名推断失败：${e.message}`;
+    return report;
+  }
+  report.groups = Object.keys(groups).length;
+  report.ungrouped = gs.无来源;
+  log(`  推断出 ${report.groups} 个组，扫描 ${gs.scanned} 个自有源文件，${gs.无来源} 条未定位来源`);
+
+  // diff 模式到此为止：产出全在内存里，与磁盘上那份逐键比一遍就结束。这是只读操作，
+  // 因此不需要备份与恢复——磁盘上的字典从头到尾没被碰过。
+  if (mode === 'diff') {
+    const d = diffDicts(dictEdit.read(version), { ...segments, groups });
+    report.diff = shapeDiff(d);
+    report.ok = true;
+    report.diffMode = true;
+    logDiff(d, log);
+    log('  磁盘未改动');
+    return report;
+  }
+
   if (args.dryRun) {
     log('  --dry-run：跳过写入');
     report.ok = true;
@@ -720,49 +907,44 @@ async function buildOne(version, args, log) {
     return report;
   }
 
-  // 写入之后任一环节失败，就把刚产出的字典删掉——否则下次重跑会因为「已有字典」而跳过，
-  // 把一次失败的产出永久固化下来。回填时这一点尤其要紧。
+  // 写入之后任一环节失败，就把字典恢复成本次产出之前的样子——否则下次重跑会因为「已有字典」
+  // 而跳过，把一次失败的产出永久固化下来（回填时尤其要紧）；覆盖模式下更要紧，直接删掉
+  // 会把原有的那份一起弄丢。
   let written = false;
   try {
-    const w = dictEdit.create(version, {
-      meta: {
-        updated: new Date().toISOString().slice(0, 10),
-        notes:
-          '由官方产物自动产出（scripts/dict-auto.js）：以上一版字典为锚核对每条键在新产物里的形态，' +
-          '官方新增的 JSX 文案由 AI 按既有风格补译，写入前经 dict-edit 事务校验与产物干跑。' +
-          '键的三类形态：普通键（字符串字面量内容或模板文本段整串匹配）、整模板键（含 ${} 的' +
-          '完整模板源码整段替换）、作用域键（<文件名>.js|原文，只对该文件生效）。' +
-          '大小写敏感、精确匹配；common 段为两平台共有与 Windows 专有，macos 段为 macOS 独有形态。' +
-          '字面量侧的候选不自动收录（真文案会被枚举值/事件名/URL 片段淹没），需人工从 scan 报告补充。',
+    const w = dictEdit.create(
+      version,
+      {
+        meta: {
+          updated: new Date().toISOString().slice(0, 10),
+          notes:
+            '由官方产物自动产出（scripts/dict-auto.js）：以上一版字典为锚核对每条键在新产物里的形态，' +
+            '官方新增的 JSX 文案由 AI 按既有风格补译，写入前经 dict-edit 事务校验与产物干跑。' +
+            '键的三类形态：普通键（字符串字面量内容或模板文本段整串匹配）、整模板键（含 ${} 的' +
+            '完整模板源码整段替换）、作用域键（<文件名>.js|原文，只对该文件生效）。' +
+            '大小写敏感、精确匹配；common 段为两平台共有与 Windows 专有，macos 段为 macOS 独有形态。' +
+            '字面量侧的候选不自动收录（真文案会被枚举值/事件名/URL 片段淹没），需人工从 scan 报告补充。',
+        },
+        segments,
+        groups: {},
       },
-      segments,
-      groups: {},
-    });
+      // overwrite 是「重跑已有版本」的显式入口。create 默认拒绝覆盖，那道闸拦的正是
+      // 「本该用 apply 改、却整体重建」的误用，只有这里明确说了要覆盖才放行
+      { overwrite: mode === 'overwrite' }
+    );
     written = true;
     log(`  已写入 ${w.file}`);
-    const { groups, stats: gs } = dictGroups.infer(version, { explicitPath: path.dirname(appDirs.windows) });
     const r = dictEdit.regroup(version, { groups });
-    report.groups = Object.keys(groups).length;
-    report.ungrouped = gs.无来源;
     for (const warn of r.warnings) log(`  [提示] ${warn.code}：${warn.detail}`);
-    log(`  推断出 ${report.groups} 个组，扫描 ${gs.scanned} 个自有源文件`);
   } catch (e) {
-    if (written) {
-      fs.rmSync(dictFile, { force: true });
-      try {
-        fs.rmdirSync(path.dirname(dictFile));
-      } catch {
-        /* 目录非空或已被删，忽略 */
-      }
-      log(`  写入后出错，已删除刚产出的字典：${e.message}`);
-    }
+    if (written) log(`  写入后出错，${restoreDict(dictFile, previous)}：${e.message}`);
     report.reason = e.message;
     return report;
   }
 
   const v = dictEdit.validate(version);
   if (v.errors.length) {
-    fs.rmSync(dictFile, { force: true });
+    log(`  校验未通过，${restoreDict(dictFile, previous)}`);
     report.reason = `字典校验未通过：${v.errors.map((e) => `${e.code}${e.key ? `(${e.key})` : ''}`).join(' / ')}`;
     return report;
   }
@@ -793,7 +975,14 @@ async function main() {
     const versions = await resolveVersions(args.version, args.token || process.env.GITHUB_TOKEN);
     console.log(`待产出：${versions.join(' / ')}${args.dryRun ? '（--dry-run）' : ''}`);
     for (const version of versions) {
-      const r = await buildOne(version, args, console.log);
+      let r;
+      try {
+        r = await buildOne(version, args, console.log);
+      } catch (e) {
+        // 单版本出意外不该拖垮整轮：回填十几个版本时，中间一个失败会让后面的全不跑，
+        // 而 CI 的提交步骤正是靠「已成功的那些」产出内容的。转成失败条目，继续下一个。
+        r = { version, ok: false, reason: e.message };
+      }
       reports.push(r);
       if (r.skipped) console.log(`跳过：${r.reason}`);
       else if (!r.ok) console.error(`::error::${version} 产出失败：${r.reason}`);
@@ -805,16 +994,25 @@ async function main() {
   }
 
   const failed = reports.filter((r) => !r.ok);
-  const produced = reports.filter((r) => r.ok && !r.skipped);
+  const diffed = reports.filter((r) => r.ok && r.diffMode);
+  const produced = reports.filter((r) => r.ok && !r.skipped && !r.diffMode);
   const skipped = reports.filter((r) => r.skipped);
   console.log(
-    `\n产出 ${produced.length} 个版本${failed.length ? `，失败 ${failed.length} 个` : ''}${skipped.length ? `，跳过 ${skipped.length} 个` : ''}`
+    `\n产出 ${produced.length} 个版本${diffed.length ? `，对比 ${diffed.length} 个` : ''}` +
+      `${failed.length ? `，失败 ${failed.length} 个` : ''}${skipped.length ? `，跳过 ${skipped.length} 个` : ''}`
   );
   for (const r of produced) {
     console.log(
       `  ${r.version}：common ${r.counts.common} / macos ${r.counts.macos} 条，续用旧译文 ${r.inherited}` +
         `（其中 ${r.variant} 条官方改了大小写），新译 ${r.translated || 0}，未译 ${r.untranslated}，` +
         `官方已删除 ${r.dropped}`
+    );
+  }
+  for (const r of diffed) {
+    const c = r.diff;
+    console.log(
+      `  ${r.version}（对比，磁盘未改动）：新增 ${c.addedCount} / 删除 ${c.removedCount} / ` +
+        `译文变化 ${c.changedCount} / 换段 ${c.movedCount} / 组归属变化 ${c.groupsChangedCount}`
     );
   }
   for (const r of failed) console.log(`  ${r.version}：失败——${r.reason}`);
@@ -835,7 +1033,9 @@ module.exports = {
   main, buildOne, resolveVersions, inheritTable, literalIndex, resolveIn,
   buildCandidates, toSegments, dryRunPlatform, buildExamples, rejectReason, placeholdersOf,
   resolveTimeout, resolveEffort, isEcho, translateBatch,
+  diffDicts, shapeDiff, segmentIndex, groupIndex, parseArgs,
   BATCH_SIZE, AI_EFFORT, AI_TIMEOUT, MIN_HIT_RATE, MAX_UNTRANSLATED_RATE,
+  ON_EXIST, ON_EXIST_MODES, DIFF_LIMIT,
 };
 
 if (require.main === module) main();

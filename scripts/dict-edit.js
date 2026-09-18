@@ -286,9 +286,12 @@ function write(version, doc, { dryRun = false } = {}) {
 // 从零建一份字典（目标版本还没有字典目录时用）。CI 给新版本产出首版字典走这里——
 // 「文件还不存在」不是跳过校验的理由，恰恰相反：新字典没有既有内容兜底，第一版内容的
 // 合法性全靠这一次校验。已存在则报错，避免把「新建」误用在「改已有字典」上（那会整段覆盖）。
+// opts.overwrite：允许覆盖一份已存在的字典（dict-auto 的 --on-exist=overwrite）。默认拒绝——
+// 那道闸拦的是「本该用 apply 逐条改、却整体重建」的误用，整体重建会静默丢掉别人经 apply
+// 加进来的条目。写入本身仍走 write 的事务模型（写后复核 + 不一致即回滚）。
 function create(version, { meta = {}, segments = {}, groups = {} } = {}, opts = {}) {
   const file = dictPath(version);
-  if (fs.existsSync(file)) {
+  if (fs.existsSync(file) && !opts.overwrite) {
     throw new DictError(`字典已存在，改用 apply / mergeIn 修改：${file}`);
   }
   // version / formatVersion 放在展开之后：它们与目录结构、解析分支绑定，不该被 meta 覆盖

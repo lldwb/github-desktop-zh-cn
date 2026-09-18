@@ -4,7 +4,9 @@
 #   - schedule：每日一次，取官方最新非 beta 版本。已有 dictionaries/<版本>/ 就直接跳过，
 #     所以重复跑是安全的（幂等），不必担心「跑两次产出两份」；
 #   - workflow_dispatch：手动跑，versions 填版本列表即可**回填历史版本**（逗号分隔，脚本会
-#     按版本升序依次产出）。留空则同 schedule。
+#     按版本升序依次产出）。留空则同 schedule。目标版本已有字典时默认跳过——要重跑它，用
+#     on_exist 选 diff（照常产出但不写盘，只报与现有字典的逐键差异）或 overwrite（产出后
+#     覆盖，任一步失败则恢复原内容）。选 diff 时「提交」步骤必然空跑：磁盘上什么都没变。
 #
 # 产出直接提交到仓库（dictionaries/<版本>/zh-CN.json），不是 Release 附件——字典要能被
 # patch 联网取、也要能被用户 git pull 到，放仓库里最直接；体积也只有几百 KB。
@@ -50,6 +52,15 @@ on:
         required: false
         type: boolean
         default: false
+      on_exist:
+        description: '该版本已有字典时怎么办（填了 versions 才有意义）'
+        required: false
+        type: choice
+        default: skip
+        options:
+          - skip
+          - diff
+          - overwrite
 
 # 只需要读自己的仓库代码；推送到远端由 checkout 里的那个 token 负责，与此处无关
 permissions:
@@ -102,6 +113,8 @@ jobs:
         env:
           IN_VERSIONS: ${{ inputs.versions }}
           IN_DRY_RUN: ${{ inputs.dry_run }}
+          # 非 workflow_dispatch 触发（定时任务）时为空串，下面的判断会跳过它，脚本按默认 skip 走
+          IN_ON_EXIST: ${{ inputs.on_exist }}
           AI_BASE_URL: ${{ secrets.AI_BASE_URL }}
           AI_API_KEY: ${{ secrets.AI_API_KEY }}
           AI_MODEL: ${{ vars.AI_MODEL }}
@@ -115,6 +128,7 @@ jobs:
           args=()
           if [ -n "$IN_VERSIONS" ]; then args+=(--version "$IN_VERSIONS"); fi
           if [ "$IN_DRY_RUN" = "true" ]; then args+=(--dry-run); fi
+          if [ -n "$IN_ON_EXIST" ]; then args+=(--on-exist "$IN_ON_EXIST"); fi
           node scripts/dict-auto.js "${args[@]}" --report tmp/dict-auto-report.json
 
       # 产出的字典要先过一遍仓库自身的测试，再允许进版本库
@@ -135,9 +149,10 @@ jobs:
             exit 0
           fi
 
+          # diff 模式不写盘，这里必然是「无变化」；overwrite 模式会真有变化
           git add dictionaries/
           if git diff --cached --quiet; then
-            echo "字典无变化（官方未发新版，或该版本已有字典），不提交"
+            echo "字典无变化（官方未发新版、该版本已有字典，或本次是 --on-exist=diff 只对比不写盘），不提交"
             exit 0
           fi
 
@@ -181,6 +196,7 @@ jobs:
               const out = [];
               for (const p of r.reports) {
                 if (p.skipped) out.push(`跳过 ${p.version}：${p.reason}`);
+                else if (p.diffMode) out.push(`对比 ${p.version}（磁盘未改动）：新增 ${p.diff.addedCount} / 删除 ${p.diff.removedCount} / 译文变化 ${p.diff.changedCount} / 换段 ${p.diff.movedCount} / 组归属变化 ${p.diff.groupsChangedCount}`);
                 else if (p.ok) out.push(`成功 ${p.version}：common ${p.counts.common} / macos ${p.counts.macos}，新译 ${p.translated || 0}，无需翻译 ${p.echoed || 0}，未译 ${p.untranslated}`);
                 else out.push(`失败 ${p.version}：${p.reason}`);
               }
