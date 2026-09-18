@@ -20,6 +20,10 @@ const GH_BRANCH = 'main';
 const GH_RAW = `https://raw.githubusercontent.com/${GH_OWNER}/${GH_REPO}/${GH_BRANCH}`;
 const GH_CDN = `https://cdn.jsdelivr.net/gh/${GH_OWNER}/${GH_REPO}@${GH_BRANCH}`;
 const GH_API = `https://api.github.com/repos/${GH_OWNER}/${GH_REPO}`;
+// Gitee 镜像：仓库由镜像自动同步（commit / 分支 / tag 同步，**发行版不同步**），raw 文件可直连。
+// 放在末位兜底——它不是权威源，内容与 main 分支一致时才有同等效力。
+const GITEE_RAW = `https://gitee.com/${GH_OWNER}/${GH_REPO}/raw/${GH_BRANCH}`;
+const GITEE_API = `https://gitee.com/api/v5/repos/${GH_OWNER}/${GH_REPO}`;
 
 // —— 运行形态与数据根目录（SSOT）——
 // 四种运行形态，判据只有 isPackaged()（SEA / bundle 产物）与 isElectronPackaged()（Electron 产物）两个：
@@ -263,6 +267,21 @@ function compareVersions(a, b) {
 // 如 "en-US" 在 renderer 是相对时间语言、在 main.js 是拼写检查逻辑）。
 const SCOPED_KEY = /^([A-Za-z0-9._-]+\.js)\|([\s\S]+)$/;
 
+// —— 平台分段（formatVersion 2 的字典结构，SSOT）——
+// 官方只发 Windows 与 macOS 产物；Linux 版由社区维护，其条目在有人提供产物前保持为空。
+// 平台名在这里定死三处：段名白名单、process.platform 映射、字典维护脚本的参数校验——
+// 后两者都引用本常量，不各写一份。
+const PLATFORM_SEGMENTS = ['windows', 'macos', 'linux'];
+
+// 当前运行平台对应的段名。未知平台返回 null——调用方只取 common 段，宽容降级而非抛错
+// （在 freebsd 之类平台上读字典不该直接失败）。
+function currentPlatform() {
+  return { win32: 'windows', darwin: 'macos', linux: 'linux' }[process.platform] || null;
+}
+
+// 条目段名：common 加三个平台段。groups 不是条目段——它只描述分组，不参与替换。
+const SEGMENT_NAMES = ['common', ...PLATFORM_SEGMENTS];
+
 // 拆解一个字典键：作用域键返回 { file: 文件名, key: 去掉前缀的原文 }，
 // 全局键返回 { file: null, key: 原键 }。键的两种形态只在这里解析，调用方不再自己碰正则。
 function splitScopedKey(k) {
@@ -270,24 +289,73 @@ function splitScopedKey(k) {
   return m ? { file: m[1], key: m[2] } : { file: null, key: k };
 }
 
+// 整模板键（以反引号开头、含 ${}）的译文必须是 JS 字符串/模板字面量——首尾引号须一致。
+// 返回错误说明，合法时返回 null。
+function templateValueProblem(key, value) {
+  if (!key.startsWith('`')) return null;
+  const q = value[0];
+  if ((q !== '`' && q !== '"' && q !== "'") || value[value.length - 1] !== q) {
+    return `整模板键 ${key} 的译文必须是 JS 字符串/模板字面量（首尾同为引号或反引号）`;
+  }
+  return null;
+}
+
+// 校验单条条目，非法时抛错。两种格式共用，保证「字典维护脚本」与「运行时读取」口径一致。
+// 判整模板键要先用 splitScopedKey 剥掉作用域前缀——`renderer.js|`${t} ${n}s`` 这类
+// 带作用域的整模板键，拿原键判断会因开头不是反引号而整条漏检。
+function checkEntry(version, key, value) {
+  if (typeof value !== 'string' || value.length === 0) {
+    throw new Error(`字典条目非法（${version}）：${key} 的译文必须是非空字符串`);
+  }
+  const problem = templateValueProblem(splitScopedKey(key).key, value);
+  if (problem) throw new Error(`字典条目非法（${version}）：${problem}`);
+}
+
+// 把 formatVersion 2 的分段字典整理为「原样键 → 译文」的 Map。
+// 合并 common ∪ 当前平台段；platform 显式传入时以它为准（CI 里按平台产出字典时用）。
+// 键在段间重复属于非法而非「后写入者覆盖」——静默覆盖是分段格式特有的失效模式，
+// 会让人以为改对了、实际生效的是另一段。
+function buildSegmentedEntries(raw, version, platform) {
+  for (const name of [...SEGMENT_NAMES, 'groups']) {
+    const seg = raw[name];
+    if (seg === null || typeof seg !== 'object' || Array.isArray(seg)) {
+      throw new Error(`字典段落非法（${version}）：缺少对象形式的 "${name}" 段`);
+    }
+  }
+  const segs = [...SEGMENT_NAMES];
+  const active = platform === undefined ? currentPlatform() : platform;
+  const use = active && segs.includes(active) ? ['common', active] : ['common'];
+
+  const entries = new Map();
+  const seen = new Map(); // 键 → 首次出现的段名
+  for (const name of use) {
+    for (const [k, v] of Object.entries(raw[name])) {
+      checkEntry(version, k, v);
+      const prev = seen.get(k);
+      if (prev) {
+        throw new Error(
+          `字典条目重复（${version}）：${k} 同时出现在 "${prev}" 与 "${name}" 段`
+        );
+      }
+      seen.set(k, name);
+      entries.set(k, v);
+    }
+  }
+  return entries;
+}
+
 // 把字典原始对象整理为「原样键 → 译文」的 Map，并校验条目合法性。
-// 整模板键（以反引号开头、含 ${}）的译文必须是 JS 字符串/模板字面量。
-function buildEntries(raw, version) {
+// 两种格式：
+//   formatVersion 2 —— 分段结构（见 buildSegmentedEntries）；
+//   无 formatVersion / 为 1 —— 扁平结构，顶层即条目（跳过 _ 开头的元信息键）。
+function buildEntries(raw, version, platform) {
+  if (raw && raw._meta && raw._meta.formatVersion === 2) {
+    return buildSegmentedEntries(raw, version, platform);
+  }
   const entries = new Map();
   for (const [k, v] of Object.entries(raw)) {
     if (k.startsWith('_')) continue;
-    if (typeof v !== 'string' || v.length === 0) {
-      throw new Error(`字典条目非法（${version}）：${k} 的译文必须是非空字符串`);
-    }
-    const { key } = splitScopedKey(k);
-    if (key.startsWith('`')) {
-      const q = v[0];
-      if ((q !== '`' && q !== '"' && q !== "'") || v[v.length - 1] !== q) {
-        throw new Error(
-          `字典条目非法（${version}）：整模板键 ${k} 的译文必须是 JS 字符串/模板字面量（首尾同为引号或反引号）`
-        );
-      }
-    }
+    checkEntry(version, k, v);
     entries.set(k, v);
   }
   return entries;
@@ -310,10 +378,10 @@ function scopedEntries(entries, file) {
   return out;
 }
 
-// 远程字典候选地址（按序尝试：权威源 → CDN 兜底）
+// 远程字典候选地址（按序尝试：权威源 → CDN 兜底 → 镜像兜底）
 function remoteDictUrls(version) {
   const rel = `dictionaries/${version}/zh-CN.json`;
-  return [`${GH_RAW}/${rel}`, `${GH_CDN}/${rel}`];
+  return [`${GH_RAW}/${rel}`, `${GH_CDN}/${rel}`, `${GITEE_RAW}/${rel}`];
 }
 
 // 英文排版同样会用到的 Unicode 标点：官方原版里本来就可能存在，不能当「来自汉化」的凭据。
@@ -424,11 +492,12 @@ function dictLabel(version) {
   return fs.existsSync(file) ? file : `内嵌字典 ${dictAssetKey(version)}`;
 }
 
-// 读取字典：外部文件或内嵌资源，跳过 _ 开头的元信息键
-function loadDict(version) {
+// 读取字典：外部文件或内嵌资源，跳过 _ 开头的元信息键。
+// platform 省略时取当前运行平台对应的条目段（见 buildEntries）。
+function loadDict(version, platform) {
   const { text, label } = readDictSource(version);
   const raw = JSON.parse(text);
-  const entries = buildEntries(raw, version);
+  const entries = buildEntries(raw, version, platform);
   if (entries.size === 0) throw new Error(`字典为空：${label}`);
   return entries;
 }
@@ -672,7 +741,15 @@ module.exports = {
   remoteDictUrls,
   hasEmbeddedDict,
   compareVersions,
+  PLATFORM_SEGMENTS,
+  SEGMENT_NAMES,
+  currentPlatform,
+  templateValueProblem,
+  checkEntry,
   GH_API,
   GH_OWNER,
   GH_REPO,
+  GH_RAW,
+  GITEE_RAW,
+  GITEE_API,
 };

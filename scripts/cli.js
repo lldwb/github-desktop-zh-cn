@@ -1,6 +1,6 @@
 // cli.js — 交互式入口
 // 无参数：进入中文菜单（面向普通用户，双击即可用）；
-// 带子命令（locate / patch / restore / verify / scan）：透传给对应脚本，命令行行为与直接运行脚本一致。
+// 带子命令（locate / patch / restore / verify / scan / dict / groups）：透传给对应脚本，命令行行为与直接运行脚本一致。
 'use strict';
 
 const path = require('path');
@@ -17,6 +17,8 @@ const RUNNERS = {
   restore: () => require('./restore.js'),
   verify: () => require('./verify.js'),
   scan: () => require('./scan.js'),
+  dict: () => require('./dict-edit.js'),
+  groups: () => require('./dict-groups.js'),
 };
 
 const SUBCOMMANDS = Object.keys(RUNNERS);
@@ -33,6 +35,16 @@ function printHelp() {
   restore   还原官方原版
   verify    校验版本一致性、命中率与补丁后语法
   scan      未翻译文案自查（输出待补清单）
+  dict      字典维护与校验（字典的唯一写入口，改字典一律走它）
+  groups    推断字典组名（读安装目录 sourcemap，产出 groups 段）
+
+dict 子命令（完整用法见 github-desktop-zh-cn dict -h）：
+  dict validate <版本>           一致性校验，有 error 即以非零码退出
+  dict query <版本> [选项]        按平台 / 组 / 关键字查条目
+  dict apply <版本> --ops <文件>  批量修改（--dry-run 只预览不落盘）
+  dict add / update / remove / set-group / move / merge / regroup
+  dict export-flat <版本>        导出扁平字典
+  dict migrate <版本>            扁平格式迁移为分段格式
 
 公共选项：
   --path <目录>    显式指定 resources 目录（自动探测失败或非默认安装位置时用）
