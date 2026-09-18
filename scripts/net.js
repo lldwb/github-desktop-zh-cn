@@ -45,8 +45,9 @@ function openStream(url, opts, redirects) {
     const mod = target.protocol === 'http:' ? http : https;
     const timeout = opts.timeout || DEFAULT_TIMEOUT;
 
-    const req = mod.get(
+    const req = mod.request(
       {
+        method: opts.method || 'GET',
         hostname: target.hostname,
         port: target.port || undefined,
         path: target.pathname + target.search,
@@ -77,27 +78,56 @@ function openStream(url, opts, redirects) {
     req.setTimeout(timeout, () => {
       req.destroy(new Error(`请求超时（${timeout / 1000} 秒无响应）：${url}`));
     });
+    req.end();
   });
+}
+
+// GET 到内存，连同状态码与响应头一起返回。Range 请求要靠状态码区分 206（服务端真按区间
+// 返回）与 200（忽略了 Range，把整个文件送了回来）—— 后者必须由调用方发现并中止。
+// maxBytes 是配套的保险丝：响应体一旦超限立刻掐断连接，免得 250 MB 的产物被整包读进来。
+async function getRaw(url, opts = {}) {
+  const res = await openStream(url, opts, 0);
+  const total = Number(res.headers['content-length'] || 0);
+  const limit = opts.maxBytes || 0;
+  if (opts.onProgress) opts.onProgress(0, total);
+  const chunks = [];
+  let received = 0;
+  let aborted = false;
+  await new Promise((resolve, reject) => {
+    res.on('data', (c) => {
+      if (aborted) return;
+      received += c.length;
+      if (limit && received > limit) {
+        aborted = true;
+        chunks.length = 0;
+        res.destroy(new Error(`响应体超过 ${limit} 字节上限（HTTP ${res.statusCode}）：${url}`));
+        return;
+      }
+      chunks.push(c);
+      if (opts.onProgress) opts.onProgress(received, total);
+    });
+    res.on('end', resolve);
+    res.on('error', (e) => reject(describe(e, url)));
+  });
+  return { status: res.statusCode, headers: res.headers, buffer: Buffer.concat(chunks) };
 }
 
 // GET 到内存：文本默认，binary 为真时返回 Buffer（字典、API 响应用这个）
 async function get(url, opts = {}) {
-  const res = await openStream(url, opts, 0);
-  const total = Number(res.headers['content-length'] || 0);
-  if (opts.onProgress) opts.onProgress(0, total);
-  const chunks = [];
-  let received = 0;
-  res.on('data', (c) => {
-    chunks.push(c);
-    received += c.length;
-    if (opts.onProgress) opts.onProgress(received, total);
-  });
-  await new Promise((resolve, reject) => {
-    res.on('end', resolve);
-    res.on('error', (e) => reject(describe(e, url)));
-  });
-  const buf = Buffer.concat(chunks);
-  return opts.binary ? buf : buf.toString('utf8');
+  const { buffer } = await getRaw(url, opts);
+  return opts.binary ? buffer : buffer.toString('utf8');
+}
+
+// HEAD：只取状态与响应头，不读响应体。用于下载前探大小、探服务端是否支持 Range。
+// 注意 GitHub Release 资产是 302 到另一台主机，节点上拿到的才是真正的 content-length。
+async function head(url, opts = {}) {
+  const res = await openStream(url, { ...opts, method: 'HEAD' }, 0);
+  res.resume();
+  return {
+    status: res.statusCode,
+    size: Number(res.headers['content-length'] || 0),
+    acceptRanges: res.headers['accept-ranges'] || null,
+  };
 }
 
 async function getJson(url, opts = {}) {
@@ -127,4 +157,4 @@ async function download(url, destPath, opts = {}) {
   return { bytes: received, total };
 }
 
-module.exports = { get, getJson, download, UA };
+module.exports = { get, getRaw, getJson, head, download, UA };

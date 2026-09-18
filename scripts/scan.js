@@ -143,4 +143,9 @@ function main() {
   }
 }
 
-main();
+// 加载本模块不会自动执行——由 require.main 守卫或调用方显式调 main()。
+// looksLikeNoise / normalize 对外导出：跨平台差集（release-assets）与 CI 的候选筛选要复用
+// 同一套口径，两处各写一份必然会漂移。
+module.exports = { main, normalize, looksLikeNoise };
+
+if (require.main === module) main();
