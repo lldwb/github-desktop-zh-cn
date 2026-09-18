@@ -71,7 +71,7 @@
 - [x] 继承逻辑：同键直接复用上一版译文；统计继承数与新增数并打印
       ——`inheritTable()` 版本降序合并、同键先见者胜（新版本译文优先），坏字典跳过不报错；再逐条核对新产物：`resolveIn()` 先试精确形态、再退到「只差大小写」的形态（官方把 `Copy file path` 改成 `Copy File Path` 这类微调不该让译文丢掉）。实测 3.6.7 上 **1963 条历史键零丢失**，其中 277 条官方改了大小写
 - [x] AI 翻译：OpenAI 兼容协议，Secrets 为 `AI_BASE_URL` / `AI_API_KEY` / `AI_MODEL`；失败时按条目重试并记录未译条目
-      ——`callAI()` 每批 20 条、失败重试 2 次、单次超时 120 s；译文过 `rejectReason()`（占位符集合一致 + 必须含 CJK 字符），不合格的计未译并记原因。**未用真实服务实测**（本地无密钥），接口形态按 OpenAI 兼容协议写，CI 首次跑通的标志是「未译比例门槛不触发」
+      ——`translateBatch()` 每批 20 条、失败重试 2 次、单次超时默认 120 s（`AI_TIMEOUT_SEC` / `--ai-timeout` 覆盖）；思考强度走仓库变量 `AI_REASONING_EFFORT` / `--ai-effort`，原样透传成请求体的 `reasoning_effort`、不校验取值（各网关认的档位不同，服务端不认识的值会被忽略或报错）；译文过 `rejectReason()`（占位符集合一致 + 必须含 CJK 字符），不合格的计未译并记原因。**已用真实服务实测**（3.6.7 全流程跑通），取证明细见 6.2 节
 - [x] 准入门槛：`dict-edit validate` 通过 + 产物干跑（语法校验 + 命中率阈值）通过，才允许提交；不通过则开 issue 并保留产物
       ——门槛实现在 `dict-auto.js` 内（`--report` 出 JSON，workflow 只负责看退出码），比放在 workflow 里更早失败、也便于本地复现。**「开 issue」未做**：schedule 失败 GitHub 默认就给仓库所有者发通知，开 issue 是重复；改为 job 失败 + `::error::` 注解。**「保留产物」与本组「失败即删字典」不冲突**——删的是**产出的字典**（否则下次重跑会因「已有字典」跳过、把失败产出永久固化），官方产物本就在 `tmp/` 下、不在删除范围
 - [x] 提交到仓库（`GITEE_TOKEN` 之外的提交凭据用既有 `RELEASE_TOKEN`），提交信息含继承数 / 新增数 / 未译数
@@ -91,6 +91,16 @@
 2. **平台专用译文被通用译文挤掉**。`common` 段的 `Open with…`（打开方式…）只能兜底命中 macOS 产物里的 `Open With…`，而 `macos` 段的 `Open With…`（用其他应用打开…）是精确命中——遍历顺序让前者先落位、后者被 `put` 的「先见者胜」丢掉，`Contract/Expand Active Resizable` 两条同病。**修法**：`put` 加精确标记，精确命中压过兜底命中。
 
 **双平台端到端实测**（真实产物，`--version 3.6.7 --reuse --no-ai`）：历史字典 3.6.5 / 3.6.6 共 1963 条 → 续用 1963 条**零丢失**，官方已删除 0 条；分段 `common` 1868 / `macos` 231；干跑 Windows 命中 2262 处、生效 1820/1851（**98.3%**），macOS 命中 2199 处、生效 1738/1763（**98.6%**），两侧都过 95% 阈值。**与既有 3.6.6 字典逐键对比**：`common` 新增 1 / 删除 0 / 译文变化 0，`macos` 新增 135 / 删除 0 / 译文变化 0，`windows` 与 `linux` 保持为空，`groups` 46 → 46——**零回归**，且补上了 135 条此前遗漏的 macOS Title Case 文案（`Add Repository`、`Delete Branch`、`Confirm Discard Changes` 等，第 4 组的 96 条只覆盖菜单 label 口径）。
+
+### 6.2 AI 翻译链路的实测取证
+
+**服务与参数**：目标网关 `GET /v1/models` 列有 `deepseek-v4-flash`。思考强度的参数名逐个试过——请求体的 `reasoning_effort` 有效且单调（同一个简单问题：`low` 1847 / `high` 6526 / `max` 11979 思考 tokens），`xhigh` 与 `reasoning={"effort":"max"}` 不生效，`thinking` / `enable_thinking` 无定论。不传该字段时基线 508 tokens / 10 秒，`max` 档 11979 / 97 秒（约 23 倍）——**超时必须跟着放大**，否则每批超时后退化成逐条重试，更慢且请求数翻倍。故超时做成可配（`AI_TIMEOUT_SEC`，默认 120 s）。
+
+**一个由实测暴露、已修的问题**：判据与提示词打架。提示词第 7 条要求专有名词原样返回，`rejectReason` 的「必须含 CJK」判据却把它判成「没翻译」——首次实测 22 条候选里 10 条是 `github.com` / `GitHub Desktop` / `anthropic` / `hubot/cool-repo` / `.gitignore` 这类，未译比例 45% 直接越过 30% 门槛，**整个版本产不出来**（顺带验证了「失败即删字典」确实生效）。修法是加 `isEcho()` 把这类分流为「无需翻译」。
+
+**最终产出**（`--version 3.6.7 --reuse`，超时 900 s）：20 条新增候选 → **译出 10 条、无需翻译 10 条、未译 0 条**；分段 `common` 1876 / `macos` 233；干跑 Windows 命中 2319 处、生效 1827/1858（**98.3%**），macOS 命中 2259 处、生效 1747/1772（**98.6%**）；与 3.6.6 逐键对比**新增 146 / 删除 0 / 译文变化 0**。
+
+新增的 146 条里，145 条剥掉作用域前缀、统一小写后能对上历史键——都是同一文案的另一种书写形态（`Description` → `description`、`Default branch` → `Default Branch`），整串匹配下两种形态必须各自成键，并不是重复；其中 `Archived`（已归档）与 `archived`（已存档）的译文本就不同。全新文案只有 `GitHub's Logos` 一条。AI 译出的 10 条为 `description` / `difference` / `formatting` / `notifications` / `accessibility` / `archived` / `Default Branch` / `Open Repository` / `Fake account` / `GitHub's Logos`，译文逐一抽查正确、风格一致。
 
 ## 7. Gitee 发版与检查更新优先级
 
