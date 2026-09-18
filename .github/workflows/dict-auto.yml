@@ -20,6 +20,10 @@
 # 所以不存在「字典更新 → 重新构建 → 再更新字典」的回环。
 #
 # 翻译走 OpenAI 兼容接口，Secrets 三个：AI_BASE_URL / AI_API_KEY / AI_MODEL。
+# 另有两个**仓库变量**（Variables，不是 Secret——它们不敏感）：AI_REASONING_EFFORT 传思考
+# 强度（如 max）、AI_TIMEOUT_SEC 传单次请求超时秒数。推理模型的耗时随思考强度非线性增长，
+# 实测同一个简单问题默认档 10 秒、max 档 97 秒，**开高思考强度必须同步放大超时**，
+# 否则每批都超时并退化成逐条重试（更慢、请求数还翻倍）。都不设则用脚本默认。
 # **没配 AI_API_KEY 就直接失败**，不降级成「只继承不新译」——残缺字典一旦落盘，下次重跑会因
 # 「已有字典」跳过，把残缺永久固化下来（脚本内部的「失败即删」防的也是这件事）。
 # 需要离线排查时用本地 `node scripts/dict-auto.js --no-ai`。
@@ -63,12 +67,14 @@ jobs:
           AI_API_KEY: ${{ secrets.AI_API_KEY }}
           AI_BASE_URL: ${{ secrets.AI_BASE_URL }}
           AI_MODEL: ${{ secrets.AI_MODEL }}
+          AI_REASONING_EFFORT: ${{ vars.AI_REASONING_EFFORT }}
+          AI_TIMEOUT_SEC: ${{ vars.AI_TIMEOUT_SEC }}
         run: |
           if [ -z "$AI_API_KEY" ]; then
             echo "::error::未配置 AI_API_KEY secret。自动产出必须能翻译官方新增文案——配置方法见 docs/dict-v2/design.md「CI 定时字典」一节"
             exit 1
           fi
-          echo "翻译服务：${AI_BASE_URL:-（默认）} / 模型 ${AI_MODEL:-（默认）}"
+          echo "翻译服务：${AI_BASE_URL:-（默认）} / 模型 ${AI_MODEL:-（默认）} / 思考强度 ${AI_REASONING_EFFORT:-（接口默认）} / 单次超时 ${AI_TIMEOUT_SEC:-120} 秒"
 
       - uses: actions/checkout@v7
         with:
@@ -91,6 +97,9 @@ jobs:
           AI_BASE_URL: ${{ secrets.AI_BASE_URL }}
           AI_API_KEY: ${{ secrets.AI_API_KEY }}
           AI_MODEL: ${{ secrets.AI_MODEL }}
+          # 仓库变量而非 Secrets——它们不是敏感信息。未设置时展开为空串，脚本按默认处理
+          AI_REASONING_EFFORT: ${{ vars.AI_REASONING_EFFORT }}
+          AI_TIMEOUT_SEC: ${{ vars.AI_TIMEOUT_SEC }}
           # 读官方 Release 是公开数据，用内置 token 只为提高 API 速率限制
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
@@ -141,7 +150,7 @@ jobs:
               : `feat(dict): 自动产出 ${made.map((p) => p.version).join(" / ")} 字典`;
             const body = made.map((p) =>
               `- ${p.version}：继承 ${p.inherited} 条（其中 ${p.variant} 条官方改了大小写），` +
-              `新增 ${p.added} 条、译出 ${p.translated || 0} 条，未译 ${p.untranslated} 条，` +
+              `新增 ${p.added} 条（译出 ${p.translated || 0}、判定无需翻译 ${p.echoed || 0}、未译 ${p.untranslated}），` +
               `官方已删除 ${p.dropped} 条；分段 common ${p.counts.common} / macos ${p.counts.macos}`
             );
             for (const p of failed) body.push(`- ${p.version}：产出失败——${p.reason}`);
@@ -163,7 +172,7 @@ jobs:
               const out = [];
               for (const p of r.reports) {
                 if (p.skipped) out.push(`跳过 ${p.version}：${p.reason}`);
-                else if (p.ok) out.push(`成功 ${p.version}：common ${p.counts.common} / macos ${p.counts.macos}，新译 ${p.translated || 0}，未译 ${p.untranslated}`);
+                else if (p.ok) out.push(`成功 ${p.version}：common ${p.counts.common} / macos ${p.counts.macos}，新译 ${p.translated || 0}，无需翻译 ${p.echoed || 0}，未译 ${p.untranslated}`);
                 else out.push(`失败 ${p.version}：${p.reason}`);
               }
               console.log(out.join("\n"));

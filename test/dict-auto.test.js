@@ -120,6 +120,40 @@ test('buildCandidates：只收 jsx 为真的新增候选，字面量侧一律不
   assert.ok(!perPlatform.windows.has('PageDown'), '字面量侧候选不该进字典');
 });
 
+test('buildCandidates：形态已被历史键继承到译文的候选不进待译队列', () => {
+  // 实测 3.6.7 的 22 条候选里有 8 条属此类：源码写 Description、产物里是 description，
+  // 而历史键 Description 已经经大小写兜底把这形态占了。它们不该再问 AI——白花 tokens，
+  // 更要紧的是 AI 的译文会覆盖掉人工审过的那条（那次译文恰好相同才没显出问题）
+  const indexes = twoPlatforms(['description'], ['description']);
+  const history = new Map([['Description', '描述']]);
+  const jsxFound = new Map([
+    ['description', { source: 'ui/preferences.tsx', files: new Set(['main.js']), jsx: true }],
+  ]);
+
+  const { perPlatform, stats, pending } = dictAuto.buildCandidates({ indexes, history, jsxFound });
+
+  assert.strictEqual(pending.length, 0, '已有译文的形态不该进待译队列');
+  assert.strictEqual(stats.added, 0, 'added 的口径是「需要 AI 的形态数」');
+  assert.strictEqual(perPlatform.windows.get('description').zh, '描述', '继承来的译文要留住');
+  assert.strictEqual(perPlatform.macos.get('description').zh, '描述');
+});
+
+test('buildCandidates：两平台形态不同时，只有缺译文的那个平台进队列', () => {
+  // windows 产物里 Default branch 与 Default Branch 两个形态都在，历史键精确命中后者、
+  // 前者仍是官方新写的（没译文）；macOS 产物只有后者、已被历史键占住
+  const indexes = twoPlatforms(['Default branch', 'Default Branch'], ['Default Branch']);
+  const history = new Map([['Default Branch', '默认分支']]);
+  const jsxFound = new Map([
+    ['Default branch', { source: 'ui/preferences.tsx', files: new Set(['main.js']), jsx: true }],
+  ]);
+
+  const { perPlatform, pending } = dictAuto.buildCandidates({ indexes, history, jsxFound });
+
+  assert.strictEqual(pending.length, 1);
+  assert.deepStrictEqual(pending[0].targets, [{ platform: 'windows', key: 'Default branch' }]);
+  assert.strictEqual(perPlatform.macos.get('Default Branch').zh, '默认分支');
+});
+
 // ============================ toSegments：平台分段 ============================
 
 test('toSegments：Windows 产物里存在的形态归 common，macOS 独有才进 macos 段', () => {
@@ -192,4 +226,39 @@ test('rejectReason：逗号与星号等非花括号符号不当占位符', () =>
   // 只在花括号与 ${} 上校验；把 %, * 也算进去会误杀大量正常译文
   assert.strictEqual(dictAuto.rejectReason('Open %s now', '立即打开 %s'), null);
   assert.strictEqual(dictAuto.rejectReason('*.md 文件', 'Markdown 文件'), null);
+});
+
+// ============================ AI 请求参数与「无需翻译」分流 ============================
+
+test('resolveTimeout：秒转毫秒，未给则用默认值', () => {
+  assert.strictEqual(dictAuto.resolveTimeout('1200'), 1200000);
+  assert.strictEqual(dictAuto.resolveTimeout(60), 60000);
+  // 环境变量为空串（没设）与 undefined 是同一件事：用默认
+  assert.strictEqual(dictAuto.resolveTimeout(''), dictAuto.AI_TIMEOUT);
+  assert.strictEqual(dictAuto.resolveTimeout(undefined), dictAuto.AI_TIMEOUT);
+});
+
+test('resolveTimeout：非法值报错，不静默退回默认', () => {
+  // 静默退回的症状是「每批都超时，但日志里明明写着设了 1200 秒」——比直接失败难查得多
+  for (const bad of ['abc', '0', '-5', 'NaN']) {
+    assert.throws(() => dictAuto.resolveTimeout(bad), /正数秒/, `${bad} 应被拒`);
+  }
+});
+
+test('isEcho：AI 原样返回判为无需翻译', () => {
+  // 实测 3.6.7 新增候选里 10/22 是这类：域名、品牌名、仓库路径。SYSTEM_PROMPT 第 7 条
+  // 要求的正是原样返回，判成「未译」会让整个版本因超门槛而产不出来（实测踩到过）
+  for (const t of ['github.com', 'GitHub Desktop', 'GitHub Enterprise', 'anthropic', 'hubot/cool-repo', '.gitignore']) {
+    assert.ok(dictAuto.isEcho(t, t), `${t} 原样返回应判为无需翻译`);
+  }
+  // 产物里同一条文案常带前导空格（JSX 片段），AI 返回时去掉了——不该因此算失败
+  assert.ok(dictAuto.isEcho(' GitHub.com', 'GitHub.com'));
+});
+
+test('isEcho：译文不同、为空或非字符串时都不算原样返回', () => {
+  assert.ok(!dictAuto.isEcho('Open Repository', '打开仓库'));
+  assert.ok(!dictAuto.isEcho('Open Repository', ''));
+  assert.ok(!dictAuto.isEcho('Open Repository', undefined), 'AI 漏回这条 → 走重试，不能当成功');
+  // 大小写不同的「返回」不是原样返回：官方文案的书写变体多数是内容变化，得由校验判
+  assert.ok(!dictAuto.isEcho('GitHub desktop', 'GitHub Desktop'));
 });

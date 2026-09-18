@@ -40,6 +40,10 @@ const net = require('./net');
 // 连坐的条目多、且模型注意力分散后更容易漏占位符。
 const BATCH_SIZE = 20;
 // 单次请求的超时。翻译一批几十秒很正常，用 net.js 默认的 20 秒会必然超时。
+//
+// 这是**默认值**，可用 AI_TIMEOUT_SEC 环境变量（或 --ai-timeout）覆盖：推理模型的耗时随思考
+// 强度非线性增长——实测 deepseek-v4-flash 回答一个简单问题，默认档 10 秒 / 思考 0.5k tokens，
+// 最高档 97 秒 / 思考 12k tokens（约 23 倍）。要开高思考强度就必须同步放大这个值。
 const AI_TIMEOUT = 120000;
 // 逐条重试之间的间隔，避免失败时把接口打爆
 const RETRY_DELAY = 500;
@@ -65,7 +69,7 @@ function parseArgs(argv) {
   const args = {
     version: null, arch: 'x64', work: null, report: null,
     dryRun: false, noAi: false, reuse: false,
-    aiBase: null, aiKey: null, aiModel: null, token: null,
+    aiBase: null, aiKey: null, aiModel: null, aiEffort: null, aiTimeout: null, token: null,
   };
   for (let i = 2; i < argv.length; i++) {
     const a = argv[i];
@@ -76,6 +80,8 @@ function parseArgs(argv) {
     else if (a === '--ai-base') args.aiBase = argv[++i];
     else if (a === '--ai-key') args.aiKey = argv[++i];
     else if (a === '--ai-model') args.aiModel = argv[++i];
+    else if (a === '--ai-effort') args.aiEffort = argv[++i];
+    else if (a === '--ai-timeout') args.aiTimeout = argv[++i];
     else if (a === '--token') args.token = argv[++i];
     else if (a === '--dry-run') args.dryRun = true;
     else if (a === '--no-ai') args.noAi = true;
@@ -105,10 +111,18 @@ function printHelp() {
   --ai-base <URL>    OpenAI 兼容接口的 base url（默认取环境变量 AI_BASE_URL）
   --ai-key <密钥>    接口密钥（默认取 AI_API_KEY）
   --ai-model <模型>  模型名（默认取 AI_MODEL）
+  --ai-effort <档位> 思考强度（reasoning_effort，如 low / medium / high / max；不传用接口默认）
+  --ai-timeout <秒>  单次请求超时秒数（默认 120；高思考强度要放大，见下方说明）
   --token <令牌>     GitHub API 令牌，仅用于提高取版本号时的速率上限
   -h, --help         显示本帮助
 
-环境变量：AI_BASE_URL / AI_API_KEY / AI_MODEL 提供默认值，命令行参数优先。`);
+环境变量：AI_BASE_URL / AI_API_KEY / AI_MODEL / AI_REASONING_EFFORT / AI_TIMEOUT_SEC
+提供默认值，命令行参数优先。
+
+思考强度：推理模型的耗时随思考强度非线性增长——实测 deepseek-v4-flash 回答同一个简单问题，
+默认档 10 秒（0.5k 思考 tokens）、max 档 97 秒（12k 思考 tokens）。开高思考强度时务必同步
+放大 --ai-timeout，否则每批都会超时并退化成逐条重试（更慢、请求数还翻倍）。
+本参数原样透传给接口、不校验取值——不同网关认的档位不同，服务端不认识的值会被忽略或报错。`);
 }
 
 // ============================ 目标版本 ============================
@@ -240,25 +254,32 @@ function buildCandidates({ indexes, history, jsxFound }) {
   // ② JSX 文本节点：官方在元素里新写的显示文案。字面量侧的候选一律不收（理由见文件头）。
   // 同一个文本在两平台的形态可能不同（Title Case vs sentence case），按真实形态各立一条待译，
   // 译文分别贴合各平台的书写惯例。
+  //
+  // 只收「该形态还没有译文」的：候选的文本可能与某条历史键只差大小写，而那条形态早已由
+  // ① 继承到了译文。这类不该进待译队列——既白花 tokens，更要紧的是 AI 的译文会覆盖掉人工
+  // 审过的那一条（实测 3.6.7 的候选由 22 条降到 20 条，即拦下 2 条这类重复请求；那次译文
+  // 恰好相同，才没显出问题）。
   const byForm = new Map();
   for (const [text, info] of jsxFound) {
     if (!info.jsx || history.has(text)) continue;
-    let alive = false;
     for (const p of PLATFORMS) {
       const r = resolveIn(indexes[p], text);
       if (!r) continue;
-      alive = true;
+      const slot = perPlatform[p].get(r.text);
+      if (slot && typeof slot.zh === 'string') continue;
       let item = byForm.get(r.text);
       if (!item) {
         item = { text: r.text, source: info.source, targets: [] };
         byForm.set(r.text, item);
         pending.push(item);
       }
-      if (!perPlatform[p].has(r.text)) perPlatform[p].set(r.text, { zh: null, item });
+      if (!slot) perPlatform[p].set(r.text, { zh: null, item });
       item.targets.push({ platform: p, key: r.text });
     }
-    if (alive) stats.added++;
   }
+  // added 的口径是「需要 AI 的形态数」，与 translated + echoed + untranslated 对齐；
+  // 被 ① 覆盖掉的候选不算新增——它们的形态在产物里早已存在，只是官方改了大小写
+  stats.added = pending.length;
 
   return { perPlatform, stats, pending, dropped };
 }
@@ -291,6 +312,17 @@ function toSegments(perPlatform, winExact) {
 
 // ============================ AI 翻译 ============================
 
+// --ai-timeout / AI_TIMEOUT_SEC 的解析：秒 → 毫秒。给了非法值就报错，不静默退回默认——
+// 「以为设成了 1200 秒、实际还是 120 秒」的症状是每批都超时，从日志里看不出原因。
+function resolveTimeout(spec, fallback = AI_TIMEOUT) {
+  if (spec === undefined || spec === null || spec === '') return fallback;
+  const sec = Number(spec);
+  if (!Number.isFinite(sec) || sec <= 0) {
+    throw new Error(`AI 超时得是正数秒，收到 ${JSON.stringify(spec)}`);
+  }
+  return Math.round(sec * 1000);
+}
+
 const SYSTEM_PROMPT = `你是 GitHub Desktop 中文汉化字典的译者。用户给你一批界面文案，你返回它们的简体中文译文。
 
 硬性要求：
@@ -305,8 +337,8 @@ const SYSTEM_PROMPT = `你是 GitHub Desktop 中文汉化字典的译者。用�
 const PLACEHOLDER = /\{\{[^{}]*\}\}|\{[^{}]*\}|\$\{[^{}]*\}/g;
 const placeholdersOf = (s) => (s.match(PLACEHOLDER) || []).sort().join(' ');
 
-// 译文的横向校验。拦两类会真正改坏界面的问题：占位符缺失或多出、压根没译。
-// 不做「必须与原文不同」这类判断——专有名词原样返回由 CJK 判据兜住。
+// 译文的横向校验。拦两类会真正改坏界面的问题：占位符缺失或多出、以及返回了内容却没有一个汉字。
+// 「AI 原样返回」不归这里判——那是合法结论，由 isEcho 分流（见下）。
 function rejectReason(src, zh) {
   if (typeof zh !== 'string' || !zh.trim()) return '译文为空';
   const want = placeholdersOf(src);
@@ -316,6 +348,20 @@ function rejectReason(src, zh) {
   }
   if (!CJK.test(zh)) return `译文里没有中文：${JSON.stringify(zh)}`;
   return null;
+}
+
+// 「AI 原样返回」＝它判定这条无需翻译，而不是它没干活。候选里混着域名（github.com）、
+// 仓库路径（hubot/cool-repo）、品牌名（GitHub Desktop、Anthropic），SYSTEM_PROMPT 第 7 条
+// 正是要求这类原样返回。**这类条目不写进字典**：写了就是「原文 → 原文」，没有替换效果，
+// 还会让 validate 一直提示「疑似漏译」。
+//
+// 代价是它们每个版本都会作为新增候选重新问一次 AI（多花几条 tokens）。不为此另建持久清单——
+// 那要往字典里加一个新段与一套读写的迁移，收益只是省几条 tokens。
+//
+// 与「AI 偷懒把该译的也原样返回」在数据上区分不了，故：这些条目全部记进报告的 echoedRows，
+// 数量与清单在日志和 CI 汇总里可见；干跑命中率与人工抽查是它剩下的防线。
+function isEcho(src, zh) {
+  return typeof zh === 'string' && zh.trim() === src.trim();
 }
 
 // 从历史字典抽风格示例。刻意挑含 & / 占位符 / 末尾省略号的条目——AI 最容易在这三类上走样，
@@ -357,8 +403,10 @@ async function translateBatch(items, cfg) {
       },
     ],
   };
+  // 只在明确给了档位时才带上：不传即接口默认，传空串会被部分网关判成非法取值
+  if (cfg.effort) body.reasoning_effort = cfg.effort;
   const { status, data } = await net.postJson(`${cfg.base}/chat/completions`, body, {
-    timeout: AI_TIMEOUT,
+    timeout: cfg.timeout,
     headers: { authorization: `Bearer ${cfg.key}` },
   });
   if (status < 200 || status >= 300) {
@@ -381,24 +429,30 @@ async function translateBatch(items, cfg) {
   }
 }
 
-// 翻一批，逐条校验；不通过的收回重试队列
+// 翻一批，逐条校验；原样返回的收进 echoed，其余不通过的收回重试队列
 async function attempt(items, cfg) {
   const raw = await translateBatch(items, cfg);
   const done = new Map();
+  const echoed = [];
   const retry = [];
   for (const [i, item] of items.entries()) {
     const zh = raw[String(i + 1)];
+    if (isEcho(item.text, zh)) {
+      echoed.push(item);
+      continue;
+    }
     const bad = rejectReason(item.text, zh);
     if (bad) retry.push({ ...item, reason: bad });
     else done.set(item, zh);
   }
-  return { done, retry };
+  return { done, retry, echoed };
 }
 
-// 批量翻译 + 失败逐条重试。返回 { done: Map<待译条目, 译文>, failed }。
+// 批量翻译 + 失败逐条重试。返回 { done, failed, echoed }。
 // 批次整体失败（网络、鉴权、模型没按格式回）时降级为逐条——一条坏输出不该连坐同批另外十九条。
 async function translateAll(candidates, cfg, log) {
   const done = new Map();
+  const echoed = [];
   const failed = [];
   for (let i = 0; i < candidates.length; i += BATCH_SIZE) {
     const batch = candidates.slice(i, i + BATCH_SIZE);
@@ -407,15 +461,23 @@ async function translateAll(candidates, cfg, log) {
       r = await attempt(batch, cfg);
     } catch (e) {
       log(`  第 ${i / BATCH_SIZE + 1} 批（${batch.length} 条）失败：${e.message}——改为逐条重试`);
-      r = { done: new Map(), retry: batch.map((it) => ({ ...it, reason: e.message })) };
+      r = { done: new Map(), retry: batch.map((it) => ({ ...it, reason: e.message })), echoed: [] };
     }
     for (const [item, zh] of r.done) done.set(item, zh);
+    echoed.push(...r.echoed);
 
     let restored = 0;
+    let retryEchoed = 0;
     for (const item of r.retry) {
       await sleep(RETRY_DELAY);
       try {
         const one = await attempt([item], cfg);
+        // 单条重问时被判无需翻译——重试路径也得认这个结论，否则它会一直失败下去
+        if (one.echoed.length) {
+          echoed.push(item);
+          retryEchoed++;
+          continue;
+        }
         const hit = [...one.done][0];
         if (hit) {
           done.set(item, hit[1]);
@@ -429,10 +491,13 @@ async function translateAll(candidates, cfg, log) {
       failed.push(item);
     }
     if (r.retry.length) {
-      log(`  逐条重试 ${r.retry.length} 条：补回 ${restored} 条，仍失败 ${r.retry.length - restored} 条`);
+      log(
+        `  逐条重试 ${r.retry.length} 条：补回 ${restored} 条，判为无需翻译 ${retryEchoed} 条，` +
+          `仍失败 ${r.retry.length - restored - retryEchoed} 条`
+      );
     }
   }
-  return { done, failed };
+  return { done, failed, echoed };
 }
 
 // ============================ 干跑校验 ============================
@@ -544,6 +609,7 @@ async function buildOne(version, args, log) {
     dropped: stats.dropped,
     added: stats.added,
     untranslated: 0,
+    echoed: 0,
   };
 
   log('4/7 AI 翻译新增条目');
@@ -561,16 +627,31 @@ async function buildOne(version, args, log) {
           '需要翻译但没有 AI 配置：请设置 AI_BASE_URL / AI_API_KEY / AI_MODEL 环境变量，或用 --no-ai 只做继承'
         );
       }
-      const cfg = { base, key, model, examples: buildExamples(table) };
-      log(`  接口 ${base}，模型 ${model}，风格示例 ${cfg.examples.length} 条`);
-      const { done, failed } = await translateAll(pending, cfg, log);
+      const effort = args.aiEffort || process.env.AI_REASONING_EFFORT || '';
+      const timeout = resolveTimeout(args.aiTimeout || process.env.AI_TIMEOUT_SEC);
+      const cfg = { base, key, model, effort, timeout, examples: buildExamples(table) };
+      log(
+        `  接口 ${base}，模型 ${model}${effort ? `，思考强度 ${effort}` : ''}` +
+          `，超时 ${timeout / 1000}s，风格示例 ${cfg.examples.length} 条`
+      );
+      const { done, failed, echoed } = await translateAll(pending, cfg, log);
       for (const [item, zh] of done) {
         for (const t of item.targets) perPlatform[t.platform].set(t.key, { zh });
       }
       report.translated = done.size;
+      // 译出的条目连译文一起进报告：这是人工复核 AI 译文的唯一依据（日志只打总数），
+      // 也是排查「某条译文怎么变成这样了」时唯一能回溯到的东西
+      report.translatedRows = [...done].map(([item, zh]) => ({ text: item.text, zh }));
       report.untranslated = failed.length;
       report.untranslatedRows = failed.map((it) => ({ text: it.text, reason: it.reason }));
-      log(`  译出 ${done.size} 条；未译 ${failed.length} 条`);
+      // 无需翻译的条目单列：它们既不算译出也不算未译，但要留痕——AI 若成片原样返回，
+      // 这里就是唯一能看出来「它是在偷懒还是在正确地放过专有名词」的地方
+      report.echoed = echoed.length;
+      report.echoedRows = echoed.map((it) => it.text);
+      log(
+        `  译出 ${done.size} 条；无需翻译 ${echoed.length} 条${echoed.length ? `（${echoed.map((it) => it.text).join('、')}）` : ''}；` +
+          `未译 ${failed.length} 条`
+      );
     }
     // 未译比例超过上限，说明 AI 链路整体不可用而不是个别条目译不出来。
     // --no-ai 是「明说这次不译」，不适用该门槛。
@@ -738,7 +819,8 @@ function writeReport(file, data) {
 module.exports = {
   main, buildOne, resolveVersions, inheritTable, literalIndex, resolveIn,
   buildCandidates, toSegments, dryRunPlatform, buildExamples, rejectReason, placeholdersOf,
-  BATCH_SIZE, MIN_HIT_RATE, MAX_UNTRANSLATED_RATE,
+  resolveTimeout, isEcho,
+  BATCH_SIZE, AI_TIMEOUT, MIN_HIT_RATE, MAX_UNTRANSLATED_RATE,
 };
 
 if (require.main === module) main();
