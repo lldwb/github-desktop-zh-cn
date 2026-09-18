@@ -118,6 +118,7 @@ node build/tools/check-naming.cjs              # pickAsset 只挑 cli 产物（�
 - **版本错配打不开应用**：字典与目标版本不一致时替换结果不可控，`patch` 前必须先校验版本。
 - **原地替换不回调**：`patch` 不会把已删条目的旧译文从产物里退出。字典条目有删除或修改时，必须 `npm run restore` + `npm run patch` 重打，否则产物里残留的失效译文继续生效（实例：HTTP 头名 `Link` 被译成中文后 `headers.get` 抛 `non ISO-8859-1 code point`，Issues / PR 拉取全挂）。
 - **字典范围与匹配**：收录界面文本（含读屏 / 命令行 / 报错，不含不可见日志）；整串匹配——普通键对应字符串字面量或模板文本段，整模板键对应完整模板源码；大小写敏感。**共用字面量**（英文词同时被非界面逻辑复用，如 `"Commit"` 兼作议题关闭关键词与拖拽枚举值）不能整串替换，只能整模板覆盖外层模板或保持英文。
+- **`scan` 的候选有长度盲区（默认阈值 8，且按 `trim` 后长度算）**：`scan` 提取候选后执行 `if (!c || c.length < args.minLength) return;`（`c` 为「空白折叠 + `trim`」后的文本），**被滤掉的候选不出现在输出里、也不报告过滤了多少条**，极易误判成「该文案不在产物中 / 不可译」。实例（3.6.6 补译）：用户截图指认的 `Pulling origin` 对应字面量 `"Pulling "` 带尾随空格，`trim` 后仅 7 字符直接被丢弃，而同批的 `"Pushing to "` 10 字符正常出现——两者在扫描结果里有与没有的差别只来自阈值。**指认的短文案扫不出来时，先放宽阈值再下结论**：`npm run scan -- --out tmp/scan.txt --min-length 4`（npm 会吞掉 `--out`，必须用 `--` 分隔）。
 - **译文破坏功能的真实事故（3.6.5 实测，别再犯）**：
   - **git 进度标题被译**：`steps=[{title:"Checking out files",weight:…}]` 的 `title` 参与 `n.title===t.title` 匹配 git 的原始输出，译了进度条百分比不再更新。同批的 `"Receiving objects"` / `"Resolving deltas"` / `"Compressing objects"` / `"Writing objects"` 同理，全部保持英文。
   - **数组元素被译**：`-1===["Syntax","Type","Range"].indexOf(t)` 里的 `"Type"` 译成中文后 `indexOf` 恒为 -1，条件与方法原文左右反转（re2js 库内部，错误类型表全乱）。因整串替换分不开该字面量的另一处表单 label，`"Type"` 只能整体保持英文。
