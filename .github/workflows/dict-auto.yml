@@ -19,14 +19,17 @@
 # 分支保护规则下的推送限制。注意提交到 main **不会**触发 build.yml——它只认 v* tag 与手动触发，
 # 所以不存在「字典更新 → 重新构建 → 再更新字典」的回环。
 #
-# 翻译走 OpenAI 兼容接口，Secrets 三个：AI_BASE_URL / AI_API_KEY / AI_MODEL。
-# 另有两个**仓库变量**（Variables，不是 Secret——它们不敏感）：AI_REASONING_EFFORT 传思考
-# 强度、AI_TIMEOUT_SEC 传单次请求超时秒数。**都不设就走脚本默认（low / 120 秒）**——批量
-# 翻译界面短句用不上深度推理，最低档的思考量约为最高档的 1/6、耗时差一个数量级。要开高思考
-# 强度（如 max）时务必同步放大超时：推理模型的耗时随思考强度非线性增长，实测同一个简单问题
-# 不传该字段 10 秒、max 档 97 秒，不放大超时的话每批都会超时并退化成逐条重试（更慢，请求数
-# 还翻倍）。
-# **没配 AI_API_KEY 就直接失败**，不降级成「只继承不新译」——残缺字典一旦落盘，下次重跑会因
+# 翻译走 OpenAI 兼容接口，五项配置按「公开仓库里谁能看见」分两处放：
+#   Secrets（加密、日志自动脱敏成 ***、写入后不可读回）：AI_API_KEY 是凭据本身；
+#     AI_BASE_URL 指向自建网关——公开仓库的 Actions 日志人人可看，写进去等于把地址公之于众。
+#   Variables（明文、对任何人可见、日志原样打印）：AI_MODEL 只是模型名，加上
+#     AI_REASONING_EFFORT（思考强度）与 AI_TIMEOUT_SEC（单次请求超时秒数）。放这里换的是
+#     「排查时看得见」——日志里能看到本次用的哪个模型、参数有没有生效，而 Secret 只显示 ***。
+# **后两个不设就走脚本默认（low / 120 秒）**——批量翻译界面短句用不上深度推理，最低档的
+# 思考量约为最高档的 1/6、耗时差一个数量级。要开高思考强度（如 max）时务必同步放大超时：
+# 推理模型的耗时随思考强度非线性增长，实测同一个简单问题不传该字段 10 秒、max 档 97 秒，
+# 不放大超时的话每批都会超时并退化成逐条重试（更慢，请求数还翻倍）。
+# **配置不全就直接失败**（三项必配），不降级成「只继承不新译」——残缺字典一旦落盘，下次重跑会因
 # 「已有字典」跳过，把残缺永久固化下来（脚本内部的「失败即删」防的也是这件事）。
 # 需要离线排查时用本地 `node scripts/dict-auto.js --no-ai`。
 
@@ -68,14 +71,17 @@ jobs:
         env:
           AI_API_KEY: ${{ secrets.AI_API_KEY }}
           AI_BASE_URL: ${{ secrets.AI_BASE_URL }}
-          AI_MODEL: ${{ secrets.AI_MODEL }}
+          AI_MODEL: ${{ vars.AI_MODEL }}
           AI_REASONING_EFFORT: ${{ vars.AI_REASONING_EFFORT }}
           AI_TIMEOUT_SEC: ${{ vars.AI_TIMEOUT_SEC }}
         run: |
-          if [ -z "$AI_API_KEY" ]; then
-            echo "::error::未配置 AI_API_KEY secret。自动产出必须能翻译官方新增文案——配置方法见 docs/dict-v2/design.md「CI 定时字典」一节"
+          # 三项都得配，且分处两页：AI_BASE_URL / AI_API_KEY 在 Secrets，AI_MODEL 在 Variables。
+          # 只差 AI_MODEL 时症状是跑到翻译那步才报「需要翻译但没有 AI 配置」，不如在这里就说清
+          if [ -z "$AI_API_KEY" ] || [ -z "$AI_BASE_URL" ] || [ -z "$AI_MODEL" ]; then
+            echo "::error::翻译服务配置不全——自动产出必须能翻译官方新增文案，不能降级成只继承。三项必配：AI_BASE_URL、AI_API_KEY 在 Secrets 页，AI_MODEL 在 Variables 页（两处不在同一个地方，容易漏）。配置方法见 docs/dict-v2/design.md「CI 定时字典」一节"
             exit 1
           fi
+          # AI_BASE_URL 是 Secret，这里会显示成 *** 而不是地址——那是脱敏，不是没配上
           echo "翻译服务：${AI_BASE_URL:-（默认）} / 模型 ${AI_MODEL:-（默认）} / 思考强度 ${AI_REASONING_EFFORT:-low（脚本默认）} / 单次超时 ${AI_TIMEOUT_SEC:-120（脚本默认）} 秒"
 
       - uses: actions/checkout@v7
@@ -98,8 +104,9 @@ jobs:
           IN_DRY_RUN: ${{ inputs.dry_run }}
           AI_BASE_URL: ${{ secrets.AI_BASE_URL }}
           AI_API_KEY: ${{ secrets.AI_API_KEY }}
-          AI_MODEL: ${{ secrets.AI_MODEL }}
-          # 仓库变量而非 Secrets——它们不是敏感信息。未设置时展开为空串，脚本按默认处理
+          AI_MODEL: ${{ vars.AI_MODEL }}
+          # Variables 而非 Secrets——模型名与这两个参数不暴露基础设施信息，且日志里看得见。
+          # 未设置时展开为空串，脚本按默认处理
           AI_REASONING_EFFORT: ${{ vars.AI_REASONING_EFFORT }}
           AI_TIMEOUT_SEC: ${{ vars.AI_TIMEOUT_SEC }}
           # 读官方 Release 是公开数据，用内置 token 只为提高 API 速率限制

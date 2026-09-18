@@ -70,7 +70,7 @@
       ——`release-assets.js` 的 `fetchApp()`，走 HTTP Range 只取 `app/` 下几个文件（不下载整包），落成 `<work>/<版本>/<平台>-<arch>/app/`；`--reuse` 复用已有目录，便于反复调试同一版本
 - [x] 继承逻辑：同键直接复用上一版译文；统计继承数与新增数并打印
       ——`inheritTable()` 版本降序合并、同键先见者胜（新版本译文优先），坏字典跳过不报错；再逐条核对新产物：`resolveIn()` 先试精确形态、再退到「只差大小写」的形态（官方把 `Copy file path` 改成 `Copy File Path` 这类微调不该让译文丢掉）。实测 3.6.7 上 **1963 条历史键零丢失**，其中 277 条官方改了大小写
-- [x] AI 翻译：OpenAI 兼容协议，Secrets 为 `AI_BASE_URL` / `AI_API_KEY` / `AI_MODEL`；失败时按条目重试并记录未译条目
+- [x] AI 翻译：OpenAI 兼容协议，`AI_BASE_URL` / `AI_API_KEY` 走 Secrets、`AI_MODEL` 走仓库变量（判据见 design.md 第 5 节）；失败时按条目重试并记录未译条目
       ——`translateBatch()` 每批 20 条、失败重试 2 次、单次超时默认 120 s（`AI_TIMEOUT_SEC` / `--ai-timeout` 覆盖）；思考强度默认 **low**（`AI_REASONING_EFFORT` / `--ai-effort` 覆盖，给 `none` 表示不带该字段、退回接口自己的默认档），原样透传成请求体的 `reasoning_effort`、不校验取值（各网关认的档位不同，服务端不认识的值会被忽略或报错）。默认取最低档的理由与验证方式见 6.2 节。译文过 `rejectReason()`（占位符集合一致 + 必须含 CJK 字符），不合格的计未译并记原因。**已用真实服务实测**（全流程跑通），取证明细见 6.2 节
 - [x] 准入门槛：`dict-edit validate` 通过 + 产物干跑（语法校验 + 命中率阈值）通过，才允许提交；不通过则开 issue 并保留产物
       ——门槛实现在 `dict-auto.js` 内（`--report` 出 JSON，workflow 只负责看退出码），比放在 workflow 里更早失败、也便于本地复现。**「开 issue」未做**：schedule 失败 GitHub 默认就给仓库所有者发通知，开 issue 是重复；改为 job 失败 + `::error::` 注解。**「保留产物」与本组「失败即删字典」不冲突**——删的是**产出的字典**（否则下次重跑会因「已有字典」跳过、把失败产出永久固化），官方产物本就在 `tmp/` 下、不在删除范围
