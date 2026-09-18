@@ -28,6 +28,16 @@
 # v0.1.0 / v0.1.1 的两次修复就是栽在这条上：步骤 exit 1 却没有任何 ::error:: 注解，
 # 因为出错的那行是我手拼的 tag 形式 PATCH。本文件里每个控制面命令都包了错误输出。
 #
+# **别在 checkout 之前往工作区落盘**：工作区目录本来就存在（runner 建好的）而里面还没有 `.git`，
+# 于是 actions/checkout 走的是 prepareExistingDirectory 的 remove 分支——「Deleting the contents
+# of '<工作区>'」，把整个目录清空重建。上一版在「校验输入」那步 `| tee prev-latest.txt`，
+# 几步之后 `sed` 读不到这个文件、退出码 2、bash -e 闷声退出且一条注解都没有——于是出现
+# 「Release 明明发布成功了，流程却报失败」这种最难查的状态。要跨步骤传文件就放在 checkout
+# 之后；能用现算解决的（Latest 的归属）就别传文件。
+#
+# 三个 run 块都装了 ERR trap：意外失败会留下一条**带行号**的 ::error:: 注解（注解匿名可读，
+# job 日志则要仓库权限），被 `if` / `||` 明确接住的失败不触发它。
+#
 # 兜底：备份在删之前先传成 Artifacts（`release-backup-<tag>`，留 30 天）。万一回传失败，
 # 附件字节还在——重跑 `restore-release` 即可续传。同理，若上一次修复删了却没建回来
 # （该 tag 眼下没有 Release），也这么重跑：备份步骤认「没有现网 Release」这条路，
@@ -92,7 +102,14 @@ jobs:
             echo "::error::tag 形如 v0.2.0（收到：$TAG）"
             exit 1
           fi
-          echo "当前 Latest：$(gh api "repos/$GH_REPO/releases/latest" --jq .tag_name 2>/dev/null || echo 无)" | tee prev-latest.txt
+          # **这一步在 checkout 之前跑，别在这里落盘任何后面要读的文件。**
+          # 工作区目录本来就存在（runner 建好的）而里面还没有 .git，于是 actions/checkout 会走
+          # prepareExistingDirectory 的 remove 分支——「Deleting the contents of '<工作区>'」，
+          # 把整个目录清空重建。本流程栽过：上一版在这里 `| tee prev-latest.txt`，下面那步
+          # `sed` 读不到文件、退出码 2，bash -e 闷声退出、连一条 ::error:: 注解都没有，
+          # v0.1.0 / v0.1.1 两次修复就是这么「发布成功了却报失败」的。要跨步骤传文件就得放在
+          # checkout 之后；能用「现算」解决的（如 Latest 的归属）就别传文件。
+          echo "当前 Latest：$(gh api "repos/$GH_REPO/releases/latest" --jq .tag_name 2>/dev/null || echo 无)"
 
       # 仓库工作区：只为两件事——gh 在有 git 仓库的目录里跑（与 build.yml 一致），
       # 以及「现网 Release 已不在」时用 CHANGELOG.md 现生成正文
@@ -107,6 +124,10 @@ jobs:
           RELEASE_TOKEN: ${{ secrets.RELEASE_TOKEN }}
           BACKUP_RUN_ID: ${{ inputs.backup_run_id }}
         run: |
+          # 意外失败时留一条带行号的注解：bash -e 默认闷声退出，而 job 日志要仓库权限才读得到、
+          # 注解匿名可读（见 AGENTS.md「发版」）。被 if / || 明确接住的失败不触发它。
+          set -E
+          trap 'echo "::error::第 $LINENO 行意外失败（退出码 $?）——在上面这个步骤的日志里看这一行的上下文"' ERR
           mkdir -p backup
           # 查现网有没有这个 Release **用 PAT**（作者本人的身份）：草稿的可见性有边界，
           # 查漏了会让流程误以为「没有 Release」而去新建，撞 already_exists 白跑一趟。
@@ -237,6 +258,11 @@ jobs:
           RELEASE_TOKEN: ${{ secrets.RELEASE_TOKEN }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
+          # 意外失败时留一条带行号的注解：bash -e 默认闷声退出，而 job 日志要仓库权限才读得到、
+          # 注解匿名可读（见 AGENTS.md「发版」）。v0.1.0 / v0.1.1 两次失败只留下「exit code 1/2」
+          # 一行字，就是缺了它。被 if / || 明确接住的失败不触发。
+          set -E
+          trap 'echo "::error::第 $LINENO 行意外失败（退出码 $?）——在上面这个步骤的日志里看这一行的上下文"' ERR
           if [ -z "$RELEASE_TOKEN" ]; then
             echo "::error::未配置 RELEASE_TOKEN secret——署名要落到作者本人就得用它，配置方法见 AGENTS.md「发版」一节"
             exit 1
@@ -366,18 +392,25 @@ jobs:
           fi
 
           # Latest 归属：草稿转正会把 Latest 抢过来（文档：make_latest 默认 true，
-          #「Defaults to true for newly published releases」），把原来那个还回去。
-          # 改 Release 只能走数字 id：id 用 tags/<tag> 查得到，PATCH 认的是 id。
-          prev_latest="$(sed 's/^当前 Latest：//' prev-latest.txt)"
+          #「Defaults to true for newly published releases」），得把该在的那个放回去。
+          #
+          # 这里**不记忆「原来是谁」**，而是按版本号现算——两条原因：
+          #   1) 两次修复可以并发跑（并发组是按 tag 分的，v0.1.0 与 v0.1.1 实测相隔 11 秒同时发布），
+          #      记忆下来的「原来是哪个」会被另一次运行改掉；
+          #   2) 重建会把 published_at 重置成当下（API 没有回填字段），按时间也排不出先后。
+          # 于是取「版本号最大的那个正式 Release（非草稿、非预发布）」——这本来就是 GitHub 上
+          # 「Latest」一词的含义。tag 不是 vX.Y.Z 形状的不参与（预发布形如 -beta 的会被正则滤掉）。
+          want_latest="$(gh api "repos/$GH_REPO/releases?per_page=100" \
+            --jq '.[] | select((.draft | not) and (.prerelease | not)) | .tag_name' 2>/dev/null \
+            | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | sed 's/^v//' \
+            | sort -t. -k1,1n -k2,2n -k3,3n | tail -n 1 || true)"
+          if [ -n "$want_latest" ]; then want_latest="v$want_latest"; fi
           now_latest="$(gh api "repos/$GH_REPO/releases/latest" --jq .tag_name 2>/dev/null || true)"
-          if [ -n "$prev_latest" ] && [ "$prev_latest" != "$TAG" ] && [ "$prev_latest" != "无" ] && [ "$now_latest" = "$TAG" ]; then
-            echo "::warning::$TAG 被设成了 Latest（原本是 $prev_latest），改回去"
-            prev_id="$(gh api "repos/$GH_REPO/releases/tags/$prev_latest" --jq .id 2>/dev/null || true)"
-            if [ -n "$prev_id" ]; then
-              GH_TOKEN="$RELEASE_TOKEN" gh api -X PATCH "repos/$GH_REPO/releases/$prev_id" -f make_latest=true > /dev/null \
-                || echo "::warning::改回 Latest 失败，请在 Release 页面上手动把 $prev_latest 设为 latest"
-            else
-              echo "::warning::找不到 $prev_latest 的 Release（已被删？），Latest 暂留在 $TAG"
+          if [ -n "$want_latest" ] && [ "$want_latest" != "$now_latest" ]; then
+            echo "::warning::Latest 眼下是 ${now_latest:-无}，按版本号该是 $want_latest，改过去"
+            # gh release edit --latest 内部自己把 tag 换成数字 id——避开「PATCH 只认 id」那个坑
+            if ! out="$(GH_TOKEN="$RELEASE_TOKEN" gh release edit "$want_latest" --latest 2>&1)"; then
+              echo "::warning::改 Latest 失败（请在 Release 页面上手动把 $want_latest 设为 latest）：$(printf '%s' "$out" | tr '\n' ' ' | tail -c 200)"
             fi
           fi
           echo "已重建 $TAG：署名 $login，附件 $(gh api "repos/$GH_REPO/releases/tags/$TAG" --jq '.assets | length') 个，Latest 为 $(gh api "repos/$GH_REPO/releases/latest" --jq .tag_name 2>/dev/null || echo 无)"
@@ -388,6 +421,9 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           RELEASE_TOKEN: ${{ secrets.RELEASE_TOKEN }}
         run: |
+          # 意外失败时留一条带行号的注解（同上面两步的理由）
+          set -E
+          trap 'echo "::error::第 $LINENO 行意外失败（退出码 $?）——在上面这个步骤的日志里看这一行的上下文"' ERR
           # 查与删都用 PAT：草稿的可见性有边界，用内置 token 会把「有个草稿」看成「没有 Release」
           gh_view() { GH_TOKEN="${RELEASE_TOKEN:-$GH_TOKEN}" gh release view "$@"; }
           if ! gh_view "$TAG" > /dev/null 2>&1; then
