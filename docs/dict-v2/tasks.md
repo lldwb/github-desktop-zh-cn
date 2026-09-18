@@ -41,7 +41,7 @@
 - [x] 写产物提取模块：Range 取 zip 尾部窗口 → 解析中央目录 → 定位目标条目 → Range 取条目 → `inflateRaw` 解压
       ——落为 `scripts/release-assets.js`（`list` / `fetch` / `latest`），零依赖。**不处理 zip64**——官方产物最大 330 MB，够不着 4 GB 边界，真遇到说明打包方式变了，应当报错而非猜
 - [x] 用官方 `GitHub.Desktop-x64.zip` 实测提取出 `main.js` / `renderer.js`，与本地已有的 Windows 版做同源校验
-      ——提取成功（`tmp/release/3.6.6-beta2/macos-x64/app/`，main.js 239790 B / renderer.js 3179938 B）。**同源校验：webpack 模块标记数完全一致**（main.js 41/41、renderer.js 178/178），字面量 Jaccard 0.846 / 0.909，版本字面量各 22 处（Windows `3.6.6` / macOS `3.6.6-beta2`）。差异量（renderer.js 的 macOS 侧多 190 条字面量）与 Title Case 变体的预期吻合，是平台分叉而非来源不同
+      ——提取成功（`tmp/release/3.6.6-beta2/macos-x64/app/`，main.js 240065 B / renderer.js 3180504 B）。**同源校验：webpack 模块标记数完全一致**（main.js 41/41、renderer.js 178/178），字面量 Jaccard 0.846 / 0.909，版本字面量各 22 处（Windows `3.6.6` / macOS `3.6.6-beta2`）。差异量（renderer.js 的 macOS 侧多 190 条字面量）与 Title Case 变体的预期吻合，是平台分叉而非来源不同
 - [x] 对 macOS 产物跑 `scan`，得出 macOS 独有键集合，写进 `macos` 段（译文由继承 + AI 补齐，见第 6 组）
       ——**未走 `scan` 正式入口**：`scan.js` 有 `version !== app.version` 硬校验，beta 产物过不去（处置见「未完成项」）。改用等价做法：在 macOS 产物上跑一次替换，把仍未汉化的 label 按「归一化后 Windows 产物里有没有同文案」分类，得 56 条大小写变体 + macOS 专有文案。`macos` 段现 **96 条**（30 条 Windows 助记符键的 macOS 变体 + 18 条 macOS 专有文案 + 48 条 Title Case 菜单项），全部经 `dict-edit` 事务写入，译文一律继承 `common` 段同键、不新造。实测 macOS 产物 main.js 菜单 label 汉化 93/98、renderer.js label 汉化 164/175，Windows 侧条目数不变；三类差异与不可替换键清单见 `design.md` 第 4 节
 - [x] `linux` 段保持为空并在文档写明原因（官方无 Linux 产物）
@@ -112,9 +112,9 @@
 
 **release-notes 与 GitHub Releases 是两条不同步的线**：前者面向用户公布版本，后者才挂产物，正式版的 Release 对象比 notes 晚若干天（3.6.5：notes 09-03 / Release 09-04；3.6.4：notes 08-12 / Release 08-13，各约 1 天；3.6.6 至 09-19 已滞后 3 天以上）。
 
-**CI 不受影响，且 `latestVersion()` 的写法不该改**：它走 `/releases/latest`，语义是「**有产物可下的**最新正式版」——这正是需要的语义。若改成按 tag 取名，会拿到 `release-3.6.6`（无产物）、`release-3.6.7-test2`、`tmp-e2e-screenshots-21745` 这类取不到产物的 tag 而直接失败。故 CI 当前每次跑都停在「3.6.5 已有字典 → 跳过」，直到 3.6.6 的 Release 对象出现——届时目录已存在，仍是跳过，不会覆盖这份从 beta2 产出的字典。
+**CI 不受影响，且 `latestVersion()` 的写法不该改**：它走 `/releases/latest`，语义是「**有产物可下的**最新正式版」——这正是需要的语义。若改成按 tag 取名，会拿到 `release-3.6.6`（无产物）、`release-3.6.7-test2`、`tmp-e2e-screenshots-21745` 这类取不到产物的 tag 而直接失败。故 CI 当前每次跑都停在「3.6.5 已有字典 → 跳过」，直到 3.6.6 的 Release 对象出现——届时目录已存在，仍是跳过，不会覆盖这份已有字典（其真实产出源见 6.4）。
 
-**`dictionaries/3.6.6/` 从 beta2 产物产出仍然合理**（正式版产物根本取不到），版本号取的是不带 beta 后缀的 `3.6.6`。**结论本身不受影响**：AI 链路、候选口径、干跑比例依赖的是产物内容与字典键集，不依赖版本号这个标签。
+**`dictionaries/3.6.6/` 的产出源是正式版产物，不是 beta2**（2026-09-19 用官方安装包复核后修正，详见 6.4）。此前「正式版产物取不到、字典只能从 beta2 产出」的推断是错的——字典 `_meta` 记的「重建整模板键」用的是**本机安装的 3.6.6**，而本机那份与官方正式版产物**字节完全一致**。
 
 另注：产物版本号**会**被校验，只是校验得晚——`dict-groups.infer` 有「字典版本 ≠ 安装版本」硬校验，而它在第 7 步才被调用；`--reuse` 本身只查文件是否存在。手工往 `tmp/release/<版本>/` 放产物时（如本次实测把 `3.6.6-beta2` 的产物放进 `tmp/release/3.6.6/`），必须同步改写产物内 `package.json` 的 `version`，否则要到第 7 步才报错。
 
@@ -132,7 +132,7 @@
 
 **实测取证**（2026-09-19，本机走 7890 代理直连 GitHub 取真实产物，两平台都带 sourcemap）：
 
-1. **diff 端到端**（`--version 3.6.6 --on-exist diff --reuse`，接真实 AI 服务）：1/7→7/7 全通，继承 1963 条、译文变化 0、官方真删 17 条、新增 146 条；**跑完 `sha256` 与跑前逐字节一致**（`758a2357…`），`git status dictionaries/` 为空——「全程不写盘」有了硬证据。
+1. **diff 端到端**（`--version 3.6.6 --on-exist diff --reuse`，接真实 AI 服务）：1/7→7/7 全通，继承 1963 条、译文变化 0、新增 146 条（当时报的「删除 17 条」实为 beta2 的压缩变量名与字典形态不同所致，**不是官方删了文案**，详见 6.4）；**跑完 `sha256` 与跑前逐字节一致**（`758a2357…`），`git status dictionaries/` 为空——「全程不写盘」有了硬证据。
 2. **overwrite**：写入成功（`common` 1859 / `macos` 233、46 个组），原有译文逐条保住（`Repository` → 仓库、`Add Local Repository…` → 添加本地仓库…），`validate` 通过（仅 1 条「译文与原文相同」提示，非 error）。验完即用 `git checkout` 还原。
 3. **旧格式字典被提前拦下**：`--version 3.6.5 --on-exist diff` 在 **0.381 秒**内失败（此前要跑完下载 + 一轮 AI 才报，几分钟与 tokens 白烧），报告里也有完整的失败条目。
 
@@ -143,6 +143,45 @@
 3. **单版本异常会拖垮整轮**。异常从 `buildOne` 冒泡到 `main` 的 catch，该版本结果丢失（报告里 `reports` 为空）、后续版本全不跑——而 CI 的提交步骤正是靠「已成功的那些」产出内容的。**修法**：`main` 的循环里给 `buildOne` 包 try/catch，转成失败条目继续下一个。
 
 **一处待办**：`dictionaries/3.6.5/` 仍是 formatVersion 1 的扁平格式（1854 个顶层键），而 `inheritTable` 只遍历 `SEGMENT_NAMES` 各段——遇到它得 0 条。当前实际无害（3.6.6 是 2.0 且更新，版本降序合并时先命中，表已填满），但哪天它成为唯一可继承来源就会静默退化成「从零翻译」。要么 `dict-edit migrate 3.6.5`，要么让 `inheritTable` 兼容扁平格式（复用 `common.buildEntries` 的判定，别在两处各写一份格式判定）。
+
+### 6.4 正式版产物复核：与 beta2 差在哪，以及字典为什么不用重做
+
+**起因**：发布说明页显示 3.6.6 是 09-16 的正式版，但 GitHub Releases 上没有它的产物（6.2）。用户提供了本机安装包的副本，据此核实「现有字典是否需要基于正式版重做」。
+
+**本机安装的就是正式版**。从 Squirrel `Setup.exe` 与 macOS `GitHubDesktop-x64.zip` 提取出产物（`Setup.exe` 是双层 zip：外层自解压容器里套真正的 nupkg，且 EOCD 之后还跟着 157 KB 的 PE overlay，超出 zip 注释上限，尾部窗口搜不到 EOCD，须全文件扫 `PK\x05\x06`），与本机安装的 3.6.6 逐文件比 sha256（前 16 位）：
+
+| windows-x64 | 本机安装 | 官方正式版 | beta2 |
+|---|---|---|---|
+| `renderer.js` | `e05f7f3b…` 3166339 B | 同左 | `e41a09bd…` 3200974 B |
+| `main.js` | `ff9db9cb…` 242192 B | 同左 | `99f5104f…` 242278 B |
+
+正式版与 beta2 字节级都不同（renderer.js 差 ~34.6 KB），但**正式版这条线一直是通的**——此前「只能拿到 beta2」说的是 GitHub Releases 那条线，本机安装那条线从来没断过。
+
+**字典的整模板键形态与正式版一致、与 beta2 不同**：
+
+| 来源 | `changed file` 模板里的变量名 |
+|---|---|
+| 3.6.5 字典 | `GE` / `xU` |
+| **`dictionaries/3.6.6/`** | **`YE` / `OU`** |
+| beta2 产物 | `Sk` / `lW` |
+| 正式版产物 | `YE` / `OU` |
+
+3.6.5 是 `GE`/`xU`，说明 3.6.6 的整模板键不是继承来的，而是在某个产物上「重建」的（`_meta` 语）；重建出的形态与正式版一致，那个产物就是正式版。**这是「字典配正式版」的直接证据**，也修正了 6.2 原先「字典从 beta2 产出」的推断。
+
+**用正式版产物重跑 `--on-exist=diff`（真实 AI 调用）**：
+
+    新增 146 / 删除 0 / 译文变化 0 / 换段 0 / 组归属变化 0
+    续用旧译文 1963 条零丢失；官方已删除 0 条
+    干跑 windows：命中 2319 处，生效 1827/1858（98.3%），coveredByTemplate 31，missed 空
+    干跑 macos：命中 2261 处，生效 1750/1775（98.6%），coveredByTemplate 25，missed 空
+
+与 beta2 产物的同一跑相比，**唯一差异是「删除」17 → 0**：那 17 条全是整模板键，beta2 的压缩变量名与正式版不同，字典里存的形态在 beta2 产物里找不到，于是被判为「已删除」——**不是 beta2 少了文案**。若当时走了 `overwrite` 而非 `diff`，反而会把 17 条整模板键改写成 beta2 的变量名，破坏与正式版的匹配（`diff` 全程不写盘的价值正在此，见 6.3）。
+
+**结论：`dictionaries/3.6.6/` 无需基于正式版重做**——它本来就是从正式版产出的，与正式版产物零冲突、双平台零遗漏（`missed` 为空）。
+
+**顺带查明的独立缺口，已补齐**：那 146 条「新增」**不是版本差异**（beta2 与正式版跑出来都是 146），而是字典自身的缺口——145 条是同一文案的另一种书写形态（`description` vs 已有的 `Description`、`renderer.js|Not Now` vs 已有的 `Not Now`、` Alias` vs 已有的 ` alias`），1 条是真新文案 `GitHub's Logos`（译作「GitHub 的徽标」）。整串匹配下两种形态必须各自成键，不收录则该位置替换不了。**已用正式版产物跑 `--on-exist=overwrite` 补齐**：`1963 → 2109` 条（`common` 1876 / `macos` 233），逐键比对为**新增 146 / 删除 0 / 译文变化 0**，`validate` 0 错误、1 项提示（`GitHub Copilot` 译文与原文相同，HEAD 版本里就有，属既有的品牌名条目）。
+
+**反向印证产物来源搞错的后果**：上一轮用 beta2 产物跑 overwrite 时 `common` 只有 **1859** 条，比这次少 **17** 条——那 17 条整模板键在 beta2 产物里找不到对应形态，继承核对时被剔除。当时验完即用 `git checkout` 还原、没有落盘，所以字典没被弄坏。**换句话说：产物来源搞错时 `overwrite` 会真丢条目，而 `diff` 不会**——这正是 `diff` 全程不写盘（6.3）的价值所在。
 
 ## 7. Gitee 发版与检查更新优先级
 
