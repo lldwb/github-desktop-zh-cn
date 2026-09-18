@@ -1,11 +1,11 @@
-# repair-release.yml — 修已发布的 Release（删了重建），手动触发
+# repair-release.yml — 修已发布的 Release 的呈现层（署名 / 正文 / 产物命名），手动触发
 #
 # 为什么需要它：Release 的**署名**在建的那一刻就定死（update 接口没有 author 字段），
 # 正文与标题也不能靠重跑 CI 改（build.yml 的发布步骤对已发布的 Release 直接跳过）。
-# 于是「换署名」「改产物名重发」「改正文」这类事只剩一条路：先删、再重建。
+# 于是「换署名」「改产物名」「改正文」这类事只剩一条路：删了重建、或把附件重新传一遍。
 # 本流程把那件事做成按钮，免得每次手敲一串 gh 命令时漏掉某个附件。
 #
-# 两个任务（都**只动 Release、不动 tag**）：
+# 三个任务（都**只动 Release、不动 tag、不动产物字节**）：
 #   restore-release —— 备份（附件 + 标题 + 正文）→ 删 → 用 RELEASE_TOKEN 以同一 tag 重建
 #                      → 用内置 token 逐个回传**同样字节**的附件 → 核对署名与附件名单
 #                      用途：修署名（v0.1.0 / v0.1.1 的 Release 当年是内置 token 建的，
@@ -16,6 +16,16 @@
 #   delete-release  —— 只删 Release（不带 --cleanup-tag，tag 保留），随后强推 tag 即可让 CI
 #                      用新命名 / 新正文重发。用途：修产物与正文（v0.2.0 的 cli / gui 命名
 #                      与正文引用块就是这么修的）
+#   rename-assets   —— **不删 Release**，只把附件名换成当前规范：下载 → 改名 → 传新名
+#                      → 重算 SHA256SUMS → 删旧名。用途：把 v0.2.0 之前发布的版本
+#                      统一到 cli / gui 命名（v0.1.0 / v0.1.1 的附件缺通道词、
+#                      macOS / Linux 还缺后缀，见 AGENTS.md「产物命名」）。
+#                      **GitHub 没有重命名附件的接口**，只有「传新名 + 删旧名」这一条路；
+#                      顺序上先传新的（新旧短暂并存）→ 覆盖清单 → 再删旧的，于是**任何时刻
+#                      页面上都有一份完整可用的产物**，中途失败也只是多留了一组旧名字。
+#                      为什么不像另两个任务那样删了重建：重建会连署名一起重来、把
+#                      published_at 重置（订阅者看到一次「重新发布」）、下载计数清零，
+#                      而这件事只需要换个名字——不碰 Release 本身，代价小、窗口也小。
 #
 # `confirm` 必须与 `tag` 逐字相同——两个任务都会让该版本的下载页短暂消失，防的是手滑。
 # 控制面（建 / 改 Release）走 RELEASE_TOKEN、数据面（附件传输）走内置 GITHUB_TOKEN，
@@ -59,6 +69,7 @@ on:
         options:
           - restore-release   # 备份 → 删 → 以同一 tag 重建（修署名）
           - delete-release    # 只删 Release、保留 tag（修产物与正文的前置步骤）
+          - rename-assets     # 只改附件名（对齐全仓库的 cli / gui 命名），不删 Release
       tag:
         description: 目标 tag（形如 v0.2.0）
         type: string
@@ -434,3 +445,192 @@ jobs:
           gh_view "$TAG" --json assets --jq '.assets[].name' | sed 's/^/  - /'
           GH_TOKEN="${RELEASE_TOKEN:-$GH_TOKEN}" gh release delete "$TAG" --yes     # 不带 --cleanup-tag：tag 必须留着，CI 才认得出该发哪一版
           echo "已删除 $TAG 的 Release（tag 仍在）。要重发：把该 tag 强推一次即可触发 CI 用当前提交重建（见 AGENTS.md「发版」）"
+
+      - name: 只改附件名（rename-assets）
+        if: ${{ success() && inputs.task == 'rename-assets' }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TOKEN: ${{ secrets.RELEASE_TOKEN }}
+        run: |
+          # 意外失败时留一条带行号的注解（同上面几步的理由）
+          set -E
+          trap 'echo "::error::第 $LINENO 行意外失败（退出码 $?）——在上面这个步骤的日志里看这一行的上下文"' ERR
+
+          # 查现网 Release 走 PAT（草稿的可见性有边界，见「备份」那步的注释）
+          rel_token="${RELEASE_TOKEN:-$GH_TOKEN}"
+          if ! rel="$(GH_TOKEN="$rel_token" gh api "repos/$GH_REPO/releases/tags/$TAG" 2> api-error.txt)"; then
+            echo "::error::$TAG 没有 Release（或查不到）：$(tr '\n' ' ' < api-error.txt | tail -c 200)"
+            exit 1
+          fi
+          printf '%s' "$rel" | jq -r '.assets[] | "\(.name)\t\(.size)\t\(.digest // "")"' > assets.tsv
+          if [ ! -s assets.tsv ]; then
+            echo "::error::$TAG 的 Release 一个附件都没有——没有可改的（先确认它是不是刚删剩的空壳）"
+            exit 1
+          fi
+          echo "现网附件："
+          cut -f1 assets.tsv | sed 's/^/  - /'
+
+          # ── 算「旧名 → 新名」映射 ────────────────────────────────────────────
+          # 规则就两条，与 AGENTS.md「产物命名」一一对应：
+          #   ① 名字里没有通道词的老产物一律是 cli——v0.2.0 之前只发单文件产物，没有第二个通道；
+          #   ② macOS / Linux 补 .bin 后缀（Windows 早就有 .exe），此前无后缀的附件在下载页里
+          #      看不出是什么文件，浏览器也可能不给存成可执行文件。
+          # 只认「含 -<本版本号>- 且既非 -cli- 也非 -gui-」的名字；SHA256SUMS 这样不含版本号的
+          # 一概不进来（它在下面单独重算）。认不出的名字宁可不动——猜错名字比不改更麻烦。
+          : > rename.tsv
+          while IFS="$(printf '\t')" read -r name size digest; do
+            case "$name" in
+              *-cli-"$TAG"-*|*-gui-"$TAG"-*) continue ;;   # 已是当前的通道命名
+              *-"$TAG"-*) new="${name/-"$TAG"-/-cli-$TAG-}" ;;
+              *) continue ;;                                # 不含本版本号——不动
+            esac
+            # 后缀：末段已经带扩展名的不动（win32-x64.exe、linux-x86_64.AppImage）；
+            # 其余按平台补——Windows 是 .exe、macOS / Linux 是 .bin，与 scripts/build.js 一致。
+            # 判据取末段而不是「名字里有没有点」：版本号 v0.1.0 自己就带点。
+            case "${new##*-}" in
+              *.*) ;;
+              *) case "$new" in
+                   *-win32-*) new="$new.exe" ;;
+                   *)         new="$new.bin" ;;
+                 esac ;;
+            esac
+            printf '%s\t%s\n' "$name" "$new" >> rename.tsv
+          done < assets.tsv
+
+          if [ ! -s rename.tsv ]; then
+            echo "$TAG 的附件已经全是当前命名（cli / gui 通道），无需改动——本流程是幂等的"
+            exit 0
+          fi
+          echo "本次改名："
+          while IFS="$(printf '\t')" read -r old new; do printf '  %s\n  → %s\n' "$old" "$new"; done < rename.tsv
+
+          # ── 取回产物 ────────────────────────────────────────────────────────
+          # 要改的当然得取；不需要改的（已经是新命名的）也得取——SHA256SUMS 是拿**全部**
+          # 产物的哈希算的，只取一部分会生成一份缺项的清单，比不改还糟。
+          mkdir -p work
+          while IFS="$(printf '\t')" read -r name size digest; do
+            case "$name" in SHA256SUMS) continue ;; esac
+            if ! out="$(gh release download "$TAG" --pattern "$name" --dir work --clobber 2>&1)"; then
+              echo "::error::下载 $name 失败：$(printf '%s' "$out" | tr '\n' ' ' | tail -c 300)"
+              exit 1
+            fi
+            f="work/$name"
+            if [ ! -f "$f" ]; then
+              echo "::error::$name 没下载下来"
+              exit 1
+            fi
+            # 取回来先与远端核对（digest 为空的老式上传退回比字节数）：马上要用这份字节
+            # 去顶替**唯一**的那份，下载不全就传上去等于把好字节弄丢
+            if [ -n "$digest" ]; then
+              if [ "$digest" != "sha256:$(sha256sum "$f" | cut -d' ' -f1)" ]; then
+                echo "::error::$name 取回后校验和不符（远端 $digest）——**没有改任何东西**"
+                exit 1
+              fi
+            elif [ "$size" != "$(stat -c%s "$f")" ]; then
+              echo "::error::$name 取回后字节数不符（远端 $size）——**没有改任何东西**"
+              exit 1
+            fi
+            echo "已取回 $name（$(du -h "$f" | cut -f1)）"
+          done < assets.tsv
+
+          # ── 改名、传新名 ────────────────────────────────────────────────────
+          # 这一段**只增不减**：新名字传上去，旧名字一律先留着——传到一半失败时页面上仍是
+          # 完整的一组旧名字，使用者那边没有任何感觉
+          while IFS="$(printf '\t')" read -r old new; do
+            mv "work/$old" "work/$new"
+            echo "已改名：$old → $new"
+          done < rename.tsv
+
+          failed=""
+          while IFS="$(printf '\t')" read -r old new; do
+            f="work/$new"
+            want="$(sha256sum "$f" | cut -d' ' -f1)"
+            have="$(gh api "repos/$GH_REPO/releases/tags/$TAG" --jq ".assets[] | select(.name == \"$new\") | (.digest // \"\")" 2>/dev/null || true)"
+            if [ "$have" = "sha256:$want" ]; then
+              echo "已在 Release 上且内容一致，跳过：$new"
+              continue
+            fi
+            ok=""
+            for attempt in 1 2 3; do
+              if out="$(timeout 1200 gh release upload "$TAG" "$f" --clobber 2>&1)"; then
+                echo "已上传 $new（$(du -h "$f" | cut -f1)）"
+                ok=1
+                break
+              fi
+              detail="$(printf '%s' "$out" | tr '\n' ' ' | tr -d '\r' | tail -c 200)"
+              if [ "$attempt" -lt 3 ]; then
+                echo "附件 $new 第 $attempt 次上传失败，15 秒后重试：$detail"
+                sleep 15
+              else
+                echo "附件 $new 第 $attempt 次上传失败：$detail"
+              fi
+            done
+            if [ -z "$ok" ]; then
+              failed="$failed $new"
+              echo "::error::附件 $new 上传失败：$(printf '%s' "$out" | tr '\n' ' ' | tr -d '\r' | tail -c 300)"
+            fi
+          done < rename.tsv
+          if [ -n "$failed" ]; then
+            echo "::error::本次未能上传：$failed。**旧名字的附件一个都没删**，页面照旧可下载；修好后重跑本流程即可续传（已传上的按 digest 跳过）"
+            exit 1
+          fi
+
+          # ── 重算清单 ────────────────────────────────────────────────────────
+          # 与 build.yml 同一形状（sha256sum 全部产物），差别只在名字已是新的——老清单里写的
+          # 是旧名字，不重算的话它指向的文件马上就没了。顺序随 glob 变（名字变了字典序也变）；
+          # 清单是给人核对用的，顺序不重要。
+          (
+            cd work
+            for f in *; do
+              if [ "$f" = "SHA256SUMS" ]; then continue; fi
+              sha256sum "$f"
+            done > SHA256SUMS
+          )
+          echo "新的 SHA256SUMS（$(wc -l < work/SHA256SUMS) 行）："
+          sed 's/^/  /' work/SHA256SUMS
+          if ! out="$(timeout 1200 gh release upload "$TAG" work/SHA256SUMS --clobber 2>&1)"; then
+            echo "::error::上传新的 SHA256SUMS 失败：$(printf '%s' "$out" | tr '\n' ' ' | tail -c 300)。**旧名字的附件一个都没删**，页面照旧可下载；修好后重跑本流程即可（产物已就位，只会重传清单）"
+            exit 1
+          fi
+          echo "已更新 SHA256SUMS"
+
+          # ── 删旧名 ──────────────────────────────────────────────────────────
+          # 走到这里才删：新名字的产物已全部就位、清单也已经指向它们——于是任何时刻页面上
+          # 的 SHA256SUMS 都只列**真实存在且哈希对得上**的文件。这是「先传后删」而不是
+          # 「先删后传」的理由。
+          failed=""
+          while IFS="$(printf '\t')" read -r old new; do
+            if ! out="$(gh release delete-asset "$TAG" "$old" --yes 2>&1)"; then
+              failed="$failed $old"
+              echo "::error::删除旧附件 $old 失败：$(printf '%s' "$out" | tr '\n' ' ' | tail -c 300)"
+            else
+              echo "已删除旧附件：$old"
+            fi
+          done < rename.tsv
+          if [ -n "$failed" ]; then
+            echo "::error::旧名字没能删干净：$failed。**新名字的产物与清单都已就位、页面可用**；重跑本流程会把剩下的删掉"
+            exit 1
+          fi
+
+          # ── 核对 ────────────────────────────────────────────────────────────
+          # 名单没拿到（查询失败）时单独报一句：否则下面逐个比对的循环会把每个附件都报成
+          # 「不在 Release 上」，看着像改名没生效，实际是查询本身没成
+          now="$(gh api "repos/$GH_REPO/releases/tags/$TAG" --jq '.assets[].name' 2>/dev/null || true)"
+          if [ -z "$now" ]; then
+            echo "::error::拿不到 $TAG 的附件名单（查询失败，或该 Release 上一个附件都没有）——改名动作**已经做完**，请人工核对一眼"
+            exit 1
+          fi
+          trouble=""
+          while IFS="$(printf '\t')" read -r old new; do
+            printf '%s\n' "$now" | grep -qxF "$new" || { echo "::error::改名后 $new 不在 Release 上"; trouble=1; }
+            if printf '%s\n' "$now" | grep -qxF "$old"; then
+              echo "::error::旧名 $old 仍在 Release 上"
+              trouble=1
+            fi
+          done < rename.tsv
+          printf '%s\n' "$now" | grep -qxF 'SHA256SUMS' || { echo "::error::SHA256SUMS 不在 Release 上"; trouble=1; }
+          if [ -n "$trouble" ]; then
+            exit 1
+          fi
+          echo "已改完 $TAG：附件 $(printf '%s\n' "$now" | grep -c .) 个"
+          printf '%s\n' "$now" | sed 's/^/  - /'

@@ -162,6 +162,7 @@ npm test               # 匹配器单元测试（node --test）
 | 图形界面（Electron） | `github-desktop-zh-cn-gui-v<版本>-<平台>-<架构>[-setup].<扩展名>` | `…-gui-v0.2.0-win32-x64-setup.exe` |
 
 - **为什么是 `cli` / `gui` 紧跟项目名**：附件在 Release 页面里按名字排序，同类相邻、一眼分得出哪个是给命令行的、哪个是给图形界面的；旧命名（`github-desktop-zh-cn-v0.2.0-win32-x64.exe` 与 `…-v0.2.0-win32-x64.zip` 混在一起）看不出通道。
+- **v0.2.0 之前发布的版本用 `rename-assets` 统一命名**（v0.1.0 / v0.1.1）：它们当初叫 `github-desktop-zh-cn-v<版本>-<平台>-<架构>[.exe|无后缀]`，缺 `cli` 通道词、macOS / Linux 还缺 `.bin` 后缀。该任务**只动名字、不动字节**（下载下来改名再传上去），`SHA256SUMS` 随之重算，旧名字的下载链接失效——见下「要改已发布的 Release」。
 - **后缀**：Windows 单文件产物用 `.exe`；macOS / Linux 用 `.bin`（**v0.2.0 起新加**）——此前没有后缀，下载页里看不出是什么文件，浏览器也可能不给存成可执行文件。`.bin` 只是命名，产物本身还是 Mach-O / ELF。
 - **平台词**用 `darwin` / `win32` / `linux`（SEA 侧是 Node 的 `process.platform`，GUI 侧靠 `electron-builder.yml` 里用 `${platform}` 而非 `${os}` 对齐）。**架构词随产物走**：SEA 侧是 `process.arch`（`x64` / `arm64`），GUI 的 Linux 目标由 electron-builder 按各自规范给名（AppImage 是 `x86_64`、deb 是 `amd64`），故 `linux` 侧两类的架构词不完全一致，属预期。
 - **改名前先看这两处依赖**：`scripts/update.js` 的自更新按「`-<平台>-<架构>` + 平台后缀」匹配附件（`pickAsset`，无后缀的老产物也认），`build/check-gui-dist.js` 会校验 GUI 产物名是否走 `…-gui-v<版本>-…`。三处（`scripts/build.js` / `electron-builder.yml` / `update.js`）要一起改，改完各平台跑一次构建看实际文件名。
@@ -176,14 +177,17 @@ npm test               # 匹配器单元测试（node --test）
 
 **已发布的 Release 不再改动**：CI 只**创建**缺失的 Release——该 tag 的 Release 已**发布**时，发布步骤直接跳过、正文也不动。因此**改已发布版本的正文不能靠重跑 CI**，只能直接改 Release（`gh release edit <tag> --notes-file <文件>`，只换正文、不碰附件）。历史改写等场景**强推 tag 会再触发一次 CI**（tag 推送即触发），发布步骤同样按设计跳过，产物与正文都不被覆盖。
 
-**要改已发布的 Release，用 `repair-release.yml`**（`.github/workflows/repair-release.yml`，`workflow_dispatch`，输入 `task` / `tag` / `confirm`——`confirm` 必须与 `tag` 逐字相同，防手滑；两个任务都**只动 Release、不动 tag**）：
+**要改已发布的 Release，用 `repair-release.yml`**（`.github/workflows/repair-release.yml`，`workflow_dispatch`，输入 `task` / `tag` / `confirm`——`confirm` 必须与 `tag` 逐字相同，防手滑；三个任务都**只动 Release、不动 tag、不动产物字节**）：
 
 | `task` | 做什么 | 用途 |
 |---|---|---|
 | `delete-release` | 删掉该 tag 的 Release（**不带 `--cleanup-tag`，tag 保留**），不碰其它 | 让 `gh release create` 能重跑一遍——强推 tag 触发 CI、或用新命名 / 新正文重发，修的是**产物与正文** |
 | `restore-release` | 把附件与标题取下来（正文另说，见下）→ 删 Release → 用 `RELEASE_TOKEN` 以**同一 tag** 重建（先 `gh release create --draft` 建草稿，传完附件再 `gh release edit --draft=false --notes-file` 转正）→ 用内置 token 逐个回传同样字节的附件（与发版同一套：逐个、每个 3 次重试、失败写 `::error::`）→ 核对署名与附件名单 | 修**署名**——作者一经创建无法修改（见上），v0.1.0 / v0.1.1 的 Release 是早期用内置 token 建的、署名 `github-actions[bot]`，只能这么重建 |
+| `rename-assets` | **不删 Release**：全部产物下载下来 → 按下面的规则改名 → 传新名（旧名先留着）→ 重算 `SHA256SUMS` → 删旧名 → 核对 | 把老版本统一到 cli / gui 命名——v0.1.0 / v0.1.1 的附件缺通道词、macOS / Linux 还缺后缀 |
 
-两个任务都只在**手动**触发时跑（`workflow_dispatch` 不会自己跑），所以留在仓库里不碍事；`tag` 填错时最坏结果是删掉一个 Release（附件在删之前已备份到 runner 的临时目录、`restore-release` 会原样传回，正文按下面那条规则重建），**但 `delete-release` 之后若 CI 没能重发成功，那个版本会暂时没有 Release**——真要紧的版本，先用 `restore-release` 走一遍比直接删稳。
+**改附件名只有「传新名 + 删旧名」一条路**（GitHub 没有重命名附件的接口），所以 `rename-assets` 的顺序是**先传后删**：新名字的产物全部就位、`SHA256SUMS` 也覆盖成指向新名字之后，才删旧名字——于是任何时刻页面上的清单都只列**真实存在且哈希对得上**的文件，中途失败也只是多留了一组旧名字（重跑按 digest 跳过已传的，已改好的不再动）。规则只认「含 `-<本版本号>-` 且既非 `-cli-` 也非 `-gui-`」的名字：老产物一律当 cli（那时候只发单文件产物），macOS / Linux 补 `.bin`（Windows 早就有 `.exe`）；认不出的名字（`SHA256SUMS`、预发布 tag）一概不动——**认不出就不改，比改错强**。定位上它和另两个任务不同：**不重建 Release**，署名 / 正文 / `published_at` / 下载计数都不动，代价只是白传一趟字节。幂等：已经全是新命名时跑它会直接报「无需改动」退出。
+
+三个任务都只在**手动**触发时跑（`workflow_dispatch` 不会自己跑），所以留在仓库里不碍事；`tag` 填错时最坏结果是删掉一个 Release（附件在删之前已备份到 runner 的临时目录、`restore-release` 会原样传回，正文按下面那条规则重建），**但 `delete-release` 之后若 CI 没能重发成功，那个版本会暂时没有 Release**——真要紧的版本，先用 `restore-release` 走一遍比直接删稳。`rename-assets` 不删 Release，填错 tag 的代价只是给另一个版本多传一组新名字的附件（旧名字与旧清单都不动，页面照旧可用，倒回去把新名字删掉即可）。
 
 **重建出来的正文取自 CHANGELOG.md**（`restore-release` 与发版同一来源）：用 `scripts/changelog.js` 提出该 tag 的条目当正文，条目提不到（老版本、条目被删）才沿用现网 Release 那份快照。于是「改 `CHANGELOG.md` → 再修复一次」就能把正文的改动带进已发布的 Release——v0.1.0 / v0.1.1 开头补引用块就是这么补的（两个条目自发布起逐字未变，重建只带进那一个 `>`）。与现网那份不同时运行日志里有一条 `::notice::` 说明，不闷声改。**复用草稿那条路也会把正文对齐一次**（它不重建草稿，里面那份可能还是旧的），所以正文的准头始终在 `CHANGELOG.md`：别在 Release 页面上手改，下次修复会被盖掉。
 
