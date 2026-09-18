@@ -10,6 +10,9 @@
 #                      → 用内置 token 逐个回传**同样字节**的附件 → 核对署名与附件名单
 #                      用途：修署名（v0.1.0 / v0.1.1 的 Release 当年是内置 token 建的，
 #                      署名 github-actions[bot]，见 AGENTS.md「发版」）
+#                      **正文以 CHANGELOG.md 的对应条目为准**（与 build.yml 同一来源），
+#                      条目取不到才沿用现网 Release 那份快照——改了 CHANGELOG 再跑一次，
+#                      正文就跟着变（v0.1.0 / v0.1.1 开头补引用块就是这么补的）
 #   delete-release  —— 只删 Release（不带 --cleanup-tag，tag 保留），随后强推 tag 即可让 CI
 #                      用新命名 / 新正文重发。用途：修产物与正文（v0.2.0 的 cli / gui 命名
 #                      与正文引用块就是这么修的）
@@ -105,13 +108,28 @@ jobs:
           # 字节改从 backup_run_id 那份 Artifacts 里取（下面分支）。
           if gh api "repos/$GH_REPO/releases/tags/$TAG" > release.json 2> api-error.txt; then
             jq -j 'if (.title // "") == "" then .tag_name else .title end' release.json > title.txt
-            jq -j '.body // ""' release.json > notes.md
+            jq -j '.body // ""' release.json > notes-release.md
             echo "目标：$(jq -r '.tag_name' release.json)，标题「$(cat title.txt)」，草稿=$(jq -r '.draft' release.json)，署名=$(jq -r '.author.login' release.json)，附件 $(jq '.assets | length' release.json) 个"
           else
             rm -f release.json
             : > title.txt
-            : > notes.md
+            : > notes-release.md
             echo "::warning::$TAG 眼下没有 Release：$(tr '\n' ' ' < api-error.txt | tail -c 200)"
+          fi
+
+          # 正文取自 CHANGELOG.md 的对应条目——与 build.yml 的发版步骤同一来源。现网 Release 上那份
+          # 只是它发布时的快照；而且「现网没有 Release」那条重建路一直就是用 CHANGELOG 现生成的，
+          # 同一个流程的两条路不该对正文从哪来有两种说法。条目找不到（老版本、条目被删）才退回快照。
+          : > notes.md
+          if [ -f scripts/changelog.js ] && node scripts/changelog.js "${TAG#v}" > notes-changelog.md 2> changelog-error.txt; then
+            cp notes-changelog.md notes.md
+            echo "正文取自 CHANGELOG.md 的 ${TAG#v} 条目（$(wc -l < notes.md) 行）"
+            if [ -s notes-release.md ] && [ "$(sha256sum < notes.md)" != "$(sha256sum < notes-release.md)" ]; then
+              echo "::notice::CHANGELOG.md 的条目与现网 Release 的正文不同——本次以 CHANGELOG.md 为准重建正文"
+            fi
+          elif [ -s notes-release.md ]; then
+            cp notes-release.md notes.md
+            echo "::warning::CHANGELOG.md 里没有 ${TAG#v} 的条目，正文沿用现网 Release 那份：$(tr '\n' ' ' < changelog-error.txt | tail -c 160)"
           fi
 
           if [ -n "$BACKUP_RUN_ID" ]; then
@@ -229,16 +247,8 @@ jobs:
           fi
 
           if [ -n "$need_create" ]; then
-            # 标题 / 正文：现网 Release 还在时原样沿用；已不在时标题退回 tag，
-            # 正文用仓库里的 CHANGELOG.md 现生成一份（当年发布时用的就是同一来源）
+            # 标题：现网 Release 还在时原样沿用，已不在时退回 tag 名。正文已在上一步定好（CHANGELOG 优先）。
             if [ ! -s title.txt ]; then printf '%s' "$TAG" > title.txt; fi
-            if [ ! -s notes.md ] && [ -f scripts/changelog.js ]; then
-              echo "正文文件为空——用 scripts/changelog.js 从 CHANGELOG.md 生成一份"
-              if ! node scripts/changelog.js "${TAG#v}" > notes.md 2> changelog-error.txt; then
-                echo "::warning::从 CHANGELOG.md 生成正文失败：$(tr '\n' ' ' < changelog-error.txt | tail -c 200)"
-                : > notes.md
-              fi
-            fi
             if [ ! -s notes.md ]; then
               printf '%s\n' "本版正文未能取回。附件是发布时的原始字节，校验和见 SHA256SUMS。" > notes.md
             fi
@@ -249,6 +259,12 @@ jobs:
               exit 1
             fi
             echo "已建草稿：$(printf '%s' "$out" | head -1)"
+          fi
+
+          # 复用草稿这条路不重建草稿，里面那份正文可能还是旧的——正文以 CHANGELOG.md 为准，
+          # 这里统一对齐一次；失败不致命，下面发布那步还会再带一次 --notes-file。
+          if ! out="$(GH_TOKEN="$RELEASE_TOKEN" gh release edit "$TAG" --notes-file notes.md 2>&1)"; then
+            echo "::warning::更新正文失败：$(printf '%s' "$out" | tr '\n' ' ' | tail -c 200)"
           fi
 
           # 逐个上传、互不牵连：失败原因进 ::error:: 注解（匿名可读），已传成功的重跑时按 digest 跳过
@@ -289,7 +305,7 @@ jobs:
           # 发布：草稿转正。用 gh release edit（build.yml 里跑通过的那条）；万一它失败，
           # 退回 id 形式的 PATCH——**注意是数字 id**，tag 形式的 PATCH 会 404（本流程栽过）
           note=""
-          if ! out="$(GH_TOKEN="$RELEASE_TOKEN" gh release edit "$TAG" --draft=false 2>&1)"; then
+          if ! out="$(GH_TOKEN="$RELEASE_TOKEN" gh release edit "$TAG" --draft=false --notes-file notes.md 2>&1)"; then
             note="gh release edit 失败（$(printf '%s' "$out" | tr '\n' ' ' | tail -c 200)）；改用 id 形式 PATCH"
             echo "::warning::$note"
             rel_id="$(gh api "repos/$GH_REPO/releases/tags/$TAG" --jq .id 2>/dev/null || true)"
