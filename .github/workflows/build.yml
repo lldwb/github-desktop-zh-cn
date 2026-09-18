@@ -163,7 +163,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 45        # 上传卡死时的兜底：附件传完只需几分钟，超过这个数多半是传输卡住了
     permissions:
-      contents: read          # Release 由 RELEASE_TOKEN 创建，内置 token 只需读仓库
+      contents: write         # 附件传输走内置 token（PAT 传附件实测卡死）；Release 本身仍由 RELEASE_TOKEN 创建
     steps:
       - uses: actions/checkout@v7     # 只为读 CHANGELOG.md，不需要完整历史
       - uses: actions/download-artifact@v8
@@ -188,46 +188,77 @@ jobs:
           fi
       - name: 创建 Release
         env:
-          GH_TOKEN: ${{ secrets.RELEASE_TOKEN }}
+          # 控制面（建 / 改 Release）走作者的 PAT，署名才是作者本人；数据面（附件传输）走内置 token。
+          # 拆开是因为实测 PAT 传附件一律卡死：v0.2.0 三次尝试分别跑 606s / 1657s / 939s 后失败，
+          # 注解点名卡在 107 MB 的单文件产物上；而内置 token 历史上传过 5 个附件共 420 MB
+          #（v0.1.0 只用 97 秒）——附件上传者字段可查，见 AGENTS.md「发版」一节。
+          RELEASE_TOKEN: ${{ secrets.RELEASE_TOKEN }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           # 只创建缺失的：已发布的 Release 与它的正文都不再改动。
-          # 草稿则是上一次跑到一半被中断留下的残骸（gh release create 先建草稿、传完附件才发布），
-          # 附件多半不全且可能来自旧提交——删掉重建。不带 --cleanup-tag，tag 保留。
+          # 草稿则是上一次跑到一半被中断留下的残骸（gh release create 先建草稿、传完附件才发布）——
+          # **续用它**：已经传上去的附件不重传（1.4 GB 一次传不完时，靠重跑补齐），
+          # 发布前再把不属于本次构建的遗留附件删掉，末端状态与「删掉重建」等价。
           if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
             if [ "$(gh release view "$GITHUB_REF_NAME" --json isDraft --jq .isDraft)" = "true" ]; then
-              echo "发现上次中断留下的草稿 Release，删除后重建"
-              gh release delete "$GITHUB_REF_NAME" --yes
+              echo "复用上次中断留下的草稿 Release，已传的附件不重传"
             else
               echo "Release $GITHUB_REF_NAME 已发布，跳过"
               exit 0
             fi
+          else
+            GH_TOKEN="$RELEASE_TOKEN" gh release create "$GITHUB_REF_NAME" --draft \
+              --title "$GITHUB_REF_NAME" \
+              --notes-file notes.md
           fi
 
-          # 先建草稿，附件全部传成功才发布——中途失败时留下的草稿由下次运行删掉重建，
-          # 不会出现「已发布但附件不全」的 Release。
-          gh release create "$GITHUB_REF_NAME" --draft \
-            --title "$GITHUB_REF_NAME" \
-            --notes-file notes.md
-
-          # 逐个上传、逐个重试：一次性 gh release create dist/* 是串行传完所有附件，
-          # 任一附件失败整条命令作废、已传的也只能重来（v0.2.0 首次带 GUI 产物时，
-          # 10 个附件约 1.5 GB 在 27 分钟后失败，正是栽在这里）。单次上传加超时，
-          # 免得一条卡死的连接把 job 拖到天荒地老。
+          # 逐个上传、互不牵连：一次性 gh release create dist/* 是串行传完所有附件、任一失败整条作废；
+          # 而「第一个失败就中断」会让后面的附件连试都没试过。失败原因写进 ::error:: 注解——
+          # 注解匿名可读（job 日志要仓库权限），出问题时不必进网页翻日志。
+          failed=""
           for f in dist/*; do
             name="$(basename "$f")"
+            # 判据用 sha256 而不是文件大小：远端附件的 digest 字段就是上传内容的 sha256，
+            # 逐字节等价的才跳过。大小相同、内容不同（旧提交的产物恰好同尺寸）不会被误当成已传。
+            # digest 为空（老式上传的附件）时判不等 → 重传，偏向安全的那一侧。
+            want="$(sha256sum "$f" | cut -d' ' -f1)"
+            have="$(gh release view "$GITHUB_REF_NAME" --json assets --jq ".assets[] | select(.name == \"$name\") | (.digest // \"\")" 2>/dev/null || true)"
+            if [ "$have" = "sha256:$want" ]; then
+              echo "草稿里已有且内容一致，跳过：$name"
+              continue
+            fi
+            ok=""
             for attempt in 1 2 3; do
-              if timeout 900 gh release upload "$GITHUB_REF_NAME" "$f" --clobber; then
+              if out="$(timeout 1200 gh release upload "$GITHUB_REF_NAME" "$f" --clobber 2>&1)"; then
                 echo "已上传 $name（$(du -h "$f" | cut -f1)）"
+                ok=1
                 break
               fi
-              if [ "$attempt" = 3 ]; then
-                echo "::error::附件 $name 连续 3 次上传失败"
-                exit 1
+              detail="$(printf '%s' "$out" | tr '\n' ' ' | tr -d '\r' | tail -c 200)"
+              if [ "$attempt" -lt 3 ]; then
+                echo "附件 $name 第 $attempt 次上传失败，15 秒后重试：$detail"
+                sleep 15
+              else
+                echo "附件 $name 第 $attempt 次上传失败：$detail"
               fi
-              echo "附件 $name 第 $attempt 次上传失败，10 秒后重试"
-              sleep 10
             done
+            if [ -z "$ok" ]; then
+              failed="$failed $name"
+              echo "::error::附件 $name 上传失败：$(printf '%s' "$out" | tr '\n' ' ' | tr -d '\r' | tail -c 300)"
+            fi
+          done
+          if [ -n "$failed" ]; then
+            echo "::error::本次未能上传：$failed（重跑即可续传，已传成功的不会重来）"
+            exit 1
+          fi
+
+          # 清掉草稿里不属于本次构建的附件（上一次中断留下的旧产物），再发布
+          for name in $(gh release view "$GITHUB_REF_NAME" --json assets --jq '.assets[].name' 2>/dev/null || true); do
+            if [ ! -f "dist/$name" ]; then
+              echo "删除不属于本次构建的遗留附件：$name"
+              gh release delete-asset "$GITHUB_REF_NAME" "$name" --yes
+            fi
           done
 
-          gh release edit "$GITHUB_REF_NAME" --draft=false
+          GH_TOKEN="$RELEASE_TOKEN" gh release edit "$GITHUB_REF_NAME" --draft=false --notes-file notes.md
           echo "Release $GITHUB_REF_NAME 已发布，附件 $(gh release view "$GITHUB_REF_NAME" --json assets --jq '.assets | length') 个"
