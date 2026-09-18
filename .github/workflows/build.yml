@@ -197,19 +197,34 @@ jobs:
         run: |
           # 只创建缺失的：已发布的 Release 与它的正文都不再改动。
           # 草稿则是上一次跑到一半被中断留下的残骸（gh release create 先建草稿、传完附件才发布）——
-          # **续用它**：已经传上去的附件不重传（1.4 GB 一次传不完时，靠重跑补齐），
+          # 续用它：已经传上去的附件不重传（1.4 GB 一次传不完时，靠重跑补齐），
           # 发布前再把不属于本次构建的遗留附件删掉，末端状态与「删掉重建」等价。
+          # **但只复用自己人建的草稿**：署名在建 Release 的那一刻就定了，之后改不了（update 接口
+          # 没有 author 字段）——复用内置 token 建出来的草稿，最后发布的 Release 仍署名
+          # github-actions[bot]，等于白拆一遍令牌。作者对不上就删掉重建（不带 --cleanup-tag，tag 保留）。
+          create_draft() {
+            GH_TOKEN="$RELEASE_TOKEN" gh release create "$GITHUB_REF_NAME" --draft \
+              --title "$GITHUB_REF_NAME" \
+              --notes-file notes.md
+          }
+
           if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
             if [ "$(gh release view "$GITHUB_REF_NAME" --json isDraft --jq .isDraft)" = "true" ]; then
-              echo "复用上次中断留下的草稿 Release，已传的附件不重传"
+              pat_login="$(GH_TOKEN="$RELEASE_TOKEN" gh api user --jq .login 2>/dev/null || true)"
+              author="$(GH_TOKEN="$RELEASE_TOKEN" gh api "repos/$GITHUB_REPOSITORY/releases/tags/$GITHUB_REF_NAME" --jq .author.login 2>/dev/null || true)"
+              if [ -n "$pat_login" ] && [ "$author" = "$pat_login" ]; then
+                echo "复用上次中断留下的草稿 Release（作者 $author），已传的附件不重传"
+              else
+                echo "草稿的作者是 ${author:-未知}，不是发布令牌身份（${pat_login:-未知}）——删掉重建，署名才对得上"
+                gh release delete "$GITHUB_REF_NAME" --yes
+                create_draft
+              fi
             else
               echo "Release $GITHUB_REF_NAME 已发布，跳过"
               exit 0
             fi
           else
-            GH_TOKEN="$RELEASE_TOKEN" gh release create "$GITHUB_REF_NAME" --draft \
-              --title "$GITHUB_REF_NAME" \
-              --notes-file notes.md
+            create_draft
           fi
 
           # 逐个上传、互不牵连：一次性 gh release create dist/* 是串行传完所有附件、任一失败整条作废；
