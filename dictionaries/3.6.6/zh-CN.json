@@ -1864,5 +1864,11 @@
   "`after commit ${t}`": "`提交 ${t} 之后`",
   "`Press Enter to insert the selected commit${n} ${s} or Escape to cancel.`": "`按 Enter 将所选提交插入${s}，或按 Escape 取消。`",
   "`Use the Up and Down arrow keys to choose a new location for the selected commit${n}, then press Enter to confirm or Escape to cancel.`": "`使用上下方向键为所选提交选择新位置，然后按 Enter 确认，或按 Escape 取消。`",
-  "`${oz(e.usedRequests)} / ${oz(e.entitlementRequests)} AI credits used`": "`${oz(e.usedRequests)} / ${oz(e.entitlementRequests)} AI 积分已用`"
+  "`${oz(e.usedRequests)} / ${oz(e.entitlementRequests)} AI credits used`": "`${oz(e.usedRequests)} / ${oz(e.entitlementRequests)} AI 积分已用`",
+  "Pulling ": "正在拉取 ",
+  "Pushing to ": "正在推送到 ",
+  "Checking out branch ": "正在检出分支 ",
+  "Pushing repository to ": "正在推送仓库到 ",
+  "Creating repository on ": "正在创建仓库于 ",
+  "Finalizing tutorial repository": "正在完成教程仓库"
 }
