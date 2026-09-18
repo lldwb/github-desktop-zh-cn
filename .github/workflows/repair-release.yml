@@ -18,8 +18,17 @@
 # 控制面（建 / 改 Release）走 RELEASE_TOKEN、数据面（附件传输）走内置 GITHUB_TOKEN，
 # 与 build.yml 同一套纪律；附件传输用 PAT 会卡死，见 AGENTS.md「发版」一节。
 #
+# **控制面一律用 build.yml 里跑通过的那几条命令**（gh release create / edit / delete）：
+# 更新 Release 的接口只认**数字 id**（`PATCH /repos/{o}/{r}/releases/{release_id}`，文档里
+# release_id 就一句「The unique identifier of the release.」；传 tag 名是 404——实测过
+# `GET /releases/<tag>` 也是 404，只有 `/releases/tags/<tag>` 这个独立端点收 tag、且只支持 GET）。
+# v0.1.0 / v0.1.1 的两次修复就是栽在这条上：步骤 exit 1 却没有任何 ::error:: 注解，
+# 因为出错的那行是我手拼的 tag 形式 PATCH。本文件里每个控制面命令都包了错误输出。
+#
 # 兜底：备份在删之前先传成 Artifacts（`release-backup-<tag>`）。万一回传失败，
-# 附件字节还在——带上 `backup_run_id=<本次运行 id>` 重跑 `restore-release` 即可续传。
+# 附件字节还在——带上 `backup_run_id=<那次运行 id>` 重跑 `restore-release` 即可续传。
+# 同理，若上一次修复删了却没建回来（该 tag 眼下没有 Release，或只停在草稿），也这么重跑：
+# 备份步骤认「没有现网 Release」这条路，从 Artifacts 取字节把 Release 建回来。
 
 name: 修复已发布 Release
 
@@ -79,6 +88,12 @@ jobs:
           fi
           echo "当前 Latest：$(gh api "repos/$GH_REPO/releases/latest" --jq .tag_name 2>/dev/null || echo 无)" | tee prev-latest.txt
 
+      # 仓库工作区：只为两件事——gh 在有 git 仓库的目录里跑（与 build.yml 一致），
+      # 以及「现网 Release 已不在」时用 CHANGELOG.md 现生成正文
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0      # 连 tag 一起取全，gh release 系列要靠它认出 tag 已存在
+
       - name: 备份目标 Release（标题 + 正文 + 全部附件）
         if: ${{ success() && inputs.task == 'restore-release' }}
         env:
@@ -86,56 +101,88 @@ jobs:
           BACKUP_RUN_ID: ${{ inputs.backup_run_id }}
         run: |
           mkdir -p backup
-          gh api "repos/$GH_REPO/releases/tags/$TAG" > release.json
-          jq -j 'if (.title // "") == "" then .tag_name else .title end' release.json > title.txt
-          jq -j '.body // ""' release.json > notes.md
-          echo "目标：$(jq -r '.tag_name' release.json)，标题「$(cat title.txt)」，草稿=$(jq -r '.draft' release.json)，署名=$(jq -r '.author.login' release.json)，附件 $(jq '.assets | length' release.json) 个"
+          # 先看现网有没有这个 Release。可能没有——上一次修复删掉后没建回来，那种情形也得能接着干：
+          # 字节改从 backup_run_id 那份 Artifacts 里取（下面分支）。
+          if gh api "repos/$GH_REPO/releases/tags/$TAG" > release.json 2> api-error.txt; then
+            jq -j 'if (.title // "") == "" then .tag_name else .title end' release.json > title.txt
+            jq -j '.body // ""' release.json > notes.md
+            echo "目标：$(jq -r '.tag_name' release.json)，标题「$(cat title.txt)」，草稿=$(jq -r '.draft' release.json)，署名=$(jq -r '.author.login' release.json)，附件 $(jq '.assets | length' release.json) 个"
+          else
+            rm -f release.json
+            : > title.txt
+            : > notes.md
+            echo "::warning::$TAG 眼下没有 Release：$(tr '\n' ' ' < api-error.txt | tail -c 200)"
+          fi
 
           if [ -n "$BACKUP_RUN_ID" ]; then
-            # 从指定运行的 Artifacts 取字节——上一次没传完时走这条，拿到的是**当初那份**完整备份
+            # 从指定运行的 Artifacts 取字节——上次没传完 / 上次把 Release 删没了时走这条，
+            # 拿到的是**当初那份**完整备份
             echo "附件字节取自 run $BACKUP_RUN_ID 的备份"
-            gh run download "$BACKUP_RUN_ID" -n "release-backup-$TAG" -D backup
+            if ! out="$(gh run download "$BACKUP_RUN_ID" -n "release-backup-$TAG" -D backup 2>&1)"; then
+              echo "::error::从 run $BACKUP_RUN_ID 取名为 release-backup-$TAG 的 Artifact 失败（运行 id 或名字不对？）：$(printf '%s' "$out" | tr '\n' ' ' | tail -c 300)"
+              exit 1
+            fi
+          elif [ -f release.json ]; then
+            if ! out="$(gh release download "$TAG" --dir backup --clobber 2>&1)"; then
+              echo "::error::下载附件失败：$(printf '%s' "$out" | tr '\n' ' ' | tail -c 300)"
+              exit 1
+            fi
           else
-            gh release download "$TAG" --dir backup --clobber
+            echo "::error::$TAG 眼下没有 Release，又没给 backup_run_id——没有字节可回传。附件若还在上一次运行的 Artifacts 里（名字 release-backup-$TAG，保留 30 天），带上那次运行的 id 重跑"
+            exit 1
+          fi
+
+          if [ -z "$(ls -A backup)" ]; then
+            echo "::error::备份目录是空的——一个附件都没拿到，**没有删任何东西**"
+            exit 1
           fi
 
           # 删之前必须确认备份完整：附件个数对得上，且每个附件的 sha256 与远端的 digest 一致
-          #（digest 为空的老式上传退回比字节数）
-          expect="$(jq '.assets | length' release.json)"
-          have="$(find backup -maxdepth 1 -type f | wc -l)"
-          if [ "$expect" != "$have" ]; then
-            echo "::error::备份到 $have 个文件，Release 上有 $expect 个附件——**没有删任何东西**，先查明原因再重跑"
-            exit 1
-          fi
-          jq -r '.assets[] | "\(.name)\t\(.size)\t\(.digest // "")"' release.json > assets.tsv
-          trouble=""
-          while IFS="$(printf '\t')" read -r name size digest; do
-            f="backup/$name"
-            if [ ! -f "$f" ]; then
-              echo "::error::附件 $name 没下载下来"
-              trouble=1
-              continue
+          #（digest 为空的老式上传退回比字节数）。没有现网 Release 可比对时，按备份自己造清单。
+          if [ -f release.json ]; then
+            expect="$(jq '.assets | length' release.json)"
+            have="$(find backup -maxdepth 1 -type f | wc -l)"
+            if [ "$expect" != "$have" ]; then
+              echo "::error::备份到 $have 个文件，Release 上有 $expect 个附件——**没有删任何东西**，先查明原因再重跑"
+              exit 1
             fi
-            if [ -z "$digest" ]; then
-              if [ "$(stat -c%s "$f")" != "$size" ]; then
-                echo "::error::$name 字节数不符（Release $size，备份 $(stat -c%s "$f")）"
+            jq -r '.assets[] | "\(.name)\t\(.size)\t\(.digest // "")"' release.json > assets.tsv
+            trouble=""
+            while IFS="$(printf '\t')" read -r name size digest; do
+              f="backup/$name"
+              if [ ! -f "$f" ]; then
+                echo "::error::附件 $name 没下载下来"
                 trouble=1
-              else
-                echo "（$name 远端没有 sha256 记录，按字节数核对通过）"
+                continue
               fi
-            elif [ "$digest" != "sha256:$(sha256sum "$f" | cut -d' ' -f1)" ]; then
-              echo "::error::$name 校验和不符（远端 $digest）"
-              trouble=1
+              if [ -z "$digest" ]; then
+                if [ "$(stat -c%s "$f")" != "$size" ]; then
+                  echo "::error::$name 字节数不符（Release $size，备份 $(stat -c%s "$f")）"
+                  trouble=1
+                else
+                  echo "（$name 远端没有 sha256 记录，按字节数核对通过）"
+                fi
+              elif [ "$digest" != "sha256:$(sha256sum "$f" | cut -d' ' -f1)" ]; then
+                echo "::error::$name 校验和不符（远端 $digest）"
+                trouble=1
+              fi
+            done < assets.tsv
+            if [ -n "$trouble" ]; then
+              echo "::error::备份不完整，**没有删任何东西**，先查明原因再重跑"
+              exit 1
             fi
-          done < assets.tsv
-          if [ -n "$trouble" ]; then
-            echo "::error::备份不完整，**没有删任何东西**，先查明原因再重跑"
-            exit 1
+          else
+            echo "没有现网 Release 可比对——按备份里的字节自己造一份清单："
+            : > assets.tsv
+            for f in backup/*; do
+              printf '%s\t%s\tsha256:%s\n' "$(basename "$f")" "$(stat -c%s "$f")" "$(sha256sum "$f" | cut -d' ' -f1)" >> assets.tsv
+            done
+            cut -f1 assets.tsv | sed 's/^/  - /'
           fi
           sha256sum backup/* | tee backup-sha256.txt
 
       - name: 存档备份（Artifacts）
-        if: ${{ success() && inputs.task == 'restore-release' }}
+        if: ${{ success() && inputs.task == 'restore-release' && inputs.backup_run_id == '' }}
         uses: actions/upload-artifact@v7
         with:
           name: release-backup-${{ inputs.tag }}
@@ -152,20 +199,56 @@ jobs:
             echo "::error::未配置 RELEASE_TOKEN secret——署名要落到作者本人就得用它，配置方法见 AGENTS.md「发版」一节"
             exit 1
           fi
-          pat_login="$(GH_TOKEN="$RELEASE_TOKEN" gh api user --jq .login)"
-          author="$(jq -r '.author.login' release.json)"
-          was_draft="$(jq -r '.draft' release.json)"
+          if ! pat_login="$(GH_TOKEN="$RELEASE_TOKEN" gh api user --jq .login 2>&1)"; then
+            echo "::error::用 RELEASE_TOKEN 取不到身份（过期 / 被撤销 / 权限不足？）：$(printf '%s' "$pat_login" | tr '\n' ' ' | tail -c 200)"
+            exit 1
+          fi
+          echo "发布令牌身份：$pat_login"
 
-          if [ "$was_draft" = "true" ] && [ "$author" = "$pat_login" ]; then
-            # 目标已经是自己建的草稿（多半是上一次修复跑到一半）：复用，别删——删了附件要重传一遍
-            echo "目标是草稿且署名已是 $pat_login——复用，不删"
+          # 三种现状分别处理：
+          #   没有 release.json      → 现网没这个 Release，直接新建（多半是上一次修复删了没建回来）
+          #   已是自己建的草稿        → 复用，别删——删了附件要重传一遍（发布那步失败就会留下这个状态）
+          #   其余（公开的 / 别人建的）→ 删掉重建，署名才换得掉
+          need_create=""
+          if [ ! -f release.json ]; then
+            echo "现网没有 $TAG 的 Release——直接新建"
+            need_create=1
           else
-            echo "删除现有 Release（不带 --cleanup-tag：tag 保留；原署名 $author，草稿=$was_draft）"
-            gh release delete "$TAG" --yes
-            # 先建**草稿**：草稿对使用者不可见，附件不全时没人看得到一个残缺的下载页
-            jq -n --arg tag "$TAG" --rawfile title title.txt --rawfile body notes.md \
-              '{tag_name:$tag, name:$title, body:$body, draft:true, prerelease:false, make_latest:"false"}' > create.json
-            GH_TOKEN="$RELEASE_TOKEN" gh api -X POST "repos/$GH_REPO/releases" --input create.json > /dev/null
+            author="$(jq -r '.author.login' release.json)"
+            was_draft="$(jq -r '.draft' release.json)"
+            if [ "$was_draft" = "true" ] && [ "$author" = "$pat_login" ]; then
+              echo "目标是草稿且署名已是 $pat_login——复用，不删"
+            else
+              echo "删除现有 Release（不带 --cleanup-tag：tag 保留；原署名 $author，草稿=$was_draft）"
+              if ! out="$(gh release delete "$TAG" --yes 2>&1)"; then
+                echo "::error::删除失败：$(printf '%s' "$out" | tr '\n' ' ' | tail -c 300)"
+                exit 1
+              fi
+              need_create=1
+            fi
+          fi
+
+          if [ -n "$need_create" ]; then
+            # 标题 / 正文：现网 Release 还在时原样沿用；已不在时标题退回 tag，
+            # 正文用仓库里的 CHANGELOG.md 现生成一份（当年发布时用的就是同一来源）
+            if [ ! -s title.txt ]; then printf '%s' "$TAG" > title.txt; fi
+            if [ ! -s notes.md ] && [ -f scripts/changelog.js ]; then
+              echo "正文文件为空——用 scripts/changelog.js 从 CHANGELOG.md 生成一份"
+              if ! node scripts/changelog.js "${TAG#v}" > notes.md 2> changelog-error.txt; then
+                echo "::warning::从 CHANGELOG.md 生成正文失败：$(tr '\n' ' ' < changelog-error.txt | tail -c 200)"
+                : > notes.md
+              fi
+            fi
+            if [ ! -s notes.md ]; then
+              printf '%s\n' "本版正文未能取回。附件是发布时的原始字节，校验和见 SHA256SUMS。" > notes.md
+            fi
+            # 先建**草稿**：草稿对使用者不可见，附件不全时没人看得到一个残缺的下载页。
+            # 命令形状与 build.yml 的发版步骤一致（那边跑通过），差别只在署名令牌。
+            if ! out="$(GH_TOKEN="$RELEASE_TOKEN" gh release create "$TAG" --draft --title "$(cat title.txt)" --notes-file notes.md 2>&1)"; then
+              echo "::error::建草稿失败：$(printf '%s' "$out" | tr '\n' ' ' | tail -c 300)"
+              exit 1
+            fi
+            echo "已建草稿：$(printf '%s' "$out" | head -1)"
           fi
 
           # 逐个上传、互不牵连：失败原因进 ::error:: 注解（匿名可读），已传成功的重跑时按 digest 跳过
@@ -203,12 +286,23 @@ jobs:
             exit 1
           fi
 
-          # 发布：make_latest=false，免得重建一个旧版本时把 Latest 抢走
-          GH_TOKEN="$RELEASE_TOKEN" gh api -X PATCH "repos/$GH_REPO/releases/tags/$TAG" -f draft=false -f make_latest=false > /dev/null
+          # 发布：草稿转正。用 gh release edit（build.yml 里跑通过的那条）；万一它失败，
+          # 退回 id 形式的 PATCH——**注意是数字 id**，tag 形式的 PATCH 会 404（本流程栽过）
+          note=""
+          if ! out="$(GH_TOKEN="$RELEASE_TOKEN" gh release edit "$TAG" --draft=false 2>&1)"; then
+            note="gh release edit 失败（$(printf '%s' "$out" | tr '\n' ' ' | tail -c 200)）；改用 id 形式 PATCH"
+            echo "::warning::$note"
+            rel_id="$(gh api "repos/$GH_REPO/releases/tags/$TAG" --jq .id 2>/dev/null || true)"
+            if [ -z "$rel_id" ] || ! out="$(GH_TOKEN="$RELEASE_TOKEN" gh api -X PATCH "repos/$GH_REPO/releases/$rel_id" -f draft=false -f make_latest=false 2>&1)"; then
+              echo "::error::发布失败（Release 仍是草稿，使用者看不见）：$(printf '%s' "$out" | tr '\n' ' ' | tail -c 300)"
+              exit 1
+            fi
+          fi
 
           # 核对：署名、每个附件的内容、Latest 归属
           #（published_at 会被重置成重建时刻——API 没有回填它的字段；订阅者会看到一次「重新发布」）
-          login="$(gh api "repos/$GH_REPO/releases/tags/$TAG" --jq .author.login)"
+          # 署名读不回来时（报错文本落进 $login）也会走到下面的比对里，报出人话
+          login="$(gh api "repos/$GH_REPO/releases/tags/$TAG" --jq .author.login 2>&1 || true)"
           if [ "$login" != "$pat_login" ]; then
             echo "::error::重建后署名是 $login，不是发布令牌身份 $pat_login"
             exit 1
@@ -217,8 +311,8 @@ jobs:
           while IFS="$(printf '\t')" read -r name size digest; do
             f="backup/$name"
             [ -f "$f" ] || continue
-            now_digest="$(gh api "repos/$GH_REPO/releases/tags/$TAG" --jq ".assets[] | select(.name == \"$name\") | (.digest // \"\")")"
-            now_size="$(gh api "repos/$GH_REPO/releases/tags/$TAG" --jq ".assets[] | select(.name == \"$name\") | .size")"
+            now_digest="$(gh api "repos/$GH_REPO/releases/tags/$TAG" --jq ".assets[] | select(.name == \"$name\") | (.digest // \"\")" 2>/dev/null || true)"
+            now_size="$(gh api "repos/$GH_REPO/releases/tags/$TAG" --jq ".assets[] | select(.name == \"$name\") | .size" 2>/dev/null || true)"
             if [ -z "$now_digest" ]; then
               [ "$now_size" = "$(stat -c%s "$f")" ] || { echo "::error::$name 回传后字节数不符"; trouble=1; }
             elif [ "$now_digest" != "sha256:$(sha256sum "$f" | cut -d' ' -f1)" ]; then
@@ -231,13 +325,22 @@ jobs:
             exit 1
           fi
 
+          # Latest 归属：草稿转正会把 Latest 抢过来（文档：make_latest 默认 true，
+          #「Defaults to true for newly published releases」），把原来那个还回去。
+          # 改 Release 只能走数字 id：id 用 tags/<tag> 查得到，PATCH 认的是 id。
           prev_latest="$(sed 's/^当前 Latest：//' prev-latest.txt)"
           now_latest="$(gh api "repos/$GH_REPO/releases/latest" --jq .tag_name 2>/dev/null || true)"
           if [ -n "$prev_latest" ] && [ "$prev_latest" != "$TAG" ] && [ "$prev_latest" != "无" ] && [ "$now_latest" = "$TAG" ]; then
-            echo "::warning::$TAG 被设成了 Latest（原为 $prev_latest），改回去"
-            GH_TOKEN="$RELEASE_TOKEN" gh api -X PATCH "repos/$GH_REPO/releases/tags/$prev_latest" -f make_latest=true > /dev/null
+            echo "::warning::$TAG 被设成了 Latest（原本是 $prev_latest），改回去"
+            prev_id="$(gh api "repos/$GH_REPO/releases/tags/$prev_latest" --jq .id 2>/dev/null || true)"
+            if [ -n "$prev_id" ]; then
+              GH_TOKEN="$RELEASE_TOKEN" gh api -X PATCH "repos/$GH_REPO/releases/$prev_id" -f make_latest=true > /dev/null \
+                || echo "::warning::改回 Latest 失败，请在 Release 页面上手动把 $prev_latest 设为 latest"
+            else
+              echo "::warning::找不到 $prev_latest 的 Release（已被删？），Latest 暂留在 $TAG"
+            fi
           fi
-          echo "已重建 $TAG：署名 $login，附件 $(gh api "repos/$GH_REPO/releases/tags/$TAG" --jq '.assets | length') 个，Latest 仍为 $(gh api "repos/$GH_REPO/releases/latest" --jq .tag_name)"
+          echo "已重建 $TAG：署名 $login，附件 $(gh api "repos/$GH_REPO/releases/tags/$TAG" --jq '.assets | length') 个，Latest 为 $(gh api "repos/$GH_REPO/releases/latest" --jq .tag_name 2>/dev/null || echo 无)"
 
       - name: 删除 Release、保留 tag（delete-release）
         if: ${{ success() && inputs.task == 'delete-release' }}

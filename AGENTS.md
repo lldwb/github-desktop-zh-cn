@@ -181,9 +181,13 @@ npm test               # 匹配器单元测试（node --test）
 | `task` | 做什么 | 用途 |
 |---|---|---|
 | `delete-release` | 删掉该 tag 的 Release（**不带 `--cleanup-tag`，tag 保留**），不碰其它 | 让 `gh release create` 能重跑一遍——强推 tag 触发 CI、或用新命名 / 新正文重发，修的是**产物与正文** |
-| `restore-release` | 把附件与正文 / 标题取下来 → 删 Release → 用 `RELEASE_TOKEN` 以**同一 tag** 重建（`--latest=false --verify-tag`）→ 用内置 token 逐个回传同样字节的附件（与发版同一套：逐个、每个 3 次重试、失败写 `::error::`）→ 核对署名与附件名单 | 修**署名**——作者一经创建无法修改（见上），v0.1.0 / v0.1.1 的 Release 是早期用内置 token 建的、署名 `github-actions[bot]`，只能这么重建 |
+| `restore-release` | 把附件与正文 / 标题取下来 → 删 Release → 用 `RELEASE_TOKEN` 以**同一 tag** 重建（先 `gh release create --draft` 建草稿，传完附件再 `gh release edit --draft=false` 转正）→ 用内置 token 逐个回传同样字节的附件（与发版同一套：逐个、每个 3 次重试、失败写 `::error::`）→ 核对署名与附件名单 | 修**署名**——作者一经创建无法修改（见上），v0.1.0 / v0.1.1 的 Release 是早期用内置 token 建的、署名 `github-actions[bot]`，只能这么重建 |
 
 两个任务都只在**手动**触发时跑（`workflow_dispatch` 不会自己跑），所以留在仓库里不碍事；`tag` 填错时最坏结果是删掉一个 Release（附件与正文在删之前已备份到 runner 的临时目录、`restore-release` 会原样传回），**但 `delete-release` 之后若 CI 没能重发成功，那个版本会暂时没有 Release**——真要紧的版本，先用 `restore-release` 走一遍比直接删稳。
+
+**修复跑砸了怎么接着修**（`restore-release` 的续传入口）：备份在删之前先传成 Artifacts（`release-backup-<tag>`，保留 30 天），所以「删掉了但没建回来」不是灾难。重跑时带 `backup_run_id=<那次运行的 id>`，备份步骤即从那份 Artifacts 取字节；此时若该 tag 眼下**没有 Release**（上一次删了没建回来），流程会直接新建——正文用 `scripts/changelog.js` 从 CHANGELOG.md 现生成、标题退回 tag 名。**只停在草稿**（发布那步失败就会留下这个状态：附件已传齐、只是没转正）时连 `backup_run_id` 都不用给：草稿是自己建的、附件已齐，重跑会复用草稿、按 digest 跳过上传、只补发布那一下。判断眼下是哪种状态看 `gh api "repos/{o}/{r}/releases/tags/<tag>"`：草稿用写权限令牌可见，匿名只看得见已发布的。
+
+**改 Release 的接口只认数字 id**（v0.1.0 / v0.1.1 两次修复栽在这条上）：`PATCH /repos/{o}/{r}/releases/{release_id}` 的参数文档就一句「The unique identifier of the release.」——传 tag 名是 **404**（实测：`GET /releases/<tag>` 同样 404，只有 `/releases/tags/<tag>` 这个独立端点收 tag，且**只支持 GET**；改、删都得先查 id）。于是 `gh api -X PATCH ".../releases/tags/$TAG" -f draft=false` 会**静默**失败：那条命令没包错误输出，bash 直接 `exit 1`，注解里只剩 runner 的 `Process completed with exit code 1.`，既看不出栽在哪一行、又白白让该版本下线（删在前、发布在后，中间那步一挂就停在没有 Release 的状态）。现在控制面一律用 build.yml 里跑通过的那几条 `gh release` 命令（`create` / `edit` / `delete`——它们内部自己按 tag 查 id），并在**每条**控制面命令外头包一层错误输出（失败时把 gh 的原文写进 `::error::` 注解）；确需直接调 API 时用数字 id。另注意 `make_latest` **默认 `true`（「Defaults to true for newly published releases」）**：草稿转正会把 Latest 抢过来，重建旧版本时要么显式传 `make_latest=false`，要么事后把原来那个 PATCH 回去（`repair-release.yml` 走的是后者，且用 id）。
 
 **改正文要连 `CHANGELOG.md` 一起改**：发版条目原则上「一经创建不得修改」（见上），但**重建某个版本是例外**——正文取自 CHANGELOG，只改线上 Release 会让两者对不上。重建时三者一起动：**CHANGELOG 对应条目 → 补一个该版本的发版提交 → 强推 tag 让 CI 重发**（走 `delete-release` 那条路），别只改一头。
 
