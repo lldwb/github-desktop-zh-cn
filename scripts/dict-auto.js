@@ -39,11 +39,15 @@ const net = require('./net');
 // 一次请求翻译多少条。太小则请求数暴涨（AI 接口的往返延迟是大头），太大则单次失败
 // 连坐的条目多、且模型注意力分散后更容易漏占位符。
 const BATCH_SIZE = 20;
+// 默认的思考强度。批量翻译界面短句用不上深度推理，取最低档即可——实测这一档的思考量约为
+// 最高档的 1/6（1847 vs 11979 思考 tokens），档位越高耗时涨得越快。想开高思考强度用
+// AI_REASONING_EFFORT（或 --ai-effort），并同步放大下面的超时。
+const AI_EFFORT = 'low';
 // 单次请求的超时。翻译一批几十秒很正常，用 net.js 默认的 20 秒会必然超时。
 //
 // 这是**默认值**，可用 AI_TIMEOUT_SEC 环境变量（或 --ai-timeout）覆盖：推理模型的耗时随思考
-// 强度非线性增长——实测 deepseek-v4-flash 回答一个简单问题，默认档 10 秒 / 思考 0.5k tokens，
-// 最高档 97 秒 / 思考 12k tokens（约 23 倍）。要开高思考强度就必须同步放大这个值。
+// 强度非线性增长——实测 deepseek-v4-flash 回答一个简单问题，不传思考强度时 10 秒 / 思考
+// 0.5k tokens，最高档 97 秒 / 思考 12k tokens（约 23 倍）。要开高思考强度就必须同步放大这个值。
 const AI_TIMEOUT = 120000;
 // 逐条重试之间的间隔，避免失败时把接口打爆
 const RETRY_DELAY = 500;
@@ -111,7 +115,8 @@ function printHelp() {
   --ai-base <URL>    OpenAI 兼容接口的 base url（默认取环境变量 AI_BASE_URL）
   --ai-key <密钥>    接口密钥（默认取 AI_API_KEY）
   --ai-model <模型>  模型名（默认取 AI_MODEL）
-  --ai-effort <档位> 思考强度（reasoning_effort，如 low / medium / high / max；不传用接口默认）
+  --ai-effort <档位> 思考强度（reasoning_effort，如 low / medium / high / max；默认 low，
+                     给 none 表示不带该字段、用接口自己的默认档）
   --ai-timeout <秒>  单次请求超时秒数（默认 120；高思考强度要放大，见下方说明）
   --token <令牌>     GitHub API 令牌，仅用于提高取版本号时的速率上限
   -h, --help         显示本帮助
@@ -119,10 +124,12 @@ function printHelp() {
 环境变量：AI_BASE_URL / AI_API_KEY / AI_MODEL / AI_REASONING_EFFORT / AI_TIMEOUT_SEC
 提供默认值，命令行参数优先。
 
-思考强度：推理模型的耗时随思考强度非线性增长——实测 deepseek-v4-flash 回答同一个简单问题，
-默认档 10 秒（0.5k 思考 tokens）、max 档 97 秒（12k 思考 tokens）。开高思考强度时务必同步
-放大 --ai-timeout，否则每批都会超时并退化成逐条重试（更慢、请求数还翻倍）。
-本参数原样透传给接口、不校验取值——不同网关认的档位不同，服务端不认识的值会被忽略或报错。`);
+思考强度：默认 low——批量翻译界面短句用不上深度推理，最低档的思考量约为最高档的 1/6
+（实测 deepseek-v4-flash 回答同一个简单问题：low 1847、high 6526、max 11979 思考 tokens），
+而耗时涨得更快（同一问题：不传该字段 10 秒，max 档 97 秒）。开高思考强度时务必同步放大
+--ai-timeout，否则每批都会超时并退化成逐条重试（更慢、请求数还翻倍）。
+取值原样透传给接口、不校验——不同网关认的档位不同，服务端不认识的会被忽略或报错，
+真遇到报错时用 none 退回接口自己的默认档。`);
 }
 
 // ============================ 目标版本 ============================
@@ -321,6 +328,14 @@ function resolveTimeout(spec, fallback = AI_TIMEOUT) {
     throw new Error(`AI 超时得是正数秒，收到 ${JSON.stringify(spec)}`);
   }
   return Math.round(sec * 1000);
+}
+
+// --ai-effort / AI_REASONING_EFFORT 的解析：没给就用默认档，显式给 none 表示**不带这个字段**。
+// 留这个逃生口是因为取值原样透传、不校验——有的网关对不认识的档位直接报错，那时得能退回
+// 接口自己的默认档（而不是被迫去猜一个它认的值）。
+function resolveEffort(spec) {
+  const v = String(spec ?? AI_EFFORT).trim();
+  return v === 'none' ? '' : v;
 }
 
 const SYSTEM_PROMPT = `你是 GitHub Desktop 中文汉化字典的译者。用户给你一批界面文案，你返回它们的简体中文译文。
@@ -627,11 +642,11 @@ async function buildOne(version, args, log) {
           '需要翻译但没有 AI 配置：请设置 AI_BASE_URL / AI_API_KEY / AI_MODEL 环境变量，或用 --no-ai 只做继承'
         );
       }
-      const effort = args.aiEffort || process.env.AI_REASONING_EFFORT || '';
+      const effort = resolveEffort(args.aiEffort ?? process.env.AI_REASONING_EFFORT);
       const timeout = resolveTimeout(args.aiTimeout || process.env.AI_TIMEOUT_SEC);
       const cfg = { base, key, model, effort, timeout, examples: buildExamples(table) };
       log(
-        `  接口 ${base}，模型 ${model}${effort ? `，思考强度 ${effort}` : ''}` +
+        `  接口 ${base}，模型 ${model}，思考强度 ${effort || '（不传，用接口默认）'}` +
           `，超时 ${timeout / 1000}s，风格示例 ${cfg.examples.length} 条`
       );
       const { done, failed, echoed } = await translateAll(pending, cfg, log);
@@ -819,8 +834,8 @@ function writeReport(file, data) {
 module.exports = {
   main, buildOne, resolveVersions, inheritTable, literalIndex, resolveIn,
   buildCandidates, toSegments, dryRunPlatform, buildExamples, rejectReason, placeholdersOf,
-  resolveTimeout, isEcho,
-  BATCH_SIZE, AI_TIMEOUT, MIN_HIT_RATE, MAX_UNTRANSLATED_RATE,
+  resolveTimeout, resolveEffort, isEcho, translateBatch,
+  BATCH_SIZE, AI_EFFORT, AI_TIMEOUT, MIN_HIT_RATE, MAX_UNTRANSLATED_RATE,
 };
 
 if (require.main === module) main();

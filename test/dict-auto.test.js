@@ -245,6 +245,20 @@ test('resolveTimeout：非法值报错，不静默退回默认', () => {
   }
 });
 
+test('resolveEffort：默认取最低档，none 表示不带该字段', () => {
+  // 批量翻译界面短句用不上深度推理：最低档的思考量约为最高档的 1/6，耗时差一个数量级
+  assert.strictEqual(dictAuto.resolveEffort(undefined), dictAuto.AI_EFFORT);
+  assert.strictEqual(dictAuto.resolveEffort(null), dictAuto.AI_EFFORT);
+  assert.strictEqual(dictAuto.AI_EFFORT, 'low');
+  // 取值原样透传、不校验：网关认哪些档位由它自己说了算
+  assert.strictEqual(dictAuto.resolveEffort('max'), 'max');
+  assert.strictEqual(dictAuto.resolveEffort('  high  '), 'high', '两侧空白剥掉');
+  // none 是逃生口：网关对不认识的档位直接报错时，退回接口自己的默认档（空串 = 不带该字段）
+  assert.strictEqual(dictAuto.resolveEffort('none'), '');
+  // 只认小写 none——取值原样透传，网关若真认 NONE 就该照样传过去
+  assert.strictEqual(dictAuto.resolveEffort('NONE'), 'NONE');
+});
+
 test('isEcho：AI 原样返回判为无需翻译', () => {
   // 实测 3.6.7 新增候选里 10/22 是这类：域名、品牌名、仓库路径。SYSTEM_PROMPT 第 7 条
   // 要求的正是原样返回，判成「未译」会让整个版本因超门槛而产不出来（实测踩到过）
@@ -261,4 +275,80 @@ test('isEcho：译文不同、为空或非字符串时都不算原样返回', ()
   assert.ok(!dictAuto.isEcho('Open Repository', undefined), 'AI 漏回这条 → 走重试，不能当成功');
   // 大小写不同的「返回」不是原样返回：官方文案的书写变体多数是内容变化，得由校验判
   assert.ok(!dictAuto.isEcho('GitHub desktop', 'GitHub Desktop'));
+});
+
+// ============================ AI 请求接线（本地假服务器）============================
+
+// 起一个假 chat/completions，把收到的请求交给 handler。
+// 用本地回环而非真服务：这里要锁的是「参数有没有按约定进请求体」，与模型译得好不好无关，
+// 也不该因为外网不通就失败。
+async function withFakeAI(handler, fn) {
+  const http = require('node:http');
+  const server = http.createServer((req, res) => {
+    let raw = '';
+    req.on('data', (c) => (raw += c));
+    req.on('end', () => handler(req, JSON.parse(raw), res));
+  });
+  await new Promise((r) => server.listen(0, '127.0.0.1', r));
+  try {
+    return await fn(`http://127.0.0.1:${server.address().port}`);
+  } finally {
+    server.closeAllConnections();
+    await new Promise((r) => server.close(r));
+  }
+}
+
+const replyOk = (res, content = '{"1":"打开仓库"}') => {
+  res.writeHead(200, { 'content-type': 'application/json' });
+  res.end(JSON.stringify({ choices: [{ message: { content } }] }));
+};
+
+test('translateBatch：默认档位 low 进请求体，none 则整个字段不带', async () => {
+  const seen = [];
+  const items = [{ text: 'Open Repository', source: 'ui/x.tsx' }];
+  await withFakeAI(
+    (req, body, res) => {
+      seen.push({ url: req.url, auth: req.headers.authorization, body });
+      replyOk(res);
+    },
+    async (base) => {
+      const fixed = { base, key: 'k', model: 'm', timeout: 5000, examples: [] };
+      // 默认档（环境变量与命令行都没给）
+      const out = await dictAuto.translateBatch(items, { ...fixed, effort: dictAuto.resolveEffort(undefined) });
+      assert.strictEqual(out['1'], '打开仓库');
+      // none 是逃生口：网关不认档位时要能退回「不带这个字段」
+      await dictAuto.translateBatch(items, { ...fixed, effort: dictAuto.resolveEffort('none') });
+    }
+  );
+
+  assert.strictEqual(seen.length, 2);
+  assert.strictEqual(seen[0].url, '/chat/completions');
+  assert.strictEqual(seen[0].auth, 'Bearer k');
+  assert.strictEqual(seen[0].body.model, 'm');
+  assert.strictEqual(seen[0].body.reasoning_effort, 'low', '默认档位要真的进请求体');
+  assert.ok(!('reasoning_effort' in seen[1].body), 'none 时不该带这个字段');
+  // 不带档位的请求体必须是合法的：传空串而非删键，会被部分网关判成非法取值
+  assert.strictEqual(seen[1].body.model, 'm');
+});
+
+test('translateBatch：超时按传入毫秒生效，不落到默认值', async () => {
+  // 服务器接了连接就不说话，模拟「网关卡住」。用 600ms 验证 cfg.timeout 真的传到了请求上：
+  // 若没生效，兜底的 20 秒会让这条用例跑满 20 秒，CI 上立刻能看出不对。
+  // 这条正是「开了高思考强度却没放大超时」那个坑的护栏。
+  const t = Date.now();
+  await withFakeAI(
+    () => {
+      /* 故意不响应 */
+    },
+    async (base) => {
+      await assert.rejects(
+        () =>
+          dictAuto.translateBatch([{ text: 'Open Repository', source: 'ui/x.tsx' }], {
+            base, key: 'k', model: 'm', effort: 'low', timeout: 600, examples: [],
+          }),
+        /超时/
+      );
+    }
+  );
+  assert.ok(Date.now() - t < 5000, '不该退化成默认的 20 秒');
 });

@@ -21,9 +21,11 @@
 #
 # 翻译走 OpenAI 兼容接口，Secrets 三个：AI_BASE_URL / AI_API_KEY / AI_MODEL。
 # 另有两个**仓库变量**（Variables，不是 Secret——它们不敏感）：AI_REASONING_EFFORT 传思考
-# 强度（如 max）、AI_TIMEOUT_SEC 传单次请求超时秒数。推理模型的耗时随思考强度非线性增长，
-# 实测同一个简单问题默认档 10 秒、max 档 97 秒，**开高思考强度必须同步放大超时**，
-# 否则每批都超时并退化成逐条重试（更慢、请求数还翻倍）。都不设则用脚本默认。
+# 强度、AI_TIMEOUT_SEC 传单次请求超时秒数。**都不设就走脚本默认（low / 120 秒）**——批量
+# 翻译界面短句用不上深度推理，最低档的思考量约为最高档的 1/6、耗时差一个数量级。要开高思考
+# 强度（如 max）时务必同步放大超时：推理模型的耗时随思考强度非线性增长，实测同一个简单问题
+# 不传该字段 10 秒、max 档 97 秒，不放大超时的话每批都会超时并退化成逐条重试（更慢，请求数
+# 还翻倍）。
 # **没配 AI_API_KEY 就直接失败**，不降级成「只继承不新译」——残缺字典一旦落盘，下次重跑会因
 # 「已有字典」跳过，把残缺永久固化下来（脚本内部的「失败即删」防的也是这件事）。
 # 需要离线排查时用本地 `node scripts/dict-auto.js --no-ai`。
@@ -74,7 +76,7 @@ jobs:
             echo "::error::未配置 AI_API_KEY secret。自动产出必须能翻译官方新增文案——配置方法见 docs/dict-v2/design.md「CI 定时字典」一节"
             exit 1
           fi
-          echo "翻译服务：${AI_BASE_URL:-（默认）} / 模型 ${AI_MODEL:-（默认）} / 思考强度 ${AI_REASONING_EFFORT:-（接口默认）} / 单次超时 ${AI_TIMEOUT_SEC:-120} 秒"
+          echo "翻译服务：${AI_BASE_URL:-（默认）} / 模型 ${AI_MODEL:-（默认）} / 思考强度 ${AI_REASONING_EFFORT:-low（脚本默认）} / 单次超时 ${AI_TIMEOUT_SEC:-120（脚本默认）} 秒"
 
       - uses: actions/checkout@v7
         with:
