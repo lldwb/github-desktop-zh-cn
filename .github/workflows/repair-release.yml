@@ -462,6 +462,25 @@ jobs:
             echo "::error::$TAG 没有 Release（或查不到）：$(tr '\n' ' ' < api-error.txt | tail -c 200)"
             exit 1
           fi
+          # 同一个 tag 下若还留着一个草稿（此前哪一轮修复跑到一半留下的），这个 Release 就有了
+          # 两个候选，而本任务要下载、上传、删附件——命中哪个由不得我们，这种赌不起。实测
+          # /releases/tags/<tag> 在有草稿时返回的是已发布那个，但那是服务端行为、不是承诺，
+          # 所以这里显式要求「恰好一个、且已发布」，不满足就停下来让人先去页面上清理。
+          if [ "$(printf '%s' "$rel" | jq -r '.draft')" != "false" ]; then
+            echo "::error::$TAG 的 Release 还是草稿、尚未发布——本任务只改已发布的 Release；先在页面上删掉这个草稿（或者先把它发布）再跑"
+            exit 1
+          fi
+          # --paginate 的产物是多个 JSON 数组拼在一起，先 jq -s 读成一个再展平
+          if ! all="$(GH_TOKEN="$rel_token" gh api "repos/$GH_REPO/releases?per_page=100" --paginate 2>&1)"; then
+            echo "::error::查不到 Release 列表（要确认 $TAG 名下只有一个 Release）：$(printf '%s' "$all" | tr '\n' ' ' | tail -c 200)"
+            exit 1
+          fi
+          dup="$(printf '%s' "$all" | jq -s "[.[][] | select(.tag_name == \"$TAG\")] | length" 2>/dev/null || true)"
+          if [ "$dup" != "1" ]; then
+            echo "::error::$TAG 名下查到 ${dup:-?} 个 Release（草稿也算）——页面上会看到重复项。两个候选时本任务改的是哪个由不得我们，先在页面上把多余的草稿删掉再跑"
+            exit 1
+          fi
+
           printf '%s' "$rel" | jq -r '.assets[] | "\(.name)\t\(.size)\t\(.digest // "")"' > assets.tsv
           if [ ! -s assets.tsv ]; then
             echo "::error::$TAG 的 Release 一个附件都没有——没有可改的（先确认它是不是刚删剩的空壳）"
