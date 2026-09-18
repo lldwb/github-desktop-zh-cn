@@ -28,10 +28,11 @@
 # v0.1.0 / v0.1.1 的两次修复就是栽在这条上：步骤 exit 1 却没有任何 ::error:: 注解，
 # 因为出错的那行是我手拼的 tag 形式 PATCH。本文件里每个控制面命令都包了错误输出。
 #
-# 兜底：备份在删之前先传成 Artifacts（`release-backup-<tag>`）。万一回传失败，
-# 附件字节还在——带上 `backup_run_id=<那次运行 id>` 重跑 `restore-release` 即可续传。
-# 同理，若上一次修复删了却没建回来（该 tag 眼下没有 Release，或只停在草稿），也这么重跑：
-# 备份步骤认「没有现网 Release」这条路，从 Artifacts 取字节把 Release 建回来。
+# 兜底：备份在删之前先传成 Artifacts（`release-backup-<tag>`，留 30 天）。万一回传失败，
+# 附件字节还在——重跑 `restore-release` 即可续传。同理，若上一次修复删了却没建回来
+# （该 tag 眼下没有 Release），也这么重跑：备份步骤认「没有现网 Release」这条路，
+# 自己去找同名的那份备份（不用手抄运行 id），从里面取字节把 Release 建回来。
+# 想指定用哪一份，才填 `backup_run_id`。
 
 name: 修复已发布 Release
 
@@ -57,7 +58,7 @@ on:
         type: string
         required: true
       backup_run_id:
-        description: （可选，仅 restore-release）附件字节取自哪次运行留下的备份，留空则取自现网 Release
+        description: （可选，仅 restore-release）指定用哪次运行的备份；留空则优先取现网 Release，没有就自己找同名备份
         type: string
         required: false
 
@@ -72,6 +73,8 @@ jobs:
     timeout-minutes: 45        # 与 build.yml 的发版 job 同量级：附件传完只需几分钟，超过这么多半是卡住了
     permissions:
       contents: write         # 附件传输走内置 token（PAT 传附件实测卡死）
+      actions: read           # 续传要从上一次运行的 Artifacts 取字节（gh run download 走的是 /actions/ 接口）。
+                              # 注意：显式写 permissions 会把没列出的权限清零——少了这条，兜底续传必 403
     env:
       GH_REPO: ${{ github.repository }}   # runner 上没有仓库工作区，gh 只能靠这个变量定位仓库
       TAG: ${{ inputs.tag }}
@@ -101,12 +104,17 @@ jobs:
         if: ${{ success() && inputs.task == 'restore-release' }}
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TOKEN: ${{ secrets.RELEASE_TOKEN }}
           BACKUP_RUN_ID: ${{ inputs.backup_run_id }}
         run: |
           mkdir -p backup
+          # 查现网有没有这个 Release **用 PAT**（作者本人的身份）：草稿的可见性有边界，
+          # 查漏了会让流程误以为「没有 Release」而去新建，撞 already_exists 白跑一趟。
+          # PAT 没配才退回内置 token。查到的字节随后仍用内置 token 下载（数据面）。
+          rel_token="${RELEASE_TOKEN:-$GH_TOKEN}"
           # 先看现网有没有这个 Release。可能没有——上一次修复删掉后没建回来，那种情形也得能接着干：
           # 字节改从 backup_run_id 那份 Artifacts 里取（下面分支）。
-          if gh api "repos/$GH_REPO/releases/tags/$TAG" > release.json 2> api-error.txt; then
+          if GH_TOKEN="$rel_token" gh api "repos/$GH_REPO/releases/tags/$TAG" > release.json 2> api-error.txt; then
             jq -j 'if (.title // "") == "" then .tag_name else .title end' release.json > title.txt
             jq -j '.body // ""' release.json > notes-release.md
             echo "目标：$(jq -r '.tag_name' release.json)，标题「$(cat title.txt)」，草稿=$(jq -r '.draft' release.json)，署名=$(jq -r '.author.login' release.json)，附件 $(jq '.assets | length' release.json) 个"
@@ -132,6 +140,25 @@ jobs:
             echo "::warning::CHANGELOG.md 里没有 ${TAG#v} 的条目，正文沿用现网 Release 那份：$(tr '\n' ' ' < changelog-error.txt | tail -c 160)"
           fi
 
+          # 都没给、现网也没有：自己去找同名的那份备份 Artifact（保留 30 天）——
+          # 「还得手抄运行 id」这件事没人记得住，能找到就自己找
+          if [ -z "$BACKUP_RUN_ID" ] && [ ! -f release.json ]; then
+            echo "现网没有 $TAG 的 Release，也没给 backup_run_id——去找名为 release-backup-$TAG 的备份"
+            # 走内置 token 的 actions: read（上面的 permissions）取 /actions/artifacts，
+            # 按 created_at 取最近一份**没过期**的，再从它的 workflow_run.id 找回那次运行
+            arts="$(gh api "repos/$GH_REPO/actions/artifacts?name=release-backup-$TAG&per_page=100" 2> art-error.txt || true)"
+            BACKUP_RUN_ID="$(printf '%s' "$arts" | jq -r '[.artifacts[] | select(.expired | not)] | sort_by(.created_at) | last | .workflow_run.id // empty' 2>/dev/null || true)"
+            if [ -n "$BACKUP_RUN_ID" ]; then
+              echo "找到最近一份可用的备份，来路 run $BACKUP_RUN_ID"
+            else
+              BACKUP_RUN_ID=""
+              # 把原始返回一并塞进注解：注解匿名可读而 job 日志不行，这样下次谁看都能一眼分清
+              # 「确实没有备份」还是「这条查询本身出错（限额 / 权限 / 字段改名）」
+              echo "::error::$TAG 眼下没有 Release，也没有名为 release-backup-$TAG 的可用备份——没有字节可回传。**没有删任何东西**。要么等该 tag 的产物重建后再发，要么人工确认那份备份是否已过期（保留 30 天）。查询返回：$(printf '%s' "$arts" | tr -d '\n' | head -c 240)$(tr -d '\n' < art-error.txt 2>/dev/null | head -c 120)"
+              exit 1
+            fi
+          fi
+
           if [ -n "$BACKUP_RUN_ID" ]; then
             # 从指定运行的 Artifacts 取字节——上次没传完 / 上次把 Release 删没了时走这条，
             # 拿到的是**当初那份**完整备份
@@ -145,9 +172,6 @@ jobs:
               echo "::error::下载附件失败：$(printf '%s' "$out" | tr '\n' ' ' | tail -c 300)"
               exit 1
             fi
-          else
-            echo "::error::$TAG 眼下没有 Release，又没给 backup_run_id——没有字节可回传。附件若还在上一次运行的 Artifacts 里（名字 release-backup-$TAG，保留 30 天），带上那次运行的 id 重跑"
-            exit 1
           fi
 
           if [ -z "$(ls -A backup)" ]; then
@@ -238,7 +262,7 @@ jobs:
               echo "目标是草稿且署名已是 $pat_login——复用，不删"
             else
               echo "删除现有 Release（不带 --cleanup-tag：tag 保留；原署名 $author，草稿=$was_draft）"
-              if ! out="$(gh release delete "$TAG" --yes 2>&1)"; then
+              if ! out="$(GH_TOKEN="$RELEASE_TOKEN" gh release delete "$TAG" --yes 2>&1)"; then
                 echo "::error::删除失败：$(printf '%s' "$out" | tr '\n' ' ' | tail -c 300)"
                 exit 1
               fi
@@ -362,12 +386,15 @@ jobs:
         if: ${{ success() && inputs.task == 'delete-release' }}
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TOKEN: ${{ secrets.RELEASE_TOKEN }}
         run: |
-          if ! gh release view "$TAG" > /dev/null 2>&1; then
-            echo "::error::$TAG 没有 Release（草稿用写权限令牌也看得见，这里不存在就是真没有）——先确认 tag 推过、名字没打错"
+          # 查与删都用 PAT：草稿的可见性有边界，用内置 token 会把「有个草稿」看成「没有 Release」
+          gh_view() { GH_TOKEN="${RELEASE_TOKEN:-$GH_TOKEN}" gh release view "$@"; }
+          if ! gh_view "$TAG" > /dev/null 2>&1; then
+            echo "::error::$TAG 没有 Release——先确认 tag 推过、名字没打错（若确实只有草稿而这里也查不到，说明 RELEASE_TOKEN 没配）"
             exit 1
           fi
-          echo "即将删除：$(gh release view "$TAG" --json tagName,isDraft,name,assets --jq '"\(.tagName)｜标题「\(.name)」｜草稿=\(.isDraft)｜附件 \(.assets | length) 个"')"
-          gh release view "$TAG" --json assets --jq '.assets[].name' | sed 's/^/  - /'
-          gh release delete "$TAG" --yes     # 不带 --cleanup-tag：tag 必须留着，CI 才认得出该发哪一版
+          echo "即将删除：$(gh_view "$TAG" --json tagName,isDraft,name,assets --jq '"\(.tagName)｜标题「\(.name)」｜草稿=\(.isDraft)｜附件 \(.assets | length) 个"')"
+          gh_view "$TAG" --json assets --jq '.assets[].name' | sed 's/^/  - /'
+          GH_TOKEN="${RELEASE_TOKEN:-$GH_TOKEN}" gh release delete "$TAG" --yes     # 不带 --cleanup-tag：tag 必须留着，CI 才认得出该发哪一版
           echo "已删除 $TAG 的 Release（tag 仍在）。要重发：把该 tag 强推一次即可触发 CI 用当前提交重建（见 AGENTS.md「发版」）"
