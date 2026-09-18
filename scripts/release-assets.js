@@ -150,6 +150,11 @@ function assetUrl(version, assetName) {
 }
 
 // 官方最新正式版（不含 beta）。CI 的定时任务据此决定目标版本。
+// 走 /releases/latest，语义是「**有产物可下的**最新正式版」，比官方发布说明页
+// （desktop.github.com/release-notes/）滞后：正式版的 GitHub Release 对象比 notes 晚
+// 若干天才建（实测 3.6.6 的 notes 是 2026-09-16，其 Release 对象与产物至 09-19 仍不存在）。
+// 别改成「按 tag 取最新版本号」——tag 里混着 release-3.6.6（无产物）、release-3.6.7-test2、
+// tmp-e2e-screenshots-* 这类取不到产物的名字，会让 CI 直接失败。
 // 传 token 可提高 GitHub API 的速率上限（CI 里用 GITHUB_TOKEN）。
 async function latestVersion(opts = {}) {
   const headers = opts.token ? { authorization: `Bearer ${opts.token}` } : {};

@@ -106,7 +106,15 @@
 
 **默认值的验证方式**：本机 Node 直连 GitHub 时 TLS 握手异常（带 SNI 6.3 s、不带 0.17 s，脚本的 20 s 超时内拿不到响应），取不到产物、无法本地端到端复跑——这与 `net.js` 已写明的「不支持 HTTP 代理」限制叠加，CI 上不存在（runner 网络直通）。故默认值改由**本地假服务器单测**锁定：`translateBatch` 的请求体里确实带上了 `reasoning_effort: "low"`（`none` 时整个字段不出现），且 `cfg.timeout` 真的落在请求上（600 ms 的用例 621 ms 返回，没退化成 20 s 兜底）。端到端仍以 CI 的 `workflow_dispatch` 回填实测为准（第 6 组未勾选项）。
 
-**一处版本号存疑**（2026-09-19 经本机 7890 代理直连 GitHub API 复核，证据比当时完整）：当时标注的 `3.6.7` 并非正式版——官方 release 列表里该 tag 只有 `release-3.6.7-beta1`（2026-09-16）与 `release-3.6.7-beta2`（2026-09-18）两个 prerelease，`releases/tags/release-3.6.7` 因此返回 404；**最新正式版是 `release-3.6.5`（2026-09-04）**。同理，`dictionaries/3.6.6/` 对应的版本官方也从未发正式版（只有 `3.6.6-beta1/beta2`）——仓库里这份字典是从 beta2 产物产出的，版本号取的是不带 beta 后缀的 `3.6.6`。**结论本身不受影响**：AI 链路、候选口径、干跑比例依赖的是产物内容与字典键集，不依赖版本号这个标签。
+**一处版本号存疑**（2026-09-19 经本机 7890 代理直连 GitHub API 复核；当日二次复核**推翻了其中一半**）：当时标注的 `3.6.7` 并非正式版——该 tag 只有 `release-3.6.7-beta1`（2026-09-16）与 `release-3.6.7-beta2`（2026-09-18）两个 prerelease，`releases/tags/release-3.6.7` 返回 404，这一条成立。
+
+但「最新正式版是 3.6.5」只对了一半。**官方发布说明页（`desktop.github.com/release-notes/`）显示 3.6.6 是 2026-09-16 发布的正式版**，`release-3.6.6` 这个 **tag 也确实存在**；缺的是它的 **GitHub Release 对象与产物**——实测 `releases/tags/release-3.6.6` → 404、产物 URL `…/download/release-3.6.6/GitHubDesktop-3.6.6-x64-full.nupkg` → 404，而同名 beta2 的同一路径 → 200。
+
+**release-notes 与 GitHub Releases 是两条不同步的线**：前者面向用户公布版本，后者才挂产物，正式版的 Release 对象比 notes 晚若干天（3.6.5：notes 09-03 / Release 09-04；3.6.4：notes 08-12 / Release 08-13，各约 1 天；3.6.6 至 09-19 已滞后 3 天以上）。
+
+**CI 不受影响，且 `latestVersion()` 的写法不该改**：它走 `/releases/latest`，语义是「**有产物可下的**最新正式版」——这正是需要的语义。若改成按 tag 取名，会拿到 `release-3.6.6`（无产物）、`release-3.6.7-test2`、`tmp-e2e-screenshots-21745` 这类取不到产物的 tag 而直接失败。故 CI 当前每次跑都停在「3.6.5 已有字典 → 跳过」，直到 3.6.6 的 Release 对象出现——届时目录已存在，仍是跳过，不会覆盖这份从 beta2 产出的字典。
+
+**`dictionaries/3.6.6/` 从 beta2 产物产出仍然合理**（正式版产物根本取不到），版本号取的是不带 beta 后缀的 `3.6.6`。**结论本身不受影响**：AI 链路、候选口径、干跑比例依赖的是产物内容与字典键集，不依赖版本号这个标签。
 
 另注：产物版本号**会**被校验，只是校验得晚——`dict-groups.infer` 有「字典版本 ≠ 安装版本」硬校验，而它在第 7 步才被调用；`--reuse` 本身只查文件是否存在。手工往 `tmp/release/<版本>/` 放产物时（如本次实测把 `3.6.6-beta2` 的产物放进 `tmp/release/3.6.6/`），必须同步改写产物内 `package.json` 的 `version`，否则要到第 7 步才报错。
 
