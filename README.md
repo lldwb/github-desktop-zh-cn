@@ -78,7 +78,7 @@ github-desktop-zh-cn/
 
 界面：工具栏（汉化 / 还原 / 选择 / 检查更新 / 刷新）+ 字典表格（英文 / 中文 / 类型）+ 底部路径与状态栏；操作前有确认框（提示会先自动备份），完成后窗口内提示命中处数与重启结果，运行期间显示进度阶段。
 
-GUI 产物**随 Release 分发**（三平台）：Windows 用 `…-win32-x64-setup.exe`（安装包，可选安装目录）或 `…-win32-x64.zip`（免安装），macOS 用 `…-darwin-arm64.dmg` / `…-darwin-x64.dmg`，Linux 用 `…-linux-x64.AppImage` / `…-linux-x64.deb`。也可以自行构建：
+GUI 产物**随 Release 分发**（三平台）：Windows 用 `github-desktop-zh-cn-gui-v0.2.0-win32-x64-setup.exe`（安装包，可选安装目录）或 `…-gui-v0.2.0-win32-x64.zip`（免安装），macOS 用 `…-gui-v0.2.0-darwin-arm64.dmg`（Intel 机是 `…-gui-v0.2.0-darwin-x64.dmg`），Linux 用 `…-gui-v0.2.0-linux-x86_64.AppImage` / `…-gui-v0.2.0-linux-amd64.deb`。也可以自行构建：
 
 ```bash
 npm install       # 首次：安装 Electron 与 electron-builder（仅构建期依赖，不进产物逻辑）
@@ -98,7 +98,7 @@ GUI 与命令行是**同一套脚本**的两种界面——定位 / 替换 / 备
 
 ### 方式二：单文件可执行（普通用户，无需 Node.js）
 
-到 Releases 下载对应平台的单文件产物（Windows 为 `github-desktop-zh-cn-v<版本>-win32-x64.exe`），双击即用。
+到 Releases 下载对应平台的单文件产物（Windows 是 `github-desktop-zh-cn-cli-v<版本>-win32-x64.exe`，macOS / Linux 是 `…-cli-v<版本>-<平台>-<架构>.bin`，后两者需 `chmod +x` 后运行），双击即用。
 
 #### 1. 运行
 
@@ -154,7 +154,7 @@ macOS / Linux 或自定义安装位置：选 `4) 指定安装位置`，把 `reso
 
 ```
 D:\工具\
-├── github-desktop-zh-cn-v0.1.1-win32-x64.exe   # 产物本体（自带字典）
+├── github-desktop-zh-cn-cli-v0.2.0-win32-x64.exe  # 产物本体（自带字典）
 ├── config.json                                  # 记住的安装位置（用过「指定安装位置」才生成）
 ├── dictionaries\<版本>\zh-CN.json               # 在线拉取的字典（首次用到该版本时生成）
 └── tmp\backup\<版本>\                           # 官方原版备份（首次汉化时生成）

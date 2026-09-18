@@ -49,7 +49,7 @@ npm test               # 匹配器单元测试（node --test）
   - **运行形态与数据根目录**：`common.dataRoot()` 是唯一来源，判据两条——`isPackaged()`（bundle / SEA 产物）与 `isElectronPackaged()`（Electron 打包产物，即 `isElectron() && !process.defaultApp`）。**源码态与 Electron 开发态**（`npm run gui`）= 仓库根；**SEA 产物与 Electron 打包产物** = 可执行文件所在目录（不可写时回退用户数据目录）。备份、`config.json`、`dictionaries/`、`tmp/` 全在数据根下。一个例外：**macOS 上的 Electron 产物**恒取用户数据目录——exe 在 `.app` 包的 `Contents/MacOS` 里，往包内写一个字节就会让签名失效、下次启动被 Gatekeeper 拒开。
   - **字典「外部优先、内嵌兜底」**：`<数据根>/dictionaries/<版本>/zh-CN.json` 存在则用它，否则取打包时内嵌的同名资源；都没有才联网下载（见下）。用户把字典目录放进数据根即可覆盖内嵌版本。Electron 产物没有内嵌资源（`node:sea` 不可用），字典随包放在应用的 `resources/dictionaries`，由 `gui/main.js` 的 `seedBundledDicts()` 首次运行时把数据根里缺的版本播种过去（只补缺失，不覆盖用户替换或在线更新过的字典）——macOS 与 Linux 的 AppImage 取不到「exe 旁」，靠的就是这一步。
   - **构建与发布（CI）**：`.github/workflows/build.yml` 用矩阵在各平台原生 runner 上构建（`windows-latest` / `macos-latest`(arm64) / `macos-15-intel` / `ubuntu-latest`），**两个 job 并行出两类产物**——`build`（单文件可执行）与 `gui`（Electron 图形界面，配置见 `electron-builder.yml`），`release` 等两者都完成再发。手动触发只构建，推 `v*` tag 则构建后自动发 Release 并附 `SHA256SUMS`。发布前先校验 tag 与 `package.json` 版本一致，不一致直接失败，**改版本号时两者必须同步**。GUI job 在每平台构建后跑 `node build/check-gui-dist.js` 静态自检（应用包结构 / 内置字典 / Windows 产物子系统），**运行态实测只能在本地做**（runner 没有桌面会话，起不了窗口）。
-  - **产物去处：Artifacts 是构建中转，Release 才是成品**——手动触发构建后产物留在该次运行的 **Artifacts** 里（单文件产物 `dist-<os>`、GUI 产物 `gui-<os>`），下载得到的是 **zip 压缩包**（GitHub 强制打包），解压后 macOS / Linux 产物可能**丢可执行位**，它只用来自己验证构建，别当成品发给使用者。推 tag 后 CI 建的 Release，附件是**原始文件**（不套 zip），单文件产物名为 `github-desktop-zh-cn-v<版本>-<平台>-<架构>.exe`，GUI 产物同一套词序（`…-win32-x64-setup.exe` / `…-win32-x64.zip` / `…-darwin-arm64.dmg` / `…-linux-x64.AppImage` …），另附 `SHA256SUMS`——给使用者的下载链接一律指向 Release 附件。GUI 产物体积高一个量级（Windows 实测 zip 146 MB、NSIS 安装包 106 MB），四平台全上时 Release 附件合计近 GB 级，属预期。
+  - **产物去处：Artifacts 是构建中转，Release 才是成品**——手动触发构建后产物留在该次运行的 **Artifacts** 里（单文件产物 `dist-<os>`、GUI 产物 `gui-<os>`），下载得到的是 **zip 压缩包**（GitHub 强制打包），解压后 macOS / Linux 产物可能**丢可执行位**，它只用来自己验证构建，别当成品发给使用者。推 tag 后 CI 建的 Release，附件是**原始文件**（不套 zip），附件名分 **cli / gui 两套**（规范见「发版」一节的「产物命名」），另附 `SHA256SUMS`——给使用者的下载链接一律指向 Release 附件。GUI 产物体积高一个量级（Windows 实测 zip 146 MB、NSIS 安装包 106 MB），四平台全上时 Release 附件合计近 GB 级，属预期。
 - **跨平台**：`--path` 可指向任意平台的 resources 目录；自动探测仅实现 Windows。打包产物只能在构建平台运行（Windows 构建 .exe、macOS 构建 Mach-O、Linux 构建 ELF）——基底是构建机的 node 可执行文件，macOS 还必须在 macOS 上注入与签名，**因此没有交叉构建这条路**。跨平台发布走 CI 矩阵（每个平台一个原生 runner），或在各平台各跑一次 `npm run build`。
 
 ### 在线能力（改这些代码前先读）
@@ -154,13 +154,38 @@ npm test               # 匹配器单元测试（node --test）
 5. tag 与 main 一并推送：`git push origin main --follow-tags`（`--follow-tags` 只带注解 tag，与上面的 `-a` 配套）。发版推送是**用户明确要求的动作**，与「提交规范」里「不自动 push」不冲突——日常提交仍只落本地；
 6. CI（`.github/workflows/build.yml`）随即构建各平台产物并发 Release——单文件产物与 GUI 产物**两类都发**（四个平台、共十余个附件，见上「产物去处」），**正文取自 `CHANGELOG.md` 对应段落**（`scripts/changelog.js` 提取，不是自动生成的变更列表）；GUI 产物随 Release 分发是既定行为，改 `gui/` 或 `electron-builder.yml` 后发版即自动带上。
 
+**产物命名**（v0.2.0 起分 **cli / gui 两套**，通道词紧跟项目名、置于版本号之前）：
+
+| 形态 | 模板 | 例 |
+|---|---|---|
+| 单文件可执行（SEA） | `github-desktop-zh-cn-cli-v<版本>-<平台>-<架构>[.exe\|.bin]` | `…-cli-v0.2.0-win32-x64.exe` |
+| 图形界面（Electron） | `github-desktop-zh-cn-gui-v<版本>-<平台>-<架构>[-setup].<扩展名>` | `…-gui-v0.2.0-win32-x64-setup.exe` |
+
+- **为什么是 `cli` / `gui` 紧跟项目名**：附件在 Release 页面里按名字排序，同类相邻、一眼分得出哪个是给命令行的、哪个是给图形界面的；旧命名（`github-desktop-zh-cn-v0.2.0-win32-x64.exe` 与 `…-v0.2.0-win32-x64.zip` 混在一起）看不出通道。
+- **后缀**：Windows 单文件产物用 `.exe`；macOS / Linux 用 `.bin`（**v0.2.0 起新加**）——此前没有后缀，下载页里看不出是什么文件，浏览器也可能不给存成可执行文件。`.bin` 只是命名，产物本身还是 Mach-O / ELF。
+- **平台词**用 `darwin` / `win32` / `linux`（SEA 侧是 Node 的 `process.platform`，GUI 侧靠 `electron-builder.yml` 里用 `${platform}` 而非 `${os}` 对齐）。**架构词随产物走**：SEA 侧是 `process.arch`（`x64` / `arm64`），GUI 的 Linux 目标由 electron-builder 按各自规范给名（AppImage 是 `x86_64`、deb 是 `amd64`），故 `linux` 侧两类的架构词不完全一致，属预期。
+- **改名前先看这两处依赖**：`scripts/update.js` 的自更新按「`-<平台>-<架构>` + 平台后缀」匹配附件（`pickAsset`，无后缀的老产物也认），`build/check-gui-dist.js` 会校验 GUI 产物名是否走 `…-gui-v<版本>-…`。三处（`scripts/build.js` / `electron-builder.yml` / `update.js`）要一起改，改完各平台跑一次构建看实际文件名。
+
 **tag 推送与 Release 创建是同一个发版动作的两半，须配套完成、一次做完**：只推 tag 不建 Release 时首页 Releases 区块收不到该版本，只建 Release 不推 tag 时远端没有对应 ref（`/tree/<tag>` 是 404）——任一中间态都算发版未完成。**不留只存在于本地的 tag**；tag 还须指向已在远程 `main` 上的提交，避免「tag 打得开、`main` 上却看不到」的错位。
 
 **Release 由作者的 PAT 创建**（`secrets.RELEASE_TOKEN`），不用内置 `GITHUB_TOKEN`——内置 token 建出来的 Release 署名是 `github-actions[bot]`，而**作者一经创建无法修改**，要换署名只能删了重建，故必须在创建前就定好。首次配置：GitHub → Settings → Developer settings → Personal access tokens → **Fine-grained token**，`Repository access` 只勾本仓库、权限只给 **Contents: Read and write**；再到仓库 Settings → Secrets and variables → Actions 建 repository secret，名字必须是 `RELEASE_TOKEN`。secret 缺失时 release job 会在创建**之前**失败并打印可读原因（构建产物不受影响，仍在 Artifacts 里）；令牌过期后同样会失败，换新令牌重配即可。
 
 **控制面走 PAT、数据面走内置 token**（v0.2.0 首次带 GUI 产物、传附件时实测）：建 / 改 Release 用 `RELEASE_TOKEN`（署名才是作者本人），**附件传输用内置 `GITHUB_TOKEN`**——`release` job 因此需要 job 级 `permissions: contents: write`。依据是附件上传者字段（`GET /repos/{o}/{r}/releases` 里每个附件的 `.uploader.login`）：v0.1.0 / v0.1.1 的附件共 420 MB 都是内置 token 传的，分别只用 97 秒、915 秒；换成 PAT 后三次尝试跑了 606s / 1657s / 939s **全部失败**，注解还点名卡在同一类 107 MB 的单文件产物上——而同一个文件当年用内置 token 传上去过两次。故看到「构建 job 全绿、只有发布 job 失败、一跑就是十几到二十几分钟」时，先怀疑是不是把附件传输也交给了 PAT。改回内置 token 后，v0.2.0 的 13 个附件（1.38 GB）**71 秒**传完。
 
+**发版提交必须就是 tag 指向的那个提交**（v0.2.0 踩到反例）：CI 按 tag 检出并构建，**tag 指向哪份提交，发布的产物就是哪份**；而 `chore(release): 发布 vX.Y.Z` 这个提交的意义是「这一版到此为止」——它若落在中间、后面还接着落修复提交，历史里就出现「版本定案的锚点」与「实际发布的产物」对不上的错位，`git show <发版提交>` 看到的内容与使用者下载到的东西不是一回事。v0.2.0 正是如此：发版提交之后又落了十余个 CI / 文档修复提交（其中也含 `gui/main.js`、`scripts/common.js`、`electron-builder.yml`、`build/check-gui-dist.js` 等产品代码改动），tag 最终打在最后一个提交上。**修法是重建发版提交**：等该版本的修复全部落完，**在最后再补一个 `chore(release): 发布 vX.Y.Z` 提交**（同样只动那几处、内容与前一个发版提交一致），再把 tag 强推到这个新提交上，让「发版提交」重新等于「tag 指向的提交」。**别指望「发了 tag 之后再落修复提交、重跑 CI 把修复带进产物」**：release 步骤对已发布的 Release 直接跳过（见下），这么做只会把上面的错位坐实。同理，发版提交本身若需要重做（如发布策略变更），也是**再补一个发版提交**而不是把 tag 挪回旧提交——tag 只能往前指。
+
 **已发布的 Release 不再改动**：CI 只**创建**缺失的 Release——该 tag 的 Release 已**发布**时，发布步骤直接跳过、正文也不动。因此**改已发布版本的正文不能靠重跑 CI**，只能直接改 Release（`gh release edit <tag> --notes-file <文件>`，只换正文、不碰附件）。历史改写等场景**强推 tag 会再触发一次 CI**（tag 推送即触发），发布步骤同样按设计跳过，产物与正文都不被覆盖。
+
+**要改已发布的 Release，用 `repair-release.yml`**（`.github/workflows/repair-release.yml`，`workflow_dispatch`，输入 `task` / `tag` / `confirm`——`confirm` 必须与 `tag` 逐字相同，防手滑；两个任务都**只动 Release、不动 tag**）：
+
+| `task` | 做什么 | 用途 |
+|---|---|---|
+| `delete-release` | 删掉该 tag 的 Release（**不带 `--cleanup-tag`，tag 保留**），不碰其它 | 让 `gh release create` 能重跑一遍——强推 tag 触发 CI、或用新命名 / 新正文重发，修的是**产物与正文** |
+| `restore-release` | 把附件与正文 / 标题取下来 → 删 Release → 用 `RELEASE_TOKEN` 以**同一 tag** 重建（`--latest=false --verify-tag`）→ 用内置 token 逐个回传同样字节的附件（与发版同一套：逐个、每个 3 次重试、失败写 `::error::`）→ 核对署名与附件名单 | 修**署名**——作者一经创建无法修改（见上），v0.1.0 / v0.1.1 的 Release 是早期用内置 token 建的、署名 `github-actions[bot]`，只能这么重建 |
+
+两个任务都只在**手动**触发时跑（`workflow_dispatch` 不会自己跑），所以留在仓库里不碍事；`tag` 填错时最坏结果是删掉一个 Release（附件与正文在删之前已备份到 runner 的临时目录、`restore-release` 会原样传回），**但 `delete-release` 之后若 CI 没能重发成功，那个版本会暂时没有 Release**——真要紧的版本，先用 `restore-release` 走一遍比直接删稳。
+
+**改正文要连 `CHANGELOG.md` 一起改**：发版条目原则上「一经创建不得修改」（见上），但**重建某个版本是例外**——正文取自 CHANGELOG，只改线上 Release 会让两者对不上。重建时三者一起动：**CHANGELOG 对应条目 → 补一个该版本的发版提交 → 强推 tag 让 CI 重发**（走 `delete-release` 那条路），别只改一头。
 
 **草稿要复用、不要删**（实测踩过）：`gh release create` 是**先建草稿、传完附件才发布**，中途被取消（或上传失败）就留下一个附件不全、还可能是旧提交产物的草稿。草稿对匿名接口不可见（`/releases` 列不出、`/releases/tags/<tag>` 返 404），但 `gh release view` 用写权限令牌**看得见**。早先的写法是发现草稿就 `gh release delete <tag> --yes`（不带 `--cleanup-tag`，tag 保留）后重建——看着干净，代价是**已传上去的附件全部作废重传**，而 1.4 GB 的附件本就难一次传完，重跑等于从头再来。现在改为**复用草稿**：内容一致的附件跳过（本地 `sha256sum` 比远端附件的 `.digest` 字段——那就是上传内容的 sha256；`digest` 为空的老式上传判不等、重传，偏向安全的那一侧），缺什么补什么，发布前再把不属于本次构建的遗留附件 `gh release delete-asset --yes` 清掉——末端状态与「删掉重建」等价。**但只复用自己的草稿**：署名在建 Release 的那一刻就定了，update 接口没有 author 字段、事后改不了——复用一个内置 token 建出来的草稿，最后发布的 Release 仍署名 `github-actions[bot]`，等于白拆一遍令牌（run #6 的创建步骤用的是 `${{ github.token }}`，就建出过这么一个草稿，后被 run #10/#11 的「删掉重建」清掉）。故续传前先比草稿作者与发布令牌身份（`gh api user` 的 `.login` 比 `releases/tags/<tag>` 的 `.author.login`），对不上就 `gh release delete --yes`（不带 `--cleanup-tag`，tag 保留）后重建。另外，发布步骤只对**已发布**的跳过；跳过时 `创建 Release` 这一步耗时接近 0 秒，**「这一步 0 秒过、Releases 列表里却没有这个版本」就是被旧草稿骗过的信号**。
 
