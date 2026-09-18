@@ -25,6 +25,18 @@ npm run build          # 打包成单文件可执行（dist/ 下，双击即用�
 npm test               # 匹配器单元测试（node --test）
 ```
 
+CI / Release 运维探针（`build/tools/`，匿名只读、零依赖、仓库地址取 `common.js` 的 `GH_OWNER/GH_REPO`，详见该目录 README）：
+
+```bash
+node build/tools/ci-status.cjs                 # 最近 CI 运行概览
+node build/tools/job-timing.cjs <runId> [名字] # 某 job 步骤耗时（定位失败步）
+node build/tools/wait-run.cjs <runId>          # 轮询运行直到结束
+node build/tools/release-detail.cjs <tag>      # Release 署名 / 附件上传者 / 时间戳
+node build/tools/rel-check.cjs [tag...]        # 核对附件名是否符合 cli / gui 规范
+node build/tools/wf-lint.cjs [workflow]        # workflow 体检（run 块 bash -n + YAML 禁忌）
+node build/tools/check-naming.cjs              # pickAsset 只挑 cli 产物（回归）
+```
+
 各脚本支持 `--help`；`patch`/`verify` 支持 `--version <版本>` 指定字典版本、`--path <resources目录>` 显式指定安装目录（跨平台 / 自动探测失败时用）。脚本改动后至少跑一次 `node --check` 与 `--dry-run` 做验证。
 
 ## 架构
@@ -81,7 +93,7 @@ npm test               # 匹配器单元测试（node --test）
 - **干跑在备份上，复查在产物上**——口径反过来必然得到假结论。收录前的命中验证跑 `tmp/backup/<版本>/` 的官方原文（拿 patched 产物干跑，英文早被替换掉，**必然 0 命中**）；打包后的落地复查跑**安装目录的 patched 产物**（在备份上数「原文还剩几处」，量的是原文原本有几处）。
 - **零命中 = 删键**：干跑 0 命中的候选，要么键写错（首尾空格 / 大小写 / 引号），要么已被整模板键覆盖——一律剔除，否则冗余条目会让 `patch` 的「0 命中待核对」告警失去意义。
 - **改字典必须先 `restore` 再 `patch`**：`patch` 是原地替换，不会把已删条目的旧译文从产物里退出。
-- **探针写成 `tmp/*.cjs` 文件再执行**，不用 `node -e`（bash 会吃掉 `${}`、反斜杠 Windows 路径与中文引号）；不在 shell 里拼中文 grep / 正则；**探针输出必须截断**（一次数百 KB 的输出会撑爆上下文，后续取证全部走样）。
+- **探针写成 `tmp/*.cjs` 文件再执行**，不用 `node -e`（bash 会吃掉 `${}`、反斜杠 Windows 路径与中文引号）；不在 shell 里拼中文 grep / 正则；**探针输出必须截断**（一次数百 KB 的输出会撑爆上下文，后续取证全部走样）。**`tmp/` 默认不固化**（gitignored，清掉即失）——但有复用价值的中间过程脚本要**视情况固化**：CI / Release 运维类探针与命名回归迁到 `build/tools/`（匿名只读、参数化、自包含，见「常用命令」），别让下次会话重写一遍。
 - **一个桶一个提交**：按主题分批（错误提示 / 跨元素片段 / 菜单 / 表单标签…），每批走完 打包 → 验证 → 落地复查 → 提交 全链再开下一批。
 - **提交前核对两个数**：字典条目数（`node -e "console.log(Object.keys(require('./dictionaries/3.6.5/zh-CN.json')).length)"`）写进提交信息；`npm run patch` 的合计命中数应与干跑预期**完全一致**（这是最有说服力的一致性证据）。
 - **备份必须确为官方原版**：`locate` 的备份是「已存在则跳过」，被污染的备份会静默通过、让后续所有「以原文为准」的取证失真。核验口径：官方原版两个文件的汉字字符数为 **0**（3.6.5 实测备份 0 / 0，汉化产物 599 / 15706）；非 0 就删掉 `tmp/backup/<版本>/` 重新备份。
