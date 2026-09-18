@@ -240,8 +240,11 @@ function serialize(doc) {
 
 // 事务写入：校验不通过就抛错，**原文件不动**。
 // dryRun 为真时走完全部步骤（含校验）但不落盘，用来预览一次批量修改的结果。
+// 目标版本还没有字典时（CI 给新版本产出首版）也走这里——original 为 null 表示「原文件不存在」，
+// 写后复核失败时的回滚动作相应地是删除而不是覆盖回原文。
 function write(version, doc, { dryRun = false } = {}) {
-  const { file, text: original } = readRaw(version);
+  const file = dictPath(version);
+  const original = fs.existsSync(file) ? fs.readFileSync(file, 'utf8') : null;
 
   const { errors, warnings } = validateDoc(doc, version);
   if (errors.length) {
@@ -254,6 +257,7 @@ function write(version, doc, { dryRun = false } = {}) {
 
   const tmp = `${file}.tmp`;
   try {
+    fs.mkdirSync(path.dirname(file), { recursive: true }); // 新版本目录尚不存在
     fs.writeFileSync(tmp, next, 'utf8');
 
     // 读回 .tmp 重新解析 + 校验：挡住序列化与解析之间的意外
@@ -271,11 +275,30 @@ function write(version, doc, { dryRun = false } = {}) {
 
   // 写后复核：rename 成功但内容意外时，用内存里的原文覆盖回去
   if (fs.readFileSync(file, 'utf8') !== next) {
-    fs.writeFileSync(file, original, 'utf8');
+    if (original === null) fs.rmSync(file, { force: true });
+    else fs.writeFileSync(file, original, 'utf8');
     throw new DictError('写入后复核不一致，已回滚为修改前内容');
   }
 
   return { ok: true, file, changes: 1, warnings };
+}
+
+// 从零建一份字典（目标版本还没有字典目录时用）。CI 给新版本产出首版字典走这里——
+// 「文件还不存在」不是跳过校验的理由，恰恰相反：新字典没有既有内容兜底，第一版内容的
+// 合法性全靠这一次校验。已存在则报错，避免把「新建」误用在「改已有字典」上（那会整段覆盖）。
+function create(version, { meta = {}, segments = {}, groups = {} } = {}, opts = {}) {
+  const file = dictPath(version);
+  if (fs.existsSync(file)) {
+    throw new DictError(`字典已存在，改用 apply / mergeIn 修改：${file}`);
+  }
+  // version / formatVersion 放在展开之后：它们与目录结构、解析分支绑定，不该被 meta 覆盖
+  const doc = { _meta: { ...meta, version, formatVersion: 2 } };
+  for (const name of SEGMENTS) {
+    const seg = segments[name];
+    doc[name] = seg && typeof seg === 'object' && !Array.isArray(seg) ? { ...seg } : {};
+  }
+  doc.groups = groups && typeof groups === 'object' && !Array.isArray(groups) ? { ...groups } : {};
+  return write(version, doc, opts);
 }
 
 function findSegments(doc, key, platform) {
@@ -669,6 +692,7 @@ module.exports = {
   query,
   validate,
   validateDoc,
+  create,
   apply,
   add,
   update,

@@ -31,7 +31,7 @@
   - 新增 `scripts/dict-groups.js`：从产物 sourcemap 自动推断组名，写入 `groups` 段。
   - 现有 3.6.6 字典经迁移脚本从扁平转成分段（迁移本身也走 `dict-edit`），并从官方 macOS 产物补齐 macOS 平台段。
   - `gui/` 字典表格加「组名」列；`gui/main.js` 的 `collectDictEntries` 读 `groups`。
-  - 新增 `.github/workflows/dict-auto.yml`：`schedule` + `workflow_dispatch`，取官方产物（HTTP Range 只取 main.js / renderer.js，不下整包）→ scan → 继承 → AI 翻译 → `dict-edit` 写入校验 → 提交。
+  - 新增 `.github/workflows/dict-auto.yml`：`schedule` + `workflow_dispatch`，取官方产物（HTTP Range 只取 main.js / renderer.js，不下整包）→ 以历史字典的键为锚核对新产物形态（继承）→ 官方新增的 JSX 文案走 AI 翻译 → `dict-edit` 写入校验 → 提交。
   - `build.yml` 的 `release` job 后新增 Gitee 发版步骤（Gitee OpenAPI v5，`access_token` 走 Secrets）。
   - `common.remoteDictUrls()` 增加 Gitee raw 兜底；工具自更新检查增加 Gitee 兜底。
   - 更新管控：新增注入补丁（禁止自动更新 / 更新前查字典 / 放行后自动汉化），并入 `patch.js` 的补丁链，可独立开关与还原。

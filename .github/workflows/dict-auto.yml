@@ -1,0 +1,179 @@
+# dict-auto.yml — 定时按官方产物产出字典（字典 2.0「CI 自动更新」链路的入口）
+#
+# 触发：
+#   - schedule：每日一次，取官方最新非 beta 版本。已有 dictionaries/<版本>/ 就直接跳过，
+#     所以重复跑是安全的（幂等），不必担心「跑两次产出两份」；
+#   - workflow_dispatch：手动跑，versions 填版本列表即可**回填历史版本**（逗号分隔，脚本会
+#     按版本升序依次产出）。留空则同 schedule。
+#
+# 产出直接提交到仓库（dictionaries/<版本>/zh-CN.json），不是 Release 附件——字典要能被
+# patch 联网取、也要能被用户 git pull 到，放仓库里最直接；体积也只有几百 KB。
+#
+# 为什么放在 CI 而不是本地跑：字典必须在**官方产物**上核对（继承旧译文与写入前干跑都要读
+# main.js / renderer.js 的字符串字面量），而产物要分平台各取一份（windows-x64 / macos-x64），
+# 本地很难同时凑齐两平台。脚本本身不下载整包——走 HTTP Range 只取 app 下的几个文件，
+# 单个版本两平台合计几 MB，跑起来很便宜。
+#
+# 提交身份取 RELEASE_TOKEN 持有者（而非 github-actions[bot]）：与仓库对「Release 须由作者
+# 身份创建」的一贯纪律一致，见 AGENTS.md「发版」一节。push 用 PAT 也避开了内置 token 在
+# 分支保护规则下的推送限制。注意提交到 main **不会**触发 build.yml——它只认 v* tag 与手动触发，
+# 所以不存在「字典更新 → 重新构建 → 再更新字典」的回环。
+#
+# 翻译走 OpenAI 兼容接口，Secrets 三个：AI_BASE_URL / AI_API_KEY / AI_MODEL。
+# **没配 AI_API_KEY 就直接失败**，不降级成「只继承不新译」——残缺字典一旦落盘，下次重跑会因
+# 「已有字典」跳过，把残缺永久固化下来（脚本内部的「失败即删」防的也是这件事）。
+# 需要离线排查时用本地 `node scripts/dict-auto.js --no-ai`。
+
+name: 字典自动更新
+
+on:
+  schedule:
+    # 每日 03:17（UTC）——避开整点：整点是 GitHub 上定时任务最挤的时刻，容易排队延迟
+    - cron: '17 3 * * *'
+  workflow_dispatch:
+    inputs:
+      versions:
+        description: '要产出的版本，逗号分隔（如 3.6.0,3.6.1）；留空 = 官方最新非 beta 版本'
+        required: false
+        type: string
+      dry_run:
+        description: '只干跑校验、不写入字典（用于先看看某版本能不能产出）'
+        required: false
+        type: boolean
+        default: false
+
+# 只需要读自己的仓库代码；推送到远端由 checkout 里的那个 token 负责，与此处无关
+permissions:
+  contents: read
+
+# 同一时刻只允许一个：两个 run 同时改 dictionaries/ 再同时 push 会互相打架
+concurrency:
+  group: dict-auto
+  cancel-in-progress: false
+
+jobs:
+  auto:
+    name: 产出字典
+    runs-on: ubuntu-latest
+    # 回填十几个历史版本时，每版都要取产物 + 调一次翻译服务，给足时间（失败也会尽早退出）
+    timeout-minutes: 180
+    steps:
+      - name: 校验翻译服务配置
+        env:
+          AI_API_KEY: ${{ secrets.AI_API_KEY }}
+          AI_BASE_URL: ${{ secrets.AI_BASE_URL }}
+          AI_MODEL: ${{ secrets.AI_MODEL }}
+        run: |
+          if [ -z "$AI_API_KEY" ]; then
+            echo "::error::未配置 AI_API_KEY secret。自动产出必须能翻译官方新增文案——配置方法见 docs/dict-v2/design.md「CI 定时字典」一节"
+            exit 1
+          fi
+          echo "翻译服务：${AI_BASE_URL:-（默认）} / 模型 ${AI_MODEL:-（默认）}"
+
+      - uses: actions/checkout@v7
+        with:
+          # 用 PAT 拉取：后续 push 复用它，权限确定
+          token: ${{ secrets.RELEASE_TOKEN }}
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+
+      # 版本列表走环境变量而不是直接插值进脚本：workflow_dispatch 的输入不该被当作 shell 代码看待
+      - name: 产出字典
+        id: build
+        # 产出失败（某版本没过门槛）时也继续走后面的提交步骤：失败的版本脚本已自行删除，
+        # 磁盘上只剩成功的那些，把它们提交上去比整轮丢掉划算；job 最终仍是失败状态
+        continue-on-error: true
+        env:
+          IN_VERSIONS: ${{ inputs.versions }}
+          IN_DRY_RUN: ${{ inputs.dry_run }}
+          AI_BASE_URL: ${{ secrets.AI_BASE_URL }}
+          AI_API_KEY: ${{ secrets.AI_API_KEY }}
+          AI_MODEL: ${{ secrets.AI_MODEL }}
+          # 读官方 Release 是公开数据，用内置 token 只为提高 API 速率限制
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          args=()
+          if [ -n "$IN_VERSIONS" ]; then args+=(--version "$IN_VERSIONS"); fi
+          if [ "$IN_DRY_RUN" = "true" ]; then args+=(--dry-run); fi
+          node scripts/dict-auto.js "${args[@]}" --report tmp/dict-auto-report.json
+
+      # 产出的字典要先过一遍仓库自身的测试，再允许进版本库
+      - name: 跑测试
+        run: node --test
+
+      - name: 提交
+        # 被取消时不提交（可能是有人手动掐掉了一次跑偏的任务）；其余情况都走一遍，
+        # 由下面的「有没有变化」自行决定是空跑还是真提交
+        if: ${{ always() && !cancelled() }}
+        env:
+          RELEASE_TOKEN: ${{ secrets.RELEASE_TOKEN }}
+          IN_DRY_RUN: ${{ inputs.dry_run }}
+        run: |
+          # --dry-run 只干跑校验，磁盘上不会有新字典，不必进提交流程
+          if [ "$IN_DRY_RUN" = "true" ]; then
+            echo "dry-run：不提交"
+            exit 0
+          fi
+
+          git add dictionaries/
+          if git diff --cached --quiet; then
+            echo "字典无变化（官方未发新版，或该版本已有字典），不提交"
+            exit 0
+          fi
+
+          # 提交身份取 token 持有者。硬编码名字的话，换了账号维护就会署错名
+          login="$(GH_TOKEN="$RELEASE_TOKEN" gh api user --jq .login)"
+          uid="$(GH_TOKEN="$RELEASE_TOKEN" gh api user --jq .id)"
+          git config user.name "$login"
+          git config user.email "${uid}+${login}@users.noreply.github.com"
+
+          # 提交信息按仓库的约定式格式生成，正文带每版本的继承/新增/未译数字——
+          # 光看「自动产出」看不出这轮到底动了什么，数字放在正文里便于回溯
+          node -e '
+            const fs = require("fs");
+            const r = JSON.parse(fs.readFileSync("tmp/dict-auto-report.json", "utf8"));
+            const made = r.reports.filter((p) => p.ok && !p.skipped);
+            const failed = r.reports.filter((p) => !p.ok && !p.skipped);
+            const title = made.length === 1
+              ? `feat(dict): 自动产出 ${made[0].version} 字典`
+              : `feat(dict): 自动产出 ${made.map((p) => p.version).join(" / ")} 字典`;
+            const body = made.map((p) =>
+              `- ${p.version}：继承 ${p.inherited} 条（其中 ${p.variant} 条官方改了大小写），` +
+              `新增 ${p.added} 条、译出 ${p.translated || 0} 条，未译 ${p.untranslated} 条，` +
+              `官方已删除 ${p.dropped} 条；分段 common ${p.counts.common} / macos ${p.counts.macos}`
+            );
+            for (const p of failed) body.push(`- ${p.version}：产出失败——${p.reason}`);
+            fs.writeFileSync("tmp/dict-auto-message.txt", `${title}\n\n${body.join("\n")}\n`);
+            console.log(fs.readFileSync("tmp/dict-auto-message.txt", "utf8"));
+          '
+          git commit -F tmp/dict-auto-message.txt
+
+          # 极少数情况下远端在本轮跑的过程中有了新提交，rebase 一次再推；再失败就报错，
+          # 下次定时任务会重新产出（runner 是全新的，不会因为「本地已有字典」而跳过）
+          git push || { git pull --rebase origin "$GITHUB_REF_NAME" && git push; }
+
+      - name: 汇总
+        if: ${{ always() && !cancelled() }}
+        run: |
+          if [ -f tmp/dict-auto-report.json ]; then
+            node -e '
+              const r = JSON.parse(require("fs").readFileSync("tmp/dict-auto-report.json", "utf8"));
+              const out = [];
+              for (const p of r.reports) {
+                if (p.skipped) out.push(`跳过 ${p.version}：${p.reason}`);
+                else if (p.ok) out.push(`成功 ${p.version}：common ${p.counts.common} / macos ${p.counts.macos}，新译 ${p.translated || 0}，未译 ${p.untranslated}`);
+                else out.push(`失败 ${p.version}：${p.reason}`);
+              }
+              console.log(out.join("\n"));
+              require("fs").appendFileSync(process.env.GITHUB_STEP_SUMMARY, "## 字典产出\n\n" + out.map((l) => "- " + l).join("\n") + "\n");
+            '
+          fi
+
+      # 上一步 continue-on-error，失败要在这里显式暴露，否则整轮跑绿而问题被吞掉
+      - name: 检查产出结果
+        if: steps.build.outcome == 'failure'
+        run: |
+          echo "::error::字典产出未通过（详见上方日志与汇总）"
+          exit 1

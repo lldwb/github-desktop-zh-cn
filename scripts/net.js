@@ -38,7 +38,8 @@ function describe(e, url) {
   return err;
 }
 
-// 发起请求，把 2xx 的响应流交给调用方；重定向、非 2xx、超时、网络错误都在这里收口
+// 发起请求，把 2xx 的响应流交给调用方；重定向、非 2xx、超时、网络错误都在这里收口。
+// rawStatus 为真时不因非 2xx 而拒绝——AI 接口把出错原因写在响应体里，读不到就没法诊断。
 function openStream(url, opts, redirects) {
   return new Promise((resolve, reject) => {
     const target = new URL(url);
@@ -65,7 +66,7 @@ function openStream(url, opts, redirects) {
           resolve(openStream(new URL(location, url).toString(), opts, redirects + 1));
           return;
         }
-        if (status < 200 || status >= 300) {
+        if (!opts.rawStatus && (status < 200 || status >= 300)) {
           res.resume();
           reject(new Error(`HTTP ${status}：${url}`));
           return;
@@ -78,8 +79,27 @@ function openStream(url, opts, redirects) {
     req.setTimeout(timeout, () => {
       req.destroy(new Error(`请求超时（${timeout / 1000} 秒无响应）：${url}`));
     });
-    req.end();
+    req.end(opts.body);
   });
+}
+
+// 把响应体读进内存，超过 maxBytes 立刻掐断（AI 接口的响应是 JSON，几 MB 足够）
+async function readBody(res, url, limit) {
+  const chunks = [];
+  let received = 0;
+  await new Promise((resolve, reject) => {
+    res.on('data', (c) => {
+      received += c.length;
+      if (received > limit) {
+        res.destroy(new Error(`响应体超过 ${limit} 字节上限：${url}`));
+        return;
+      }
+      chunks.push(c);
+    });
+    res.on('end', resolve);
+    res.on('error', (e) => reject(describe(e, url)));
+  });
+  return Buffer.concat(chunks).toString('utf8');
 }
 
 // GET 到内存，连同状态码与响应头一起返回。Range 请求要靠状态码区分 206（服务端真按区间
@@ -136,6 +156,36 @@ async function getJson(url, opts = {}) {
   return JSON.parse(text);
 }
 
+// POST JSON 并把响应解析成 JSON（AI 兼容接口用）。非 2xx 不在这里抛——
+// 报错详情在响应体里，交给调用方读到之后再决定怎么报。
+// 默认 4 MB 上限：翻译响应是纯 JSON，正常几十 KB；超了说明对面回的不是预期内容。
+async function postJson(url, body, opts = {}) {
+  const payload = Buffer.from(JSON.stringify(body), 'utf8');
+  const res = await openStream(
+    url,
+    {
+      ...opts,
+      method: 'POST',
+      body: payload,
+      rawStatus: true,
+      headers: {
+        'content-type': 'application/json',
+        'content-length': String(payload.length),
+        ...(opts.headers || {}),
+      },
+    },
+    0
+  );
+  const text = await readBody(res, url, opts.maxBytes || 4 * 1024 * 1024);
+  let data;
+  try {
+    data = JSON.parse(text);
+  } catch {
+    throw new Error(`响应不是合法 JSON（HTTP ${res.statusCode}）：${text.slice(0, 200)}`);
+  }
+  return { status: res.statusCode, data };
+}
+
 // 流式下载到文件：产物可达上百 MB，不进内存；先写 .part 再改名，避免半成品被当成成品
 async function download(url, destPath, opts = {}) {
   const res = await openStream(url, opts, 0);
@@ -157,4 +207,4 @@ async function download(url, destPath, opts = {}) {
   return { bytes: received, total };
 }
 
-module.exports = { get, getRaw, getJson, head, download, UA };
+module.exports = { get, getRaw, getJson, postJson, head, download, UA };

@@ -19,6 +19,7 @@ const RUNNERS = {
   scan: () => require('./scan.js'),
   dict: () => require('./dict-edit.js'),
   groups: () => require('./dict-groups.js'),
+  auto: () => require('./dict-auto.js'),
 };
 
 const SUBCOMMANDS = Object.keys(RUNNERS);
@@ -37,6 +38,7 @@ function printHelp() {
   scan      未翻译文案自查（输出待补清单）
   dict      字典维护与校验（字典的唯一写入口，改字典一律走它）
   groups    推断字典组名（读安装目录 sourcemap，产出 groups 段）
+  auto      按官方产物自动产出字典（CI 定时任务用；本地跑需联网取产物）
 
 dict 子命令（完整用法见 github-desktop-zh-cn dict -h）：
   dict validate <版本>           一致性校验，有 error 即以非零码退出
@@ -45,6 +47,13 @@ dict 子命令（完整用法见 github-desktop-zh-cn dict -h）：
   dict add / update / remove / set-group / move / merge / regroup
   dict export-flat <版本>        导出扁平字典
   dict migrate <版本>            扁平格式迁移为分段格式
+
+auto 子命令（完整用法见 github-desktop-zh-cn auto -h）：
+  auto --version <版本>[,<版本>…]  产出指定版本的字典；省略则取官方最新非 beta 版本
+  auto --reuse                    复用已提取到 --work 下的产物，不重新下载
+  auto --no-ai                    不调 AI 翻译（只做继承与核对，用于离线排查）
+  auto --dry-run                  只干跑校验，不写入字典
+  环境变量 AI_BASE_URL / AI_API_KEY / AI_MODEL 提供翻译服务默认值
 
 公共选项：
   --path <目录>    显式指定 resources 目录（自动探测失败或非默认安装位置时用）
@@ -60,7 +69,17 @@ function runSubcommand(name, rest) {
   const mod = RUNNERS[name]();
   // locate / verify / scan 加载即执行；patch / restore 导出 main，需显式调用
   // （打包态下 require.main 指向入口 cli，脚本自身的 require.main === module 判断不成立）
-  if (typeof mod.main === 'function') mod.main();
+  if (typeof mod.main === 'function') {
+    const r = mod.main();
+    // auto 的 main 是 async（要联网取产物、调翻译服务）：同步调用不接住 promise 的话，
+    // 未捕获的 rejection 会以裸栈退出，用户看不到「哪一步失败」
+    if (r && typeof r.catch === 'function') {
+      r.catch((e) => {
+        console.error(`错误：${e.message}`);
+        process.exit(1);
+      });
+    }
+  }
 }
 
 function ask(rl, question) {

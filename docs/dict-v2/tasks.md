@@ -62,14 +62,35 @@
 
 ## 6. CI 定时字典（`dict-auto.yml`）
 
-- [ ] 新增 `.github/workflows/dict-auto.yml`：`schedule`（每日）+ `workflow_dispatch`（可传单版本或版本列表用于回填）
-- [ ] 目标版本解析：取官方最新非 beta tag；已存在 `dictionaries/<版本>/` 则跳过（幂等）
-- [ ] 产物提取接入工作流（复用第 4 组的模块）
-- [ ] 继承逻辑：同键直接复用上一版译文；统计继承数与新增数并打印
-- [ ] AI 翻译：OpenAI 兼容协议，Secrets 为 `AI_BASE_URL` / `AI_API_KEY` / `AI_MODEL`；失败时按条目重试并记录未译条目
-- [ ] 准入门槛：`dict-edit validate` 通过 + 产物干跑（语法校验 + 命中率阈值）通过，才允许提交；不通过则开 issue 并保留产物
-- [ ] 提交到仓库（`GITEE_TOKEN` 之外的提交凭据用既有 `RELEASE_TOKEN`），提交信息含继承数 / 新增数 / 未译数
+- [x] 新增 `.github/workflows/dict-auto.yml`：`schedule`（每日）+ `workflow_dispatch`（可传单版本或版本列表用于回填）
+      ——每日 `17 3 * * *`（UTC，避开整点排队），`workflow_dispatch` 两个输入：`versions`（逗号分隔，留空取官方最新）与 `dry_run`。`concurrency: dict-auto` 限单实例——两个 run 同时改 `dictionaries/` 再 push 会互相打架
+- [x] 目标版本解析：取官方最新非 beta tag；已存在 `dictionaries/<版本>/` 则跳过（幂等）
+      ——`resolveVersions()`：无 `--version` 时走 `release-assets.js` 的 `latestVersion()`（只认 `release-` 前缀的正式 tag），给了列表则按 `common.compareVersions` 升序依次产出；`buildOne()` 开头先查 `common.dictFile(version)` 是否存在，在则 `{skipped:true}` 直接跳过
+- [x] 产物提取接入工作流（复用第 4 组的模块）
+      ——`release-assets.js` 的 `fetchApp()`，走 HTTP Range 只取 `app/` 下几个文件（不下载整包），落成 `<work>/<版本>/<平台>-<arch>/app/`；`--reuse` 复用已有目录，便于反复调试同一版本
+- [x] 继承逻辑：同键直接复用上一版译文；统计继承数与新增数并打印
+      ——`inheritTable()` 版本降序合并、同键先见者胜（新版本译文优先），坏字典跳过不报错；再逐条核对新产物：`resolveIn()` 先试精确形态、再退到「只差大小写」的形态（官方把 `Copy file path` 改成 `Copy File Path` 这类微调不该让译文丢掉）。实测 3.6.7 上 **1963 条历史键零丢失**，其中 277 条官方改了大小写
+- [x] AI 翻译：OpenAI 兼容协议，Secrets 为 `AI_BASE_URL` / `AI_API_KEY` / `AI_MODEL`；失败时按条目重试并记录未译条目
+      ——`callAI()` 每批 20 条、失败重试 2 次、单次超时 120 s；译文过 `rejectReason()`（占位符集合一致 + 必须含 CJK 字符），不合格的计未译并记原因。**未用真实服务实测**（本地无密钥），接口形态按 OpenAI 兼容协议写，CI 首次跑通的标志是「未译比例门槛不触发」
+- [x] 准入门槛：`dict-edit validate` 通过 + 产物干跑（语法校验 + 命中率阈值）通过，才允许提交；不通过则开 issue 并保留产物
+      ——门槛实现在 `dict-auto.js` 内（`--report` 出 JSON，workflow 只负责看退出码），比放在 workflow 里更早失败、也便于本地复现。**「开 issue」未做**：schedule 失败 GitHub 默认就给仓库所有者发通知，开 issue 是重复；改为 job 失败 + `::error::` 注解。**「保留产物」与本组「失败即删字典」不冲突**——删的是**产出的字典**（否则下次重跑会因「已有字典」跳过、把失败产出永久固化），官方产物本就在 `tmp/` 下、不在删除范围
+- [x] 提交到仓库（`GITEE_TOKEN` 之外的提交凭据用既有 `RELEASE_TOKEN`），提交信息含继承数 / 新增数 / 未译数
+      ——checkout 与 push 都用 `RELEASE_TOKEN`（PAT 权限确定，也避开内置 token 在分支保护下的推送限制），提交身份取该 token 持有者的 `login` 与 `id`（`{id}+{login}@users.noreply.github.com`），不硬编码名字。提交信息按仓库约定式生成，正文逐版本列「继承 N 条（其中 M 条官方改了大小写）/ 新增 N 条、译出 N 条 / 未译 N 条 / 官方已删除 N 条 / 分段 common N / macos N」。**推 main 不会触发 build.yml**（它只认 `v*` tag 与手动触发），不存在回环
 - [ ] `workflow_dispatch` 回填实测：指定一个此前无字典的官方版本，产出并校验通过
+      ——**只能在真实 CI 上做**（本地无法触发 Actions）。脚本侧的多版本路径已就绪：`--version` 收逗号分隔列表并按版本升序依次产出，逐版本独立成败（一个版本失败不影响后续，job 最终状态为失败）；提交步骤用 `if: always()`，把成功的部分照样提交上去
+
+### 6.1 本组的两处口径取舍（实测取证）
+
+**候选口径**：产物里的字符串字面量「是不是界面文案」在静态层面无从判断。实测 3.6.6 macOS 产物，字面量侧 1714 条候选里 1138 条是枚举值（`Canceled`）、事件名（`PageDown`）、注册表配置（`VSCodium`）、URL 片段（`/graphql`）、第三方包标识符；JSX 文本节点侧 150 条里 130 条命中既有字典，口径准得多。**最终定为**：① 继承 = 以历史字典的键为锚逐条核对新产物；② 新增 = 只取 JSX 文本节点候选；③ 字面量侧新增一律不自动收录（交给 `scan` 报告人工判断）。`scan.collectCandidates` 相应加了 `jsx` 标记，两处共用同一套过滤规则。
+
+**平台分段**：只有「macOS 产物独有形态」进 `macos` 段，其余（含 Windows 独有）进 `common`。判据是**「该形态在 Windows 产物字面量里存不存在」**，而不是「`perPlatform.windows` 里有没有这条键」——同一条历史键在两平台可能解析出不同形态（Windows 精确命中 `Options`、macOS 只找得到 `options`），后者若在 Windows 产物里同样存在就该归 `common`，否则会凭空造出一条只在 macOS 生效的键。放 `common` 的 Windows 专有键只是多一条永不命中的键（无害），放 `windows` 段则会让 Linux 用户漏覆盖（有害）。
+
+**修掉的两个真缺陷**（都由上面的口径在真实产物上暴露）：
+
+1. **大小写兜底把代码标识符当成了文案**。`Cut` → `cut`、`Install` → `install`、`Options` → `options` 兜底命中后写进了字典，而它们在产物里分别是 Electron 菜单的 role 值（`role:"cut"`）、Git LFS 子命令参数（`["lfs","install"]`）、属性描述符键名（`{key:"options"}`）——替换进去会直接破坏功能。**修法**：`resolveIn` 对「无空格且不足 8 字符」的单形态短键不做兜底（真正的形态漂移都是多词文案，`Copy file path` → `Copy File Path`），含空格的键一律照旧。
+2. **平台专用译文被通用译文挤掉**。`common` 段的 `Open with…`（打开方式…）只能兜底命中 macOS 产物里的 `Open With…`，而 `macos` 段的 `Open With…`（用其他应用打开…）是精确命中——遍历顺序让前者先落位、后者被 `put` 的「先见者胜」丢掉，`Contract/Expand Active Resizable` 两条同病。**修法**：`put` 加精确标记，精确命中压过兜底命中。
+
+**双平台端到端实测**（真实产物，`--version 3.6.7 --reuse --no-ai`）：历史字典 3.6.5 / 3.6.6 共 1963 条 → 续用 1963 条**零丢失**，官方已删除 0 条；分段 `common` 1868 / `macos` 231；干跑 Windows 命中 2262 处、生效 1820/1851（**98.3%**），macOS 命中 2199 处、生效 1738/1763（**98.6%**），两侧都过 95% 阈值。**与既有 3.6.6 字典逐键对比**：`common` 新增 1 / 删除 0 / 译文变化 0，`macos` 新增 135 / 删除 0 / 译文变化 0，`windows` 与 `linux` 保持为空，`groups` 46 → 46——**零回归**，且补上了 135 条此前遗漏的 macOS Title Case 文案（`Add Repository`、`Delete Branch`、`Confirm Discard Changes` 等，第 4 组的 96 条只覆盖菜单 label 口径）。
 
 ## 7. Gitee 发版与检查更新优先级
 
@@ -108,16 +129,21 @@
 
 ## 未完成项
 
-### 待决：`scan.js` 的版本硬校验挡住 beta 产物
+### 已决：`scan.js` 的版本硬校验挡住 beta 产物 → **不放宽**
 
-第 4 组第 3 项未走 `scan` 正式入口——`scan.js` 里有 `if (version !== app.version) throw`，而当前能取到的 macOS 产物是 `3.6.6-beta2`，字典目录名是 `3.6.6`，两者对不上。当时的替代做法是用探针直接做替换后归类，结论已并入 `macos` 段。
+第 4 组第 3 项未走 `scan` 正式入口——`scan.js` 里有 `if (version !== app.version) throw`，而当时能取到的 macOS 产物是 `3.6.6-beta2`，字典目录名是 `3.6.6`，两者对不上。当次的替代做法是用探针直接做替换后归类，结论已并入 `macos` 段。
 
-**需要决定**：给 `scan.js` 加显式宽容开关（如 `--allow-version-mismatch`，并在输出里显著标注），还是等 3.6.6 正式版由 CI 走正常路径。倾向后者——CI 的第一步就是「取官方最新**非 beta** tag」，beta 本就不在自动流程的输入范围内；手工补 beta 是一次性操作，不值得为它放宽正式入口的校验。
+**定案：不加宽容开关**。CI 的第一步就是「取官方最新**非 beta** tag」，beta 本就不在自动流程的输入范围内；手工补 beta 是一次性操作，不值得为它放宽正式入口的校验。
 
-### 待办：平台专有键的段归属（`common` → `windows`）
+**且第 6 组不受这条校验影响**：CI 的候选提取调用的是 `scan.collectCandidates()`（纯函数，收 `appDir` 参数），版本一致性校验在 `scan.js` 的 `main()` 里、只约束命令行入口。本地复现时把产物副本的 `package.json` 版本改成目标版本即可——`dict-groups.js` 的 `version !== app.version` 硬校验同理。
 
-`common` 段里有一批实际只在 Windows 产物出现的键（`Show in Explorer`、`Recycle Bin`、`&Options…`、`Open options`、`Application menu` 等）。把它们移到 `windows` 段**功能上等价**（这些文案在 macOS 上本就不存在），收益是语义正确、且让第 6 组的按平台产出有正确的起点。
+### 已决：平台专有键的段归属 → **Windows 专有键留在 `common`，只有 macOS 独有形态进 `macos` 段**
 
-**本次未做**，因为参照版本不一致：能拿到的 macOS 产物是 `3.6.6-beta2`、Windows 是 `3.6.6`，差异清单里混入了**版本差异**（`AI credits used`、`Completeness indicator` 一类 3.6.6 新增文案会被误判成「Windows 专有」），另有整模板键的插值变量重命名差异，以及子串误报（`Explorer` 命中 `S&how logs in Explorer` 内部）。
+原先设想把 `common` 段里实际只在 Windows 产物出现的键（`Show in Explorer`、`&Options…` 等）移到 `windows` 段。第 6 组做完后**否掉了这个方向**。
 
-**正确做法**：第 6 组的 CI 按平台产出时两平台用**同一版本**的产物，届时可自动得出准确归属——不必现在用人工判断凑合。
+**理由**：放 `common` 只是多一条永不命中的键（无害），放 `windows` 段则会让 **Linux 用户漏覆盖**（`buildEntries` 是 `common ∪ 当前平台段`，Linux 产物走非 darwin 分支、形态与 Windows 一致，但没有官方 Linux 产物、`linux` 段永远是空的）。收益（语义整洁）远小于风险（漏翻译）。
+
+**判据也一并改了**：原先按「`perPlatform.windows` 里有没有这条键」分段，会漏掉「同一条历史键在两平台解析出不同形态」的情况（Windows 精确命中 `Options`、macOS 只找得到 `options`）。现按**「该形态在 Windows 产物字面量里存不存在」**判——与写入时的判据同源，`toSegments(perPlatform, winExact)` 的第二个参数就为此而设。
+
+**第 4 组担心的「版本差异混入」已不复存在**：CI 按平台产出时两平台用**同一版本**的产物，差异清单里不再混入版本新增文案，归属判定是准的。这条也解释了为什么第 4 组的 `macos` 段只有 96 条而第 6 组算出 231 条——不是 bug，是第 4 组只覆盖了菜单 label 口径，另有 135 条 Title Case 文案（`Add Repository`、`Delete Branch` 等）此前从未收录。
+
