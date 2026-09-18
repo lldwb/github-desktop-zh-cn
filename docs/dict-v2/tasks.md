@@ -71,7 +71,7 @@
 - [x] 继承逻辑：同键直接复用上一版译文；统计继承数与新增数并打印
       ——`inheritTable()` 版本降序合并、同键先见者胜（新版本译文优先），坏字典跳过不报错；再逐条核对新产物：`resolveIn()` 先试精确形态、再退到「只差大小写」的形态（官方把 `Copy file path` 改成 `Copy File Path` 这类微调不该让译文丢掉）。实测 3.6.7 上 **1963 条历史键零丢失**，其中 277 条官方改了大小写
 - [x] AI 翻译：OpenAI 兼容协议，Secrets 为 `AI_BASE_URL` / `AI_API_KEY` / `AI_MODEL`；失败时按条目重试并记录未译条目
-      ——`translateBatch()` 每批 20 条、失败重试 2 次、单次超时默认 120 s（`AI_TIMEOUT_SEC` / `--ai-timeout` 覆盖）；思考强度走仓库变量 `AI_REASONING_EFFORT` / `--ai-effort`，原样透传成请求体的 `reasoning_effort`、不校验取值（各网关认的档位不同，服务端不认识的值会被忽略或报错）；译文过 `rejectReason()`（占位符集合一致 + 必须含 CJK 字符），不合格的计未译并记原因。**已用真实服务实测**（3.6.7 全流程跑通），取证明细见 6.2 节
+      ——`translateBatch()` 每批 20 条、失败重试 2 次、单次超时默认 120 s（`AI_TIMEOUT_SEC` / `--ai-timeout` 覆盖）；思考强度默认 **low**（`AI_REASONING_EFFORT` / `--ai-effort` 覆盖，给 `none` 表示不带该字段、退回接口自己的默认档），原样透传成请求体的 `reasoning_effort`、不校验取值（各网关认的档位不同，服务端不认识的值会被忽略或报错）。默认取最低档的理由与验证方式见 6.2 节。译文过 `rejectReason()`（占位符集合一致 + 必须含 CJK 字符），不合格的计未译并记原因。**已用真实服务实测**（全流程跑通），取证明细见 6.2 节
 - [x] 准入门槛：`dict-edit validate` 通过 + 产物干跑（语法校验 + 命中率阈值）通过，才允许提交；不通过则开 issue 并保留产物
       ——门槛实现在 `dict-auto.js` 内（`--report` 出 JSON，workflow 只负责看退出码），比放在 workflow 里更早失败、也便于本地复现。**「开 issue」未做**：schedule 失败 GitHub 默认就给仓库所有者发通知，开 issue 是重复；改为 job 失败 + `::error::` 注解。**「保留产物」与本组「失败即删字典」不冲突**——删的是**产出的字典**（否则下次重跑会因「已有字典」跳过、把失败产出永久固化），官方产物本就在 `tmp/` 下、不在删除范围
 - [x] 提交到仓库（`GITEE_TOKEN` 之外的提交凭据用既有 `RELEASE_TOKEN`），提交信息含继承数 / 新增数 / 未译数
@@ -101,6 +101,12 @@
 **最终产出**（`--version 3.6.7 --reuse`，超时 900 s）：20 条新增候选 → **译出 10 条、无需翻译 10 条、未译 0 条**；分段 `common` 1876 / `macos` 233；干跑 Windows 命中 2319 处、生效 1827/1858（**98.3%**），macOS 命中 2259 处、生效 1747/1772（**98.6%**）；与 3.6.6 逐键对比**新增 146 / 删除 0 / 译文变化 0**。
 
 新增的 146 条里，145 条剥掉作用域前缀、统一小写后能对上历史键——都是同一文案的另一种书写形态（`Description` → `description`、`Default branch` → `Default Branch`），整串匹配下两种形态必须各自成键，并不是重复；其中 `Archived`（已归档）与 `archived`（已存档）的译文本就不同。全新文案只有 `GitHub's Logos` 一条。AI 译出的 10 条为 `description` / `difference` / `formatting` / `notifications` / `accessibility` / `archived` / `Default Branch` / `Open Repository` / `Fake account` / `GitHub's Logos`，译文逐一抽查正确、风格一致。
+
+**默认档位定为 `low`、超时定为 120 s**（本次定案）：候选是界面短句，用不上深度推理——最低档的思考量约为最高档的 1/6（1847 vs 11979 思考 tokens），而耗时涨得更快（同一问题：不传该字段 10 秒，max 档 97 秒），默认走最低档才不至于把 CI 的 180 分钟预算耗在思考上。要高思考强度就**同时**调 `AI_REASONING_EFFORT` 与 `AI_TIMEOUT_SEC`，两者必须联动（理由见上）。取值原样透传、不校验，另留 `none` 作逃生口：网关对不认识的档位直接报错时，用它退回接口自己的默认档。
+
+**默认值的验证方式**：本机 Node 直连 GitHub 时 TLS 握手异常（带 SNI 6.3 s、不带 0.17 s，脚本的 20 s 超时内拿不到响应），取不到产物、无法本地端到端复跑——这与 `net.js` 已写明的「不支持 HTTP 代理」限制叠加，CI 上不存在（runner 网络直通）。故默认值改由**本地假服务器单测**锁定：`translateBatch` 的请求体里确实带上了 `reasoning_effort: "low"`（`none` 时整个字段不出现），且 `cfg.timeout` 真的落在请求上（600 ms 的用例 621 ms 返回，没退化成 20 s 兜底）。端到端仍以 CI 的 `workflow_dispatch` 回填实测为准（第 6 组未勾选项）。
+
+**一处版本号存疑**：上述实测标注的 `3.6.7`，在 2026-09-19 复核时官方已查不到——`releases/tags/release-3.6.7` 直连返回 404，`releases/latest` 为 `release-3.6.5`（2026-09-04 发布），该 tag 现只有 `release-3.6.7-beta1`（prerelease）；当时的产物目录已删除，来源无法追溯。**结论本身不受影响**——AI 链路、候选口径、干跑比例依赖的是产物内容与字典键集，不依赖版本号这个标签；但「3.6.7」这个标注不该再被当作「官方存在该正式版」的依据。另注：`dict-auto.js` 不校验产物内的版本号（`scan.collectCandidates` 只做扫描，`--reuse` 只查文件是否存在），手工往 `tmp/release/<版本>/` 放产物时版本号可能张冠李戴。
 
 ## 7. Gitee 发版与检查更新优先级
 
