@@ -13,7 +13,7 @@ GitHub Desktop（Electron 应用）官方未提供简体中文界面——其界
 ## 工作原理
 
 1. GitHub Desktop 是 Electron 应用，界面文本硬编码在官方安装目录 `resources/app/` 下的 `main.js`（主进程）与 `renderer.js`（渲染进程）中——官方产物为**免打包裸目录**（无 `app.asar`，3.6.4 / 3.6.5 已实测）；
-2. `dictionaries/<版本>/zh-CN.json` 维护「原文 → 中文」映射，字典与 GitHub Desktop 版本**强对应**（错配可能导致应用无法启动）；本地没有对应版本的字典时，工具会**自动从本仓库拉取**（外部字典优先、打包内嵌兜底）；
+2. `dictionaries/<版本>/zh-CN.json` 维护「原文 → 中文」映射——**formatVersion 2 五段结构**：`common` / `windows` / `macos` / `linux` 分段放条目（跨平台共有与平台专有分开），`groups` 放组名（分类参考，不影响替换）。字典与 GitHub Desktop 版本**强对应**（错配可能导致应用无法启动）；本地没有对应版本的字典时，工具会**自动从本仓库拉取**（外部字典优先、打包内嵌兜底）；
 3. 脚本工具链完成：定位安装目录 → 备份原文件 → 按字典替换 → 校验结果 → 重启应用。
 
 ## 目录结构
@@ -27,7 +27,8 @@ github-desktop-zh-cn/
 ├── AGENTS.md / CLAUDE.md   # agent 指引（唯一权威源为 AGENTS.md）
 ├── .claude/skills/         # 翻译维护技能（补译与纠错的流程、判定标准与探针模板）
 ├── .github/workflows/      # CI：矩阵构建各平台产物；推 tag 自动发 Release
-├── dictionaries/           # 语言字典（核心资产），按版本目录组织
+├── dictionaries/           # 语言字典（核心资产）：按版本目录组织，formatVersion 2 五段结构；
+│                           #   改字典一律走 scripts/dict-edit.js（唯一写入口，先校验再原子替换）
 │   ├── 3.6.5/zh-CN.json    # 首个版本字典
 │   ├── 3.6.6/zh-CN.json    # 当前版本字典
 │   └── README.md           # 字典格式与贡献约定
@@ -70,13 +71,23 @@ github-desktop-zh-cn/
 - **官网下载（推荐）**：<https://desktop.github.com> —— 页面会自动识别你的系统，点对应按钮下载 Windows / macOS / Linux 版；
 - 装好后记下**版本号**（应用内 `Help` → `About GitHub Desktop`，或本工具菜单的 `3) 详细信息`）——汉化字典与版本**强对应**，错配可能导致应用无法启动。
 
+本工具自身的下载：优先 **GitHub Releases**（<https://github.com/lldwb/github-desktop-zh-cn/releases>），国内访问不畅时用 **Gitee 镜像**（<https://gitee.com/lldwb/github-desktop-zh-cn/releases>）——两边由 CI 自动同步、附件一致。工具内的「检查更新」也是**先问 GitHub、取不到再退回 Gitee**。
+
 ## 使用方式
 
 ### 方式一：图形界面（GUI 操作面板）
 
 不想碰命令行的话，用 **Electron 图形界面**：汉化 / 还原 / 选择安装位置 / 检查更新都是按钮，下方列出当前字典的全部条目（只读、可按中英文搜索），底部显示安装位置与进度——控制台菜单的每一步「看提示 → 敲数字」都变成点一下。
 
-界面：工具栏（汉化 / 还原 / 选择 / 检查更新 / 刷新）+ 字典表格（英文 / 中文 / 类型）+ 底部路径与状态栏；操作前有确认框（提示会先自动备份），完成后窗口内提示命中处数与重启结果，运行期间显示进度阶段。
+界面：工具栏（汉化 / 还原 / 选择 / **更新管控** / 检查更新 / 刷新）+ 字典表格（英文 / 中文 / 类型 / **组名**）+ 底部路径与状态栏；操作前有确认框（提示会先自动备份），完成后窗口内提示命中处数与重启结果，运行期间显示进度阶段。启动后还会**自动检查工具自身有无新版本**——有才提示一句，没有不打扰；点「检查更新」可以下载新安装包并启动安装向导。
+
+**更新管控**（工具栏那个按钮，命令行对应 `patch --update-control` / `patch --block-update` / `restore --group updateControl`）决定 GitHub Desktop 能不能自动更新，三选一：
+
+- **没有对应字典就不更新**（推荐）：工具已经备好更高版本的字典时才放行——这样更新过去还是中文界面；
+- **完全禁止自动更新**：不看字典，一律不放行；
+- **恢复自动更新**：撤掉这道闸，回到官方行为（汉化保留）。
+
+它往 GitHub Desktop 的 `main.js` 里注入一段代码，**改动的是逻辑不是文案**；和汉化一样可以单独撤掉，备份始终只有一份（官方原文）。注入的代码读不到工具的字典目录时**一律放行**——宁可让你更新，也不会因为工具自己的问题把你锁死在旧版本上。
 
 GUI 产物**随 Release 分发**（三平台）：Windows 用 `github-desktop-zh-cn-gui-v0.2.0-win32-x64-setup.exe`（安装包，可选安装目录）或 `…-gui-v0.2.0-win32-x64.zip`（免安装），macOS 用 `…-gui-v0.2.0-darwin-arm64.dmg`（Intel 机是 `…-gui-v0.2.0-darwin-x64.dmg`），Linux 用 `…-gui-v0.2.0-linux-x86_64.AppImage` / `…-gui-v0.2.0-linux-amd64.deb`。也可以自行构建：
 

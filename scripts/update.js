@@ -38,15 +38,24 @@ function pickAsset(assets) {
 // 命名见 AGENTS.md「产物命名」：github-desktop-zh-cn-gui-v<版本>-<平台>-<架构>[-setup].<扩展名>
 // 实测核对过：GUI 的 Windows 产物以 `-setup.exe` 结尾，pickAsset 的 `-win32-x64.exe`
 // 匹配不到；macOS / Linux 是 .dmg / .AppImage / .deb，更是完全在它的扩展名表之外。
+// electron-builder 的 Linux 产物把 x64 写成 x86_64 / amd64、arm64 写成 aarch64——
+// 同一个架构三套写法，匹配时都得认，否则 Linux 用户永远找不到自己的安装包
+//（cli 产物是我们自己命名的，用 Node 那套 x64 / arm64，不受影响）。
+const ARCH_ALIASES = {
+  x64: ['x64', 'x86_64', 'amd64'],
+  arm64: ['arm64', 'aarch64'],
+  ia32: ['ia32', 'i386', 'x86'],
+};
+
 function pickGuiAsset(assets) {
-  const suffix = `-${process.platform}-${process.arch}`;
+  const suffixes = (ARCH_ALIASES[process.arch] || [process.arch]).map((a) => `-${process.platform}-${a}`);
   const exts =
     { win32: ['.exe'], darwin: ['.dmg', '.zip'], linux: ['.AppImage', '.deb'] }[process.platform] || ['.zip'];
   const hit =
     assets.find((a) => {
       const name = String(a.name);
       if (!name.includes('-gui-')) return false; // 只认 gui 那一套，别把 cli 产物当安装包
-      return exts.some((e) => name.endsWith(suffix + e) || name.endsWith(`${suffix}-setup${e}`));
+      return suffixes.some((s) => exts.some((e) => name.endsWith(s + e) || name.endsWith(`${s}-setup${e}`)));
     }) || null;
   if (!hit) return null;
   return hit.url ? hit : { ...hit, url: hit.browser_download_url };

@@ -53,7 +53,7 @@ node build/tools/check-naming.cjs              # pickAsset 只挑 cli 产物（�
   - `update.js`：工具自更新——查 latest release → 按 `<平台>-<架构>` 后缀选资产 → 下载并校验文件头（MZ / Mach-O / ELF）→ 改名替换自身 → 重启新版本；启动时 `cleanup()` 清理上次的 `.old` 残留。
   - `restart.js`：关闭并重启 GitHub Desktop（原本未运行则不动，避免替用户多开窗口）——界面文本在应用启动时载入内存，不重启看不到效果。
 - **界面层**（`gui/`，Electron 原生窗口，可选形态）：`main.js` 主进程（窗口生命周期 + IPC 处理器，直接 `require('../scripts/…')` 调业务）、`preload.js`（`contextBridge` 暴露 `window.api`）、`index.html` / `renderer.js` / `style.css` 渲染层。**GUI 只做表现层**——替换 / 备份 / 还原规则没有第二份实现；渲染进程无 Node 能力（`contextIsolation` + `sandbox`），字典表格只读，**不存在字典写盘通道**。打包配置见 `electron-builder.yml`（`npm run dist`），构建期下载走 `.npmrc` 与 yml 里固化的镜像。
-- **字典组织**：`dictionaries/<版本>/zh-CN.json`，扁平 `{"原文": "译文"}` 映射，`_` 开头的键为元信息（脚本跳过）；键以反引号开头结尾、含 `${}` 的为**整模板键**（值须是 JS 模板/字符串字面量，用于替换运行时拼接文案）；键写作 `<文件名>.js|原文` 的为**作用域键**（只对该文件生效，用于同名文本在两文件中语义不同的情况，如 `en-US`）。
+- **字典组织**：`dictionaries/<版本>/zh-CN.json`，**formatVersion 2 的五段结构**——`common` / `windows` / `macos` / `linux` 四段放条目，`groups` 段放组归属，`_meta` 放元信息（`version` / `updated` / `notes` / `formatVersion`）。条目按「跨平台共有」与「平台专有」分段：`common` 对所有平台生效，平台段只对该平台生效（`linux` 段保持为空，官方无 Linux 产物；判定与理由见 `design.md` 第 4 节）。**字典的唯一写入口是 `scripts/dict-edit.js`**——增删改、分组、迁移一律走它（先校验再原子替换，校验不过原文件不动），别手工编辑 JSON、也别在别的脚本里直接 `writeFileSync`；组名由 `scripts/dict-groups.js` 从 sourcemap 推断。三种键形态（普通键 / 整模板键 / 作用域键）与替换规则见 `dictionaries/README.md`。
 - **打包与分发**（`cli.js` / `bundle.js` / `build.js`，面向使用者的说明见 `docs/打包与分发.md`）：
   - `cli.js`：交互式中文菜单入口（无参数进菜单；带子命令则透传给对应脚本），`package.json` 的 `tool` 入口。菜单只输出**结果**（命中多少处、是否重启），中间过程不出现在菜单里——子命令走 `quiet` 参数控制（命令行入口仍输出明细）。
   - `bundle.js`：零依赖 CJS 单文件打包器，把 `scripts/` 合成一个自包含 `.js`。**依赖靠静态 `require('...')` 字面量扫描收集**——新增依赖必须写成字面量（模板字符串 / 变量拼接收集不到）；JSON 模块转成 `module.exports = <JSON>`。

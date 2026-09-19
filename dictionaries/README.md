@@ -8,30 +8,38 @@
 dictionaries/
 ├── 3.6.5/          # 按 GitHub Desktop 版本号分目录
 │   └── zh-CN.json   # 该版本的字典
+├── 3.6.6/
+│   └── zh-CN.json
 └── README.md
 ```
 
 - **版本强对应**：字典必须与 GitHub Desktop 版本一一对应（错配可能导致应用无法启动）；`patch` / `verify` 会校验字典版本与安装版本一致。
 - **来源**：`main.js`（主进程）与 `renderer.js`（渲染进程）中硬编码的界面文本（含界面元素、读屏文本、命令行文本、报错文本；不含用户不可见的日志文本）。
-- **自定义**：用户可按需在字典中覆盖 / 增补条目。
+- **自定义**：用户可按需在字典中覆盖 / 增补条目——但**改完仍要过 `dict-edit` 的校验**（见下），手工改会绕过它。
 
-## 字典格式（已定稿）
+## 字典格式（formatVersion 2）
 
-扁平 JSON：`{"原文": "中文"}`，**大小写敏感、精确匹配**。
+**五段结构**：`common` / `windows` / `macos` / `linux` 四段放条目，`groups` 段放组归属，`_meta` 放元信息。
 
 ```json
 {
-  "_meta": {
-    "version": "3.6.5",
-    "updated": "2026-09-16",
-    "notes": "……"
-  },
-  "Sign in": "登录",
-  "Discard changes": "放弃更改"
+  "_meta": { "version": "3.6.6", "updated": "2026-09-19", "formatVersion": 2, "notes": "……" },
+  "common": { "Sign in": "登录", "Discard changes": "放弃更改" },
+  "windows": {},
+  "macos": { "About GitHub Desktop": "关于 GitHub Desktop" },
+  "linux": {},
+  "groups": { "通用": ["Sign in"], "菜单-帮助": ["About GitHub Desktop"] }
 }
 ```
 
-格式与替换规则：
+- **分段判据**：`common` 段对**所有平台**生效；平台段只对该平台生效。同名键同时在 `common` 与平台段时**平台段优先**（同一文案在不同平台语境不同的场合）。
+- **`linux` 段为空是预期**：官方从未发布 Linux 产物（近 30 个 release 的资产全为 Windows nupkg/exe/msi 与 macOS zip）。
+- **`groups` 只是分类参考**，不影响替换行为；由 `dict-groups.js` 读产物 sourcemap 推断源文件归属，未定位到的落「待分组」。
+- **唯一写入口是 `scripts/dict-edit.js`**（`add` / `update` / `remove` / `set-group` / `move` / `merge` / `regroup` / `migrate` / `apply`）：先校验再原子替换，校验不过时原文件保持不动。**别手工编辑这个 JSON**——手工改绕过校验，坏数据要等 `patch` 时才暴露。要重跑一个已有字典的版本，用 `dict-auto.js --on-exist=diff|overwrite`（`diff` 全程不写盘）。
+
+## 键形态与替换规则
+
+**大小写敏感、精确匹配**。以下规则对每一段内的条目都成立：
 
 - **键 = 官方产物中的完整原文**（必须逐字符一致，含大小写与标点），值 = 中文译文。
 - **整串匹配**：仅当字符串字面量内容（或模板字符串的文本段）与键完全相等时才替换，不做子串替换——子串会误伤标识符、协议串与拼接片段。
