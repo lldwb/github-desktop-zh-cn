@@ -298,6 +298,33 @@ test('assertBaseUrl：拼错的地址报可操作的错，且不回显地址本�
   assert.throws(() => dictAuto.assertBaseUrl('ftp://gw.example.com'), /ftp/);
 });
 
+test('assertBaseUrl：藏在地址里的不可见字符也拦下（它们不报错，只会静默 404）', () => {
+  // 尾随不换行空格 / 零宽空格这类字符 new URL() 照收，只是被百分号编码进路径（/v1%C2%A0），
+  // 请求打到别的地址上罢了——不抛错、肉眼更看不出差别，比 Invalid URL 还难查，所以一并拦下。
+  // 报错里给码点：字符本身看不见，不说出它是哪一个就没法照着改
+  const nbsp = String.fromCodePoint(0x00a0);
+  const zwsp = String.fromCodePoint(0x200b);
+  for (const [bad, cp] of [
+    [`https://gw.example.com/v1${nbsp}`, /U\+00A0/],
+    [`https://gw.example.com/v1${zwsp}`, /U\+200B/],
+    [`https://gw.example.com/${nbsp}v1`, /U\+00A0/],
+    // 串内空格同样拦下：它会被百分号编码进路径（/v1%20/x），请求打在别的地址上
+    ['https://gw.example.com/v1 /x', /U\+0020/],
+  ]) {
+    assert.throws(
+      () => dictAuto.assertBaseUrl(bad),
+      (e) => cp.test(e.message) && !e.message.includes(bad),
+      `含不可见字符的地址应被拦下：${JSON.stringify(bad)}`
+    );
+  }
+  // 首尾的半角空格与 Tab 是 URL 标准自己会去掉的，照旧放行（只提示日志脱敏可能失效）
+  assert.strictEqual(dictAuto.assertBaseUrl('  https://gw.example.com/v1\t').host, 'gw.example.com');
+  // 串内的制表符 / 换行也一样：标准会把它们从整串里删掉（粘贴时折行很常见），拦下来是误伤
+  assert.strictEqual(dictAuto.assertBaseUrl('https://gw.exam\nple.com/v1').host, 'gw.example.com');
+  // 汉字域名、路径里的中文属字母类，不受这条判据影响（域名会按 IDNA 转成 punycode）
+  assert.strictEqual(dictAuto.assertBaseUrl('https://网关.example.com/接口').protocol, 'https:');
+});
+
 test('redact：抹掉服务地址与密钥，短串不误伤', () => {
   const base = 'https://gw.example.com/v1';
   const key = 'sk-1234567890abcdef';
@@ -307,6 +334,12 @@ test('redact：抹掉服务地址与密钥，短串不误伤', () => {
     '请求超时（120 秒无响应）：***/chat/completions'
   );
   assert.strictEqual(dictAuto.redact(`HTTP 401：${key} 无效`, [base, key]), 'HTTP 401：*** 无效');
+  // net.js 的网络层报错只带主机名（「连接被拒绝（可能被防火墙拦截）：主机:端口」），拿完整地址
+  // 当 needle 匹配不上——所以调用处要把 host 也放进 needle，这条用例把这个前提钉住
+  const host = new URL(base).host;
+  const refused = `连接被拒绝（可能被防火墙拦截）：${host}`;
+  assert.strictEqual(dictAuto.redact(refused, [base, key]), refused);
+  assert.strictEqual(dictAuto.redact(refused, [base, host, key]), '连接被拒绝（可能被防火墙拦截）：***');
   // 太短的值不替换：它在正常文本里误伤的概率大于它是真凭据的概率
   assert.strictEqual(dictAuto.redact('模型 deepseek-v4 不可用', ['deep', base]), '模型 deepseek-v4 不可用');
 });

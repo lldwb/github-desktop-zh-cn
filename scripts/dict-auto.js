@@ -365,17 +365,42 @@ function resolveEffort(spec) {
 // 并直接说出该怎么改。**不回显地址本身**——AI_BASE_URL 是私密配置，而注解与 step summary
 // 在公开仓库上人人可见（日志里它会被 GitHub 脱敏成 ***，别指望别处也有这层）。
 function assertBaseUrl(base) {
+  // 常见错法的清单取自实测：这几种都让 `new URL()` 抛 Invalid URL（与 CI 那次一模一样），
+  // 而它们看起来都「挺像个地址」，不逐条列出来很难自己想到
+  const hint =
+    '需要形如 http://主机:端口/路径 的绝对地址。逐项核对：' +
+    '① 开头就是 http:// 或 https://，没有引号、方括号、Markdown 链接的残留；' +
+    '② 冒号是半角 : 而不是全角 ：；' +
+    '③ 地址内部没有空格、换行（首尾的半角空格 / Tab / 换行会被自动去掉，内部的不行）';
+  // 不可见字符要先查：URL 标准会把制表符与换行从整串里删掉、再去掉首尾的控制符与半角空格，而其余
+  // 不可见字符（不换行空格、零宽空格、BOM、串内空格……）不是被百分号编码进路径就是让解析直接失败
+  // ——前者请求打到 /v1%C2%A0 上静默 404，不报错、肉眼也看不出哪里不同，比 Invalid URL 更难查。
+  // 所以这里先按标准做一遍同样的删除（否则会把「换行只是粘贴时折了行」这种其实可用的值误拦），
+  // 剩下的值里再出现不可见字符就是必然打错的配置。（判据只覆盖空白与格式类字符，中文域名、路径
+  // 里的汉字是字母类，不受影响）
+  const stripped = base.replace(/[\t\n\r]/g, '').replace(/^[\u0000- ]+|[\u0000- ]+$/g, '');
+  const invisible = stripped.match(/[\p{C}\p{Z}]/u);
+  if (invisible) {
+    const cp = `U+${invisible[0].codePointAt(0).toString(16).toUpperCase().padStart(4, '0')}`;
+    throw new Error(
+      `AI_BASE_URL 里有不可见字符 ${cp}（抹掉它就能发请求）：${hint}。` +
+        '这一位多半是粘贴时带进来的，回 Secrets 页清空、重新粘一次即可。'
+    );
+  }
   let u;
   try {
     u = new URL(base);
   } catch {
-    throw new Error(
-      'AI_BASE_URL 不是合法 URL：需要形如 https://主机/路径 的绝对地址' +
-        '（常见原因：漏了 http(s):// 前缀、整段被引号包住、混进了空格或全角字符）'
-    );
+    throw new Error(`AI_BASE_URL 不是合法 URL：${hint}`);
   }
   if (u.protocol !== 'http:' && u.protocol !== 'https:') {
     throw new Error(`AI_BASE_URL 的协议是 ${u.protocol.replace(':', '')}，只支持 http / https`);
+  }
+  // 地址本身合法、但它与打印出来的值对不上时，GitHub 就脱敏不了日志里的那一行（它按 secret 的
+  // 完整值做子串匹配）。这里只提示、不失败——尾随空格这类差异完全不影响请求能不能发出去，
+  // 为此拦下整轮产出不值当。去不去掉由使用者定，提示只是让「地址会不会被公开」这件事可见。
+  if (base !== base.trim()) {
+    console.warn('::warning::AI_BASE_URL 首尾有空白字符：地址本身可用（已自动按去空白后的值发请求），但 GitHub 的日志脱敏按 secret 的完整值匹配，日志里那一行可能不被打成 ***。到 Secrets 页删掉首尾空白即可。');
   }
   return u;
 }
@@ -854,7 +879,11 @@ async function buildOne(version, args, log) {
         );
       }
       // 发请求之前先校验地址：拼错了就是几十次同样的失败，等失败回来再说就晚了
-      assertBaseUrl(base);
+      const baseUrl = assertBaseUrl(base);
+      // 对外文本里要抹掉的值。除了地址本身还要抹它的 host：net.js 的报错用的是 `new URL(…).host`
+      // （「连接被拒绝……：主机:端口」「请求超时……：主机:端口」都只带主机），拿完整地址当 needle
+      // 匹配不上——实测过，两处都会漏。
+      const secrets = [base, baseUrl.host, key];
       const effort = resolveEffort(args.aiEffort ?? process.env.AI_REASONING_EFFORT);
       const timeout = resolveTimeout(args.aiTimeout || process.env.AI_TIMEOUT_SEC);
       const cfg = { base, key, model, effort, timeout, examples: buildExamples(table) };
@@ -873,7 +902,7 @@ async function buildOne(version, args, log) {
       report.untranslated = failed.length;
       report.untranslatedRows = failed.map((it) => ({ text: it.text, reason: it.reason }));
       if (failed.length) {
-        report.reasonDetail = collapseReasons(report.untranslatedRows, [base, key]);
+        report.reasonDetail = collapseReasons(report.untranslatedRows, secrets);
         log(`  未译原因：${report.reasonDetail}`);
       }
       // 无需翻译的条目单列：它们既不算译出也不算未译，但要留痕——AI 若成片原样返回，
