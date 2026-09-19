@@ -240,10 +240,14 @@
 
 ## 10. 文档同步与提交
 
-- [ ] `AGENTS.md`：字典格式（formatVersion 2）、**字典唯一写入口 `scripts/dict-edit.js`** 的约束、平台分段、在线能力、已知坑
-- [ ] `dictionaries/README.md`：格式规范改写为新结构 + 写入口约束
-- [ ] `README.md`：组名列、跨平台支持与 Linux 现状、更新管控开关、Gitee 下载渠道
-- [ ] `docs/打包与分发.md`：CI 定时字典、Gitee 发版、Secrets 清单
+- [x] `AGENTS.md`：字典格式（formatVersion 2）、**字典唯一写入口 `scripts/dict-edit.js`** 的约束、平台分段、在线能力、已知坑
+      ——「字典组织」一条从旧的扁平描述改写为五段结构（`common` / `windows` / `macos` / `linux` 放条目、`groups` 放组归属、`_meta` 放元信息），写明分段判据、`linux` 段为空的理由，并把「唯一写入口是 `dict-edit.js`、别手工编辑 JSON、别在别的脚本里直接 `writeFileSync`」作为硬约束写进去。在线能力与已知坑两节此前已在，本次只补了 Gitee 发版那一段（见「发版」一节）
+- [x] `dictionaries/README.md`：格式规范改写为新结构 + 写入口约束
+      ——「字典格式（已定稿）」整节重写为「字典格式（formatVersion 2）」：五段结构示例、分段判据（`common` 对所有平台生效、平台段只对该平台生效、同名键平台段优先）、`linux` 段为空是预期、`groups` 只是分类参考、唯一写入口与其子命令清单（含「重跑已有版本用 `dict-auto --on-exist`」）。原「格式与替换规则」改名「键形态与替换规则」并保留（那部分讲的是替换语义，与格式无关）
+- [x] `README.md`：组名列、跨平台支持与 Linux 现状、更新管控开关、Gitee 下载渠道
+      ——「工作原理」第 2 条补五段结构；目录结构里 `dictionaries/` 注明「改字典一律走 `scripts/dict-edit.js`」；「下载 GitHub Desktop」补本工具自身的下载渠道（GitHub Releases 优先、Gitee 镜像兜底，且工具内检查更新也是这个顺序）；GUI 那节补「更新管控」按钮与「组名」列，并新增一段说明三种模式各自的语义与「读不到字典目录时一律放行」的兜底。跨平台与 Linux 现状原已写在「已知限制」里（无 Linux 产物、产物只能在构建平台运行），未重复
+- [x] `docs/打包与分发.md`：CI 定时字典、Gitee 发版、Secrets 清单
+      ——新增三节：**定时字典**（`dict-auto.yml` 做什么、`on_exist` 三值、AI 服务五个配置项分处 Secrets / Variables 两页的理由）、**Gitee 镜像发版**（镜像只同步 commit / 分支 / tag、发行版要 CI 补发、两个 Gitee 特有行为、缺令牌不阻断）、**Secrets 与 Variables 清单**（一张表列全四项配置的用途与缺失时的表现）
 - [x] 残留检查：旧格式描述、旧术语、`_meta.notes` 里的过期格式说明
       ——扫出并修掉一处真残留：`docs/gui/design.md` 的「有意差异」表还写着「『组名』列**去掉**，改『类型』列」、理由是「本仓库字典是扁平 `{"原文":"译文"}`，无组名概念」——那是字典还是扁平结构时的判定，后来字典迁到 2.0 并有了 `groups` 段，组名列已经补上（`gui/index.html` 的表头就是「英文 / 中文 / 组名 / 类型」），两列并存。同表的「底部平台下拉」那行理由也一并更新（不是「无平台维度」，而是表格显示的是当前平台的合并结果、无需切换）。其余命中项（`design.md` 的 `migrate` 注释、`proposal.md` 与 `tasks.md` 里的历史记录）都是在讲迁移本身，属正常表述。两个版本字典的 `_meta.notes` 都已无过期格式说明，`formatVersion` 均为 2
 - [x] 固化替换判定探针到 `build/tools/`（判定某处文案可否替换的那些 `tmp/` 临时脚本，清掉即失；`design.md` 已改为只引用判据不引用文件）。**前置**：把 Windows 备份目录与 macOS 产物目录参数化，否则换台机器跑不起来
