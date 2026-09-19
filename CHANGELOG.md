@@ -1,5 +1,42 @@
 # Changelog
 
+## [0.3.0] - 2026-09-19
+
+> 让汉化跟得上 GitHub Desktop 的更新：给它装一道**更新管控**闸——字典没跟上就不放行，字典备好了还能**自动补打汉化**；字典本身改成**分段结构 + 唯一写入口**并接上**定时自动产出**，3.6.6 一次补译 292 条（1861 → 2153）；Gitee 镜像也能看到发行版了。
+
+### 新增
+
+- **更新管控补丁组**（`scripts/update-control.js`）：往 GitHub Desktop 的 `main.js` 注入一道闸——`checkForUpdates` 一进来先问「放不放行」。两种模式共用同一份注入块（切换模式 = 重新注入，产物里永远只有一套）：`patch --update-control` 是**没有对应字典就不更新**（工具支持的上限高于当前版本才放行，即新版本字典已就位），`patch --block-update` 是**完全禁止自动更新**（一律不放行，连查都不查）；`restore --group updateControl` 恢复自动更新（**汉化保留**）。放行判据是「字典目录里带 `zh-CN.json` 的最大版本号」；**判断不了（目录读不到 / 无字典）就放行**——宁可让用户更新，也不要因为工具自己的问题把人锁死在旧版本上。注入点在产物 IIFE **之外**（那里 `require` 是原生的，不受 webpack 运行时拦截），用首尾标记包住、重复注入安全；锚点不唯一时**宁可不动**（插错地方会让应用起不来）。图形界面同步加了「更新管控」按钮（三选一，与命令行同一套语义，两边不各写一份判定）。
+- **更新后自动汉化**（`scripts/update-control.js` + `scripts/patch.js`）：打包态注入时一并写死工具路径，GitHub Desktop 启动时若「字典已备好当前版本、产物却还是英文」就自动补打一次补丁。判据是补丁组记账里没有 `i18n`——它既是「打过没有」的权威记录，也免得每次启动都白跑一次；`spawn` 失败一律吞掉，这是锦上添花的一步，不能因为它让应用起不来。源码态不注入：那里工具就是仓库本身，用户自己跑 `npm run patch` 即可，写死一个 node 路径换台机器反而会指向不存在的东西。
+- **补丁组记账**（`scripts/common.js`）：`tmp/patch-state.json` 记「对哪个版本应用了哪几组」——`patch` 写入时**并入已有**，整份 `restore` **销账**，`restore --group X` **从官方原文重放保留组**（而不是逐组撤销）。
+- **字典改分段结构 + 唯一写入口**（`dictionaries/*/zh-CN.json` + `scripts/dict-edit.js`）：formatVersion 2 顶层分 `common` / `windows` / `macos` / `linux` / `groups` 五段，运行时合并「`common` ∪ 当前平台段」；**键跨段重复判为非法并报错**，而不是静默覆盖——那是分段格式特有的失效模式，会让人以为改对了、实际生效的是另一段。旧扁平格式按 `_meta.formatVersion` 回退，用户手里的自定义字典继续可用；解析差异全部由 `buildEntries` 一处吸收，`patch` / `restore` / `verify` / `scan` / `dict-sync` 一行未改。新增的 `dict-edit.js` 是**字典的唯一写入口**（`add` / `update` / `remove` / `set-group` / `move` / `merge` / `regroup` / `migrate` / `apply`），事务写入：读原文 → 内存中变更 → 校验 → 写 `.tmp` → 读回重校验 → `renameSync` → 写后复核，任一步失败即删 `.tmp`、**原文件从未被改动**。组名由 `dict-groups.js` 读产物 sourcemap 推断。
+- **CI 定时自动产出字典**（`scripts/dict-auto.js` + `.github/workflows/dict-auto.yml`）：取两平台官方产物 → 以历史字典的键为锚逐条核对新产物里的形态（继承）→ 官方新增的 JSX 文案走 AI 翻译 → `dict-edit` 事务写入 → 推断组名 → 干跑校验。**已有字典的版本直接跳过**（幂等），传多个版本按升序逐个产出，可**回填历史版本**。候选口径只收 JSX 侧：实测 3.6.6 macOS 产物，字面量侧 1714 条候选里 1138 条是枚举值（`Canceled`）、事件名（`PageDown`）、注册表配置（`VSCodium`）、URL 片段这类噪声，JSX 文本节点侧 150 条里 130 条命中既有字典。已有字典另支持 `--on-exist=diff|overwrite` 两种重跑模式（`diff` 全程不写盘）。
+- **官方产物按需提取**（`scripts/release-assets.js`）：不下载整包，用 HTTP Range 先取尾部窗口解析 zip 中央目录拿到条目偏移与压缩方式，再对目标条目发起 Range 请求 + `inflateRaw` 解压，零依赖。平台产物路径在 `PLATFORM_SPECS` 里定死，**Linux 置 `null` 而不是留个错的占位**——官方近 30 个 release 的资产全为 Windows nupkg / exe / msi 与 macOS zip，真遇到该报错而不是猜。
+- **图形界面两处**：字典面板加**「组名」列**（三列变四列：英文 / 中文 / 组名 / 类型），组名取自字典的 `groups` 段；面板**只消费不解析**（`common.loadGroups()` 返回「键 → 组名」反查表），外部字典优先与内嵌资源回退那套逻辑仍只有一份。**工具自更新也进了界面**：启动后延迟检查工具自身版本，**有新版才提示**（检查失败静默），确认后下载安装包并启动安装——Windows `.exe` 与 Linux `.AppImage` 直接运行，macOS `.dmg` 与 Linux `.deb` 交给系统打开。
+- **Gitee 镜像发版**（`.github/workflows/build.yml`）：Gitee 的仓库镜像只同步 commit / 分支 / tag，**发行版不在同步范围内**——`release` job 末尾新增「发布到 Gitee」步骤：按 tag 探测 → 没有就创建 → 逐个上传附件（**幂等按文件名**，Gitee 的资产对象实测只有 `browser_download_url` 与 `name`，没有 sha256 / size 可比）。两个 Gitee 特有的坑都已在代码里绕开：按 tag 查发行版时**用 `200` + 字面量 `null` 表示不存在**（不是 404，照搬 GitHub 的判据会把「不存在」读成「查询失败」）、创建后返回的对象**没有 `html_url`**（按 tag 自己拼）。**缺 `GITEE_TOKEN` 不阻断发布**——`check-version` 打一条 `::warning::`、那一步直接跳过，Gitee 是镜像渠道，不该让它挡住权威源；该步骤失败**只让 job 标红，已发布的 GitHub Release 原样保留**。
+- **检查更新加 Gitee 兜底**（`scripts/update.js`）：GitHub 取不到时退回 Gitee 的 `/releases/latest`；两条来源的资产对象形状不同（Gitee 只有 `browser_download_url`，没有 `url`），取用时归一化补齐。GUI 产物匹配同时认 electron-builder 的 Linux 架构写法（`x86_64` / `amd64` / `aarch64`，与 Node 的 `x64` / `arm64` 不同），否则 Linux 使用者永远找不到自己的安装包。
+- **运维探针固化**（`build/tools/`）：把 CI / Release 的中间过程脚本固化成**匿名只读、零依赖、路径参数化**的探针——CI 运行概览与 job 步骤明细、按 run id 直查、轮询等待、已发布 Release 的附件与上传者核对、产物命名回归（`pickAsset` 只挑 cli、`pickGuiAsset` 只挑 gui，含反向用例）、workflow 体检（`run:` 块逐个 `bash -n` + YAML 禁忌）、**替换判定**（打出某处文案的前后上下文，并标出查表 / 比较 / 模块导出名 / switch 分支等高危上下文，判断仍由人做）。路径一律参数化——写死的话换台机器就跑不起来，而「能不能跑起来」正是探针有没有价值的全部。
+
+### 变更
+
+- **3.6.6 字典补译 292 条**（1861 → 2153）：补齐与官方正式版产物的形态缺口、内置 Copilot 提示词与冲突输入文档中文化、多提交操作流程与合并对话框的漏译、`Rebase` 等变基操作标签。其中「显示与逻辑复用同一字面量」的一类（`Rebase`）按新定的**整体替换**出口处理——全部出现位置在同一文件、无跨进程 / 持久化 / 上报、比较两侧同源、配套插值模板收尾正确时**整组同值同改**（34 处一起变「变基」，比较两侧仍同源），判据与实证见 `dictionaries/README.md` 与 `.claude/skills/translation-maintain/references/收录判定.md`。
+- **3.6.5 字典迁移到 formatVersion 2**：条目数不变（1853 条），只改组织形式。
+- **AI 翻译链路接入思考强度与超时配置**（`scripts/dict-auto.js`）：默认 `low` / 120 秒；`AI_MODEL` 迁到仓库变量，配置按可见性分两处（可公开的进 Variables、密钥进 Secrets）。
+- **文档**：`README.md` 补更新管控按钮与三种模式、Gitee 下载渠道；`AGENTS.md` 补 Gitee 发版与字典组织（formatVersion 2 五段结构 + 唯一写入口约束）；`dictionaries/README.md` 重写「字典格式」一节；`docs/打包与分发.md` 增「定时字典」「Gitee 镜像发版」「Secrets 与 Variables 清单」三节；`docs/dict-v2/` 收录字典 2.0 的方案 / 设计与任务清单。
+
+### 修复
+
+- **`restore --group` 在记账为空时会把汉化一并还原**（`scripts/restore.js`）：补丁组记账是后加的功能，此前的汉化没有记录，按组还原会把它当成「没打过补丁」而恢复官方原文。现在**抛错拦截**，并给出两条出路（整份还原、或直接重新汉化）。
+- **`restart.js` 两处缺陷**：`spawn` 的失败是**异步**的（走 `error` 事件，不抛在调用处），未接事件会让整个进程崩掉——产物其实已经写好，用户看到的却是报错；`restartApp` 只按进程名判断在不在运行，目标不存在时会「**把用户开着的应用关掉、却起不来还回去**」——现在 kill 之前先确认目标存在。
+- **CI 发布流程**：发布改走数字 id，并支持「Release 已不在」时续建；Release 正文以 `CHANGELOG.md` 为准（并给 v0.1.0 / v0.1.1 开头补上引用块）；修复流程认得出上次中断留下的草稿、续传不再必然 403；`checkout` 会清空工作区，落盘要排在它之后；新增 `rename-assets` 任务把 v0.1.0 / v0.1.1 的附件名统一到 cli / gui 命名（**只动名字、不动字节**，`SHA256SUMS` 随之重算），并挡住「同 tag 还有草稿」时按 tag 寻址的二义。
+
+### 说明
+
+- 本次新增脚本（`update-control.js` / `dict-edit.js` / `dict-groups.js` / `dict-auto.js` / `release-assets.js`）、字典组织方式变更（分段结构 + 唯一写入口）、新增运维探针，属工具链与字典组织的大改，故取**中版本** 0.3.0。
+- 更新管控的两种模式互斥，切换方式是「先还原成官方原文、再按新模式打一遍」，产物里永远只有一份注入块，不会出现两套放行函数抢着赋值。
+- 真机实测：在本机安装的 `app-3.6.6` 上打过补丁并取证（记账落盘、产物字节差异、注入块位置与闸门、注入后整文件语法、`DICT_DIR` 内联、源码态不注入 `TOOL` 符合设计）；注入逻辑另用 `vm` 沙箱 mock `require` 验过四种放行场景。
+- `package.json` 版本号 0.2.0 → 0.3.0
+
 ## [0.2.0] - 2026-09-18
 
 > 给不碰命令行的使用者一条路：新增 **Electron 图形界面**——汉化 / 还原 / 选择安装位置 / 检查更新都变成按钮，字典条目在窗口里只读可搜索。界面与命令行是**同一套脚本**的两种皮：定位 / 替换 / 备份 / 还原没有第二份实现。
