@@ -88,8 +88,10 @@ async function runSmokeTest(win) {
 
     if (r.error) throw new Error(r.error);
 
+    // 尺寸只判「没崩成异常尺寸」：请求的是 1200×800，但 CI runner 的虚拟屏幕更小，窗口会被
+    // 限制到屏幕内（实测 mac arm64 1024×642、Windows 1008×681），按请求尺寸判会随环境误报。
     const [w, h] = win.getContentSize();
-    if (w < 900 || h < 600) throw new Error(`窗口内容区异常 ${w}x${h}`);
+    if (w < 640 || h < 480) throw new Error(`窗口内容区异常 ${w}x${h}`);
     if (r.buttons !== 6) throw new Error(`按钮数 ${r.buttons}（期望 6）`);
 
     const gpu = app.getGPUFeatureStatus() || {};
