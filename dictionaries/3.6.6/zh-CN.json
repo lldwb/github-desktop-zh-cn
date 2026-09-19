@@ -1067,7 +1067,6 @@
     "Resolve all changes before continuing": "继续前解决所有更改",
     "Resolve all conflicts before continuing": "继续前请解决所有冲突",
     "Resolve conflicts and commit to merge into": "解决冲突并提交，以合并到",
-    "Resolve conflicts before ": "请先解决冲突，再 ",
     "Resolve conflicts to continue ": "解决冲突以继续",
     "Resolve conflicts to continue cherry-picking onto": "解决冲突以继续摘取并应用到",
     "Resolve conflicts to continue rebasing": "解决冲突以继续变基",
@@ -1882,7 +1881,10 @@
     " as determined by your": "，取决于你的",
     "…and ": "……以及另外 ",
     "renderer.js|Not Now": "暂不",
-    "`Continue ${p}`": "`继续 ${p}`"
+    "`Continue ${p}`": "`继续 ${p}`",
+    "Auto": "自动",
+    "Extra high": "极高",
+    "`Resolve conflicts before ${c.kind}`": "`在${c.kind}前解决冲突`"
   },
   "windows": {},
   "macos": {
@@ -3295,7 +3297,6 @@
       "Reading recent commit history",
       "Reordering ",
       "Resolution summary",
-      "Resolve conflicts before ",
       "Resolving conflicts for ",
       "Reviewing the changes from each side",
       "Some files were skipped by Copilot. Those need to be resolved manually.",
