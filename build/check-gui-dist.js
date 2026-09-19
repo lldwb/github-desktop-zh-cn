@@ -57,10 +57,34 @@ function checkResources(resourcesDir, label) {
   return exists(asar) ? asar : null;
 }
 
+// macOS 的语言目录与 Windows / Linux 不是一套：语言包是 .lproj 目录，且分布在两处
+//（应用级 Contents/Resources 与 Electron Framework 的 Resources，electron-builder 两处都裁），
+// 目录名用下划线（zh_CN.lproj），与 electronLanguages 里的连字符写法（zh-CN）互不相认——
+// 所以配置里两种写法都要写。这里把两处合并核对：中文要在，也不该剩下第三种语言。
+function checkMacLocales(app, label) {
+  const dirs = [
+    path.join(app, 'Contents/Resources'),
+    path.join(app, 'Contents/Frameworks/Electron Framework.framework/Versions/A/Resources'),
+  ];
+  const uniq = [...new Set(dirs.flatMap((d) => listDir(d).filter((f) => f.endsWith('.lproj'))))].sort();
+  if (!uniq.length) {
+    bad(`${label}：应用级与 Framework 级都找不到 .lproj`);
+    return;
+  }
+  const items = uniq.map((name) => ({ name, lang: name.replace(/\.lproj$/i, '').toLowerCase().replace(/_/g, '-') }));
+  const extra = items.filter((it) => !/^(en|zh)(-|$)/.test(it.lang)).map((it) => it.name);
+  if (!items.some((it) => it.lang === 'zh' || it.lang.startsWith('zh-'))) {
+    bad(`${label}：没有中文语言目录（${uniq.join(' / ')}）——electronLanguages 里要同时列 zh-CN 与 zh_CN`);
+  } else if (extra.length) {
+    bad(`${label}：语言目录没裁干净，多出 ${extra.join(' / ')}`);
+  } else {
+    ok(`${label}：语言目录 ${uniq.join(' / ')}`);
+  }
+}
+
 // 语言包裁剪核验（electron-builder.yml 的 electronLanguages）：Electron 自带 55 个语言包
 // 共约 50 MB，本应用界面是自绘 HTML，只需中英两个（缺语言包时 Chromium 回退 en-US）。
-// Windows / Linux 的布局是 locales/<语言>.pak；macOS 是 Contents/Resources/<语言>.lproj，
-// 条目名与数量口径都不同，那边只报告数量、不判定（见 checkMac）。
+// Windows / Linux 的布局是 locales/<语言>.pak；macOS 是 .lproj 目录，见 checkMacLocales。
 function checkLocales(dir, label) {
   const paks = listDir(dir).filter((f) => f.endsWith('.pak'));
   if (!paks.length) {
@@ -175,10 +199,9 @@ function checkMac() {
     else bad(`${label}：缺 Contents/MacOS 下的主可执行文件`);
     const asar = checkResources(path.join(app, 'Contents/Resources'), label);
     if (asar) checkAsarContents(asar);
-    // macOS 的语言包是 .lproj 目录，名字与 electronLanguages 的写法（en-US）不同一套，
-    // 只把实际留下来的列出来供核对；数量判定留给拿到 mac 实测数据之后再收紧。
-    const lproj = listDir(path.join(app, 'Contents/Resources')).filter((f) => f.endsWith('.lproj'));
-    ok(`${label}：语言目录（.lproj）${lproj.length} 个${lproj.length ? `：${lproj.join(' / ')}` : ''}`);
+    // macOS 的语言目录（.lproj）名称与 electronLanguages 的写法不同一套，且分布在两处
+    //（应用级与 Framework 级），合并核对，见 checkMacLocales。
+    checkMacLocales(app, label);
   }
 }
 
