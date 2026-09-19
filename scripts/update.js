@@ -41,6 +41,12 @@ function pickAsset(assets) {
 // electron-builder 的 Linux 产物把 x64 写成 x86_64 / amd64、arm64 写成 aarch64——
 // 同一个架构三套写法，匹配时都得认，否则 Linux 用户永远找不到自己的安装包
 //（cli 产物是我们自己命名的，用 Node 那套 x64 / arm64，不受影响）。
+//
+// 这里**只挑能被 installGuiUpdate 直接跑起来的那种**，不是「产物里最小的那种」：
+// Windows 侧 `installGuiUpdate` 直接 spawn 下载下来的文件，所以只认 `-setup.exe`——
+// 免安装包是 7z（自 v0.3.0 起，替代原先的 zip），7z 不是可执行文件，挑中它只会让更新失败。
+// 同理 macOS 只认 .dmg（应用无法自己装 dmg，交给 `open`），Linux 认 .AppImage / .deb。
+// 免安装包（7z）仍然随 Release 分发，只是不走「自动更新」这条路——使用者手动解压即可。
 const ARCH_ALIASES = {
   x64: ['x64', 'x86_64', 'amd64'],
   arm64: ['arm64', 'aarch64'],
@@ -50,7 +56,7 @@ const ARCH_ALIASES = {
 function pickGuiAsset(assets) {
   const suffixes = (ARCH_ALIASES[process.arch] || [process.arch]).map((a) => `-${process.platform}-${a}`);
   const exts =
-    { win32: ['.exe'], darwin: ['.dmg', '.zip'], linux: ['.AppImage', '.deb'] }[process.platform] || ['.zip'];
+    { win32: ['.exe'], darwin: ['.dmg'], linux: ['.AppImage', '.deb'] }[process.platform] || ['.AppImage'];
   const hit =
     assets.find((a) => {
       const name = String(a.name);

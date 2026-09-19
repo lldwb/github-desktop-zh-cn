@@ -8,9 +8,11 @@ const cases = [
   {
     platform: 'win32',
     arch: 'x64',
-    // GUI 排在前面：若后缀匹配不严，会先挑中图形界面产物
+    // GUI 排在前面：若后缀匹配不严，会先挑中图形界面产物。
+    // 自 v0.3.0 起 Windows 的免安装包是 7z（替代 zip），它**不能**被挑中——
+    // installGuiUpdate 在 Windows 上是直接 spawn 下载下来的文件，7z 跑不起来。
     assets: [
-      'github-desktop-zh-cn-gui-v0.2.0-win32-x64.zip',
+      'github-desktop-zh-cn-gui-v0.2.0-win32-x64.7z',
       'github-desktop-zh-cn-gui-v0.2.0-win32-x64-setup.exe',
       'github-desktop-zh-cn-cli-v0.2.0-win32-x64.exe',
       'SHA256SUMS',
@@ -19,16 +21,25 @@ const cases = [
     wantGui: 'github-desktop-zh-cn-gui-v0.2.0-win32-x64-setup.exe',
   },
   {
+    // macOS 自 v0.3.0 起只出 dmg，不再有 zip 附件
     platform: 'darwin',
     arch: 'arm64',
     assets: [
       'github-desktop-zh-cn-gui-v0.2.0-darwin-arm64.dmg',
-      'github-desktop-zh-cn-gui-v0.2.0-darwin-arm64.zip',
       'github-desktop-zh-cn-cli-v0.2.0-darwin-arm64.bin',
       'SHA256SUMS',
     ],
     want: 'github-desktop-zh-cn-cli-v0.2.0-darwin-arm64.bin',
     wantGui: 'github-desktop-zh-cn-gui-v0.2.0-darwin-arm64.dmg',
+  },
+  {
+    // 反向用例：旧版本留下的 mac zip 附件（若还在某个老 Release 里）也不能被挑中——
+    // 现在的产物形态是 dmg，挑 zip 等于把已废弃的形态当成有效路径
+    platform: 'darwin',
+    arch: 'arm64',
+    assets: ['github-desktop-zh-cn-gui-v0.2.0-darwin-arm64.zip', 'SHA256SUMS'],
+    want: null,
+    wantGui: null,
   },
   {
     // 兼容：v0.1.x 的无后缀老产物（旧版本来更新时仍要挑得中）
