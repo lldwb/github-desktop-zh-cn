@@ -143,6 +143,8 @@ node build/tools/check-naming.cjs              # pickAsset 只挑 cli 产物（�
   - **Electron 打包态是另一套**（`npm run dist` 的产物）：`__dirname` 落在 `resources/app.asar` 内（asar 内 `require` 正常），`process.execPath` 是改名后的应用 exe；字典走 `extraResources` 进应用的 `resources/dictionaries`（不是内嵌资源——`node:sea` 在 Electron 里不可用；**也不能放 exe 同级**，macOS 的数据根在用户数据目录、Linux 的 AppImage 挂在只读临时目录，两处都取不到），由 `gui/main.js` 的 `seedBundledDicts()` 在 `registerIpc()` **之前**播种到数据根——状态与字典表格读的就是数据根里的字典；数据根在 macOS 上恒为用户数据目录（见上）。上面关于打包器复刻 `require.main`、stdin 预读的两条只适用于 bundle / SEA 产物。
 - **改 Release 正文的中文编码坑（实测发生过）**：用脚本改已发布 Release 的正文时，HTTP 响应**不要按数据块 `toString('utf8')` 解码**——多字节字符会在块边界被截断，正文出现 `还��` 这类替换符，而接口照样返回成功；要**按 `Buffer` 拼接后整体解码**。正文以本地 `CHANGELOG.md` 对应段落为准整体写回，写回后逐字复核（与 CHANGELOG 逐字一致、无替换符），别只看状态码。
 - **electron-builder 在 CI 上会隐式发 Release（v0.2.0 首次发 GUI 产物时踩到）**：electron-builder 26 只要 `publish` 未显式指定就自行判定——检出 tag 时（`GITHUB_REF_TYPE=tag`）按 `onTag`、仅检测到 CI 时按 `onTagOrDraft`，随后**在四个平台各自构建全部跑完之后**才去找 `GH_TOKEN`，找不到就报 `GitHub Personal Access Token is not set` 并 exit 1。表现是「每个平台的 GUI job 都失败、且都失败在最后一步」，本地却怎么跑都成功（本地无 CI 与 tag，这条分支不触发），极易误判成打包配置坏了。本仓库的 Release 由 `gh release create` 创建、不走 electron-builder，故 `package.json` 的 `dist` 脚本固定带 `--publish never`——**别去掉**；`electron-builder.yml` 里也不要加 `publish` 配置。要复现本地只需 `CI=true GITHUB_REF_TYPE=tag GITHUB_REF_NAME=v0.2.0 npm run dist`。
+- **dict-auto AI 链路失败先看注解 / step summary，别翻 job 日志**（2026-09-19 CI 首跑实测）：公开仓库的 Actions 注解与 step summary 人人可看，job 日志只有仓库管理员能取（匿名拉取 403）。`AI_BASE_URL` 配错时失败形态是「未译 11/11 条（100%）超过上限 30%」整版被门槛拦下，看不出该查什么——脚本已把合并后的失败原因（`collapseReasons`）写进注解 / step summary / 提交信息，`Invalid URL` 就是 `new URL()` 解析失败、值不是合法 URL。两个校验要点：制表符 / 换行 / 首尾半角空格会被 `new URL()` 自动删掉（粘贴折行不算错），不换行空格 / 零宽空格 / 串内空格则照收、请求打到 `%C2%A0` 这类地址上静默 404——校验按码点报，脱敏 needle 必须含主机名（网络层报错只带 host）。修法与实测取证见 `docs/dict-v2/tasks.md` 6.5 节。
+- **CI 测试日志里的假 `::warning::`**（2026-09-19 复跑实测）：单测代码 `console.warn` 打出的行若以 `::warning::` 开头（GitHub Actions 注解语法），会被 CI 认成一条真注解收进测试步骤日志，读日志的人会以为 Secret 配错了。修法：测试里截获并断言 `console.warn`，不直接打。另：`node --test` 会把未跟踪的 `tmp/*-test.cjs` 当测试文件收进统计（实测 `tmp/copilot-test.cjs` 让用例数 90 → 91），临时文件别用 `*-test.cjs` 命名。
 - **本机系统代理只有浏览器走**（v0.2.0 多次推送失败才定位）：本机装了系统代理（`127.0.0.1:7890`，Windows 注册表 `ProxyEnable=1`），浏览器走它、`git` / `curl` / Node 的 fetch **都不读系统代理**——直连 `github.com:443` 被掐，表现为 `git push` 反复 `connection reset` / 26 秒超时，而 `api.github.com` 却通（不同出口），极易误判成网络整体故障。解法：推送 / 拉取时临时走代理，**不改全局 git 配置**——`git -c http.proxy=http://127.0.0.1:7890 -c https.proxy=http://127.0.0.1:7890 push origin main`，或设 `HTTPS_PROXY` / `HTTP_PROXY` 环境变量（`curl -x` 同理）；Node 的 fetch 超时不能靠这个解法，大文件下载（Electron 二进制等）改走 npmmirror 镜像（见 `docs/打包与分发.md` 构建期网络一节）。
 
 ## 提交规范
@@ -150,6 +152,7 @@ node build/tools/check-naming.cjs              # pickAsset 只挑 cli 产物（�
 - 中文约定式提交：`<type>(<scope>): <一句话中文标题>`，type 取 feat / fix / chore / docs / refactor 等常规类别。
 - 提交信息不带任何 `Co-Authored-By` 类署名。
 - 只做本地提交，不自动 push / merge / 建 PR；显式 `git add <文件>`，禁止 `-A` / `.`。
+- **合回保持线性历史**：本仓库历史为纯线性（无合并提交），worktree 分支完成合回 main 用 `git rebase main` + `git merge --ff-only <分支>` 快进，不造合并提交。
 - 仓库为开源仓库：文件内容不写绝对路径、机器名、凭据等敏感信息。
 - **分支命名规范**：新建的本地开发分支按 `<type>/<内容>-<修改者>-<MMDD>` 命名，如 `fix/dictionaries-lldwb-0919`——`type` 限定与提交类型一致的词表（feat / fix / chore / docs / refactor 等），`内容` 用小写连字符短语概括改动主题，`修改者` 用 git 用户名，`时间` 用两位月两位日（MMDD）。`main` 分支与 `backup/` 类历史 / 备份分支不受此约束。
 
