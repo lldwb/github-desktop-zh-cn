@@ -64,6 +64,17 @@ jobs:
             exit 1
           fi
           echo "发布令牌有效：$login（对 ${{ github.repository }} 有写权限）"
+      # Gitee 是镜像渠道，缺令牌**不阻断** GitHub 发布——但必须明说：否则「Gitee 上怎么没有
+      # 发行版」会被当成 CI 坏了去查半天。这里只查存在性；令牌失效会在发布时由 API 报错。
+      - name: 校验 Gitee 令牌
+        env:
+          GITEE_TOKEN: ${{ secrets.GITEE_TOKEN }}
+        run: |
+          if [ -z "$GITEE_TOKEN" ]; then
+            echo "::warning::未配置 GITEE_TOKEN secret——本次不会向 Gitee 发版，Gitee 上将看不到发行版。配置方法见 AGENTS.md「发版」一节"
+          else
+            echo "Gitee 令牌已配置（${#GITEE_TOKEN} 字符），发布时会同步发行版"
+          fi
       - name: 校验三处对齐
         if: startsWith(github.ref, 'refs/tags/v')
         run: |
@@ -277,3 +288,78 @@ jobs:
 
           GH_TOKEN="$RELEASE_TOKEN" gh release edit "$GITHUB_REF_NAME" --draft=false --notes-file notes.md
           echo "Release $GITHUB_REF_NAME 已发布，附件 $(gh release view "$GITHUB_REF_NAME" --json assets --jq '.assets | length') 个"
+
+      # 同步到 Gitee。放在 GitHub Release 发布**之后**：Gitee 是镜像渠道，它出问题不该
+      # 影响权威源的成果（下面失败时只让 job 标红，已发布的 GitHub Release 原样保留）。
+      - name: 发布到 Gitee
+        env:
+          GITEE_TOKEN: ${{ secrets.GITEE_TOKEN }}
+        run: |
+          if [ -z "$GITEE_TOKEN" ]; then
+            echo "::warning::未配置 GITEE_TOKEN，跳过 Gitee 发布——Gitee 上不会有 $GITHUB_REF_NAME 的发行版"
+            exit 0
+          fi
+
+          API="https://gitee.com/api/v5/repos/$GITHUB_REPOSITORY"
+          AUTH="Authorization: Bearer $GITEE_TOKEN"
+          TAG="$GITHUB_REF_NAME"
+
+          # 探测：Gitee 用 HTTP 200 + 字面量 null 表示「该 tag 没有发行版」，**不是 404**——
+          # 照搬 GitHub 的判据会把「不存在」当成「查询失败」。实测见 docs/dict-v2/tasks.md 6.x。
+          existing="$(curl -sfS -m 30 -H "$AUTH" "$API/releases/tags/$TAG" || echo null)"
+          rid="$(printf '%s' "$existing" | jq -r 'if type=="object" then (.id // empty) else empty end' 2>/dev/null || true)"
+
+          if [ -n "$rid" ]; then
+            echo "Gitee 上已有 $TAG 的发行版（id=$rid），跳过创建、只补缺的附件"
+          else
+            payload="$(jq -n --arg t "$TAG" --rawfile b notes.md \
+              '{tag_name:$t, name:$t, body:$b, target_commitish:"main", prerelease:false}')"
+            resp="$(curl -sfS -m 60 -X POST "$API/releases" -H "$AUTH" \
+              -H "Content-Type: application/json" -d "$payload" 2>&1 || true)"
+            rid="$(printf '%s' "$resp" | jq -r '.id // empty' 2>/dev/null || true)"
+            if [ -z "$rid" ]; then
+              echo "::error::在 Gitee 创建 $TAG 的发行版失败：$(printf '%s' "$resp" | tr '\n' ' ' | tail -c 300)"
+              exit 1
+            fi
+            echo "已在 Gitee 创建发行版（id=$rid）"
+          fi
+
+          # 幂等判据只能是文件名：Gitee 的资产对象实测只有 browser_download_url 与 name，
+          # 没有 sha256 / size 可比（GitHub 那边靠 digest）。代价是「上次传到一半的残缺附件」
+          # 会被当成已传——Gitee 没有可用的完整性凭据，只能接受这个上限。
+          have="$(curl -sfS -m 30 -H "$AUTH" "$API/releases/tags/$TAG" | jq -r '.assets[]?.name' 2>/dev/null || true)"
+
+          failed=""
+          for f in dist/*; do
+            name="$(basename "$f")"
+            if printf '%s\n' "$have" | grep -Fxq "$name"; then
+              echo "Gitee 上已有同名附件，跳过：$name"
+              continue
+            fi
+            ok=""
+            for attempt in 1 2 3; do
+              if out="$(curl -sfS -m 1800 -X POST "$API/releases/$rid/attach_files" \
+                -H "$AUTH" -F "file=@$f" 2>&1)"; then
+                echo "已上传到 Gitee：$name（$(du -h "$f" | cut -f1)）"
+                ok=1
+                break
+              fi
+              detail="$(printf '%s' "$out" | tr '\n' ' ' | tr -d '\r' | tail -c 200)"
+              if [ "$attempt" -lt 3 ]; then
+                echo "附件 $name 第 $attempt 次上传到 Gitee 失败，15 秒后重试：$detail"
+                sleep 15
+              else
+                echo "附件 $name 第 $attempt 次上传到 Gitee 失败：$detail"
+              fi
+            done
+            if [ -z "$ok" ]; then
+              failed="$failed $name"
+              echo "::error::附件 $name 上传到 Gitee 失败：$(printf '%s' "$out" | tr '\n' ' ' | tr -d '\r' | tail -c 300)"
+            fi
+          done
+
+          if [ -n "$failed" ]; then
+            echo "::error::本次未能上传到 Gitee：$failed（重跑即可续传，已传成功的不会重来；GitHub Release 已发布，不受影响）"
+            exit 1
+          fi
+          echo "Gitee 同步完成：https://gitee.com/$GITHUB_REPOSITORY/releases/tag/$TAG"

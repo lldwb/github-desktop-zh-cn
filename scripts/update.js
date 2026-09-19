@@ -25,11 +25,26 @@ const MAGIC = {
 function pickAsset(assets) {
   const suffix = `-${process.platform}-${process.arch}`;
   const exts = process.platform === 'win32' ? ['.exe'] : ['.bin', ''];
-  return assets.find((a) => exts.some((e) => String(a.name).endsWith(suffix + e))) || null;
+  const hit = assets.find((a) => exts.some((e) => String(a.name).endsWith(suffix + e))) || null;
+  if (!hit) return null;
+  // Gitee 的资产对象只有 browser_download_url 与 name（实测无 url / size / digest），
+  // 把直链补进 url 字段——apply() 只认 url，补过之后两条来源的资产对下游是同一种形状。
+  return hit.url ? hit : { ...hit, url: hit.browser_download_url };
 }
 
 async function check() {
-  const release = await net.getJson(`${common.GH_API}/releases/latest`);
+  // 优先 GitHub；取不到时退回 Gitee 镜像。Gitee 的镜像只同步 commit / 分支 / tag，
+  // **发行版要 CI 补发**（build.yml 的「发布到 Gitee」步骤），所以两边都得问一次。
+  // 兜底触发条件比「网络不通」宽：仓库还没建过 Release 时 GitHub 返回 404 也会抛到这里，
+  // 那种情况下 Gitee 同样没有，最终仍会如实报错——不吞异常、不假装是最新。
+  let release;
+  let source = 'github';
+  try {
+    release = await net.getJson(`${common.GH_API}/releases/latest`);
+  } catch (e) {
+    release = await net.getJson(`${common.GITEE_API}/releases/latest`);
+    source = 'gitee';
+  }
   const latest = String(release.tag_name || '').replace(/^v/, '');
   const current = PKG.version;
   return {
@@ -37,7 +52,10 @@ async function check() {
     latest,
     hasUpdate: common.compareVersions(latest, current) > 0,
     asset: pickAsset(release.assets || []),
-    releaseUrl: release.html_url,
+    // Gitee 的 release 对象没有 html_url 字段（实测字段：id / tag_name / name / body /
+    // prerelease / author / created_at / assets），按 tag 拼一个出来
+    releaseUrl: release.html_url || `https://gitee.com/${common.GH_OWNER}/${common.GH_REPO}/releases/tag/${release.tag_name}`,
+    source,
   };
 }
 

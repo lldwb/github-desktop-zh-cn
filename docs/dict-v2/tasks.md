@@ -185,11 +185,16 @@
 
 ## 7. Gitee 发版与检查更新优先级
 
-- [ ] `build.yml` 的 `release` job 后新增 Gitee 步骤：`GET /releases/tags/{tag}` 探测 → `POST /releases` → 逐附件 `POST /releases/{id}/attach_files`（幂等、单个附件失败不回滚 GitHub Release、失败日志含文件名）
-- [ ] Secrets 增加 `GITEE_TOKEN`，并在 `check-version` job 里校验其存在性（缺失时给出可读提示而非静默跳过）
-- [ ] `common.js` 的 `remoteDictUrls(version)` 增加 Gitee raw 兜底（顺序：GitHub raw → jsDelivr → Gitee raw）
-- [ ] `scripts/update.js` 的 `check()` 增加 Gitee Releases API 兜底
+- [x] `build.yml` 的 `release` job 后新增 Gitee 步骤：`GET /releases/tags/{tag}` 探测 → `POST /releases` → 逐附件 `POST /releases/{id}/attach_files`（幂等、单个附件失败不回滚 GitHub Release、失败日志含文件名）
+      ——落为 `release` job 末尾的「发布到 Gitee」步骤（排在 GitHub Release 发布**之后**）。**实测确定的两个 Gitee 特有行为**：按 tag 查发行版时 **`200 + 字面量 null` 表示不存在，不是 404**（照搬 GitHub 的判据会把「不存在」读成「查询失败」）；资产对象**只有 `browser_download_url` 与 `name`，没有 sha256 / size 可比**，故幂等只能按文件名判——上限是「上次传到一半的残缺附件」会被当成已传，Gitee 没有可用的完整性凭据。创建时正文用 `jq --rawfile` 从 `notes.md` 读，与 GitHub 侧同一份。失败分两层：单个附件重试 3 次后记 `::error::`（含文件名）并让 job 标红，而 GitHub Release 已在前面发布完毕、不受影响；未配令牌则打 `::warning::` 后跳过
+- [x] Secrets 增加 `GITEE_TOKEN`，并在 `check-version` job 里校验其存在性（缺失时给出可读提示而非静默跳过）
+      ——`check-version` 新增「校验 Gitee 令牌」步骤：缺失时打 `::warning::` 明说本次不会同步到 Gitee（**不阻断**——Gitee 是镜像渠道，不该挡住权威源），已配则打印字符数。`AGENTS.md`「发版」一节补了配置方法（Gitee 私人令牌勾 `projects` 权限）
+- [x] `common.js` 的 `remoteDictUrls(version)` 增加 Gitee raw 兜底（顺序：GitHub raw → jsDelivr → Gitee raw）
+      ——**此前已完成**（`common.js` 第 386-389 行的返回顺序即为此），连同 `GITEE_RAW` / `GITEE_API` 两个常量一并核过
+- [x] `scripts/update.js` 的 `check()` 增加 Gitee Releases API 兜底
+      ——GitHub 取不到时退回 `${GITEE_API}/releases/latest`；返回值多一个 `source` 字段标明来源（两个调用方只用 `hasUpdate`/`latest`/`current`/`asset`/`releaseUrl`，不受影响）。**顺带修掉一处会直接崩的缺陷**：Gitee 的资产对象没有 `url` 字段，而 `apply()` 只认 `asset.url`——`pickAsset` 现在把 `browser_download_url` 补进 `url`。`releaseUrl` 在 Gitee 侧按 tag 拼（那边没有 `html_url`）。**实测**：把 GitHub 指向不存在的仓库、Gitee 指向 `mindspore/mindspore`，`check()` 返回 `source=gitee` / `latest=2.7.2` / `releaseUrl` 指向 gitee.com ✓
 - [ ] 实测：发一个 tag → Gitee Releases 页出现同名发行版且附件数与 GitHub 一致
+      ——**只能由真实 CI 触发**：需先在仓库 Actions secrets 配好 `GITEE_TOKEN` 再推 tag。本地既无令牌、也没有脚本依赖的 `jq`（runner 自带）；Gitee API 的端点行为、认证方式与返回结构已在本地用 curl 逐条实测（见上四项）
 
 ## 8. 更新管控注入
 
