@@ -215,7 +215,16 @@
       ——注入块里带一段 `autoPatch()`：GitHub Desktop 每次启动时，若**当前版本有字典、账上却没有 i18n 组**，就 spawn 工具 `patch --version <当前版本>` 补打一次。判据用记账文件（`<字典目录>/../tmp/patch-state.json`）而不是「产物里有没有中文」——记账既是「打过没有」的权威记录，也避免了每次启动都白跑一次 patch。**工具路径在注入时写死**（`process.execPath`），且**只在打包态注入**：源码态下工具就是仓库本身（用户自己 `npm run patch`），往产物里写死一个 node 路径换台机器就指向不存在的东西了。spawn 失败一律吞掉——这是锦上添花的一步，不能因为它让 GitHub Desktop 起不来
 - [x] `cli.js` / GUI 增加「禁止自动更新」与「恢复自动更新」两个开关
       ——两边都做成**三选一**而不是两个独立开关：「没有字典就不更新」与「完全禁止」是同一处注入的两种模式，两个开关会让人以为能同时开，而它们改的是同一行代码。CLI 菜单加 `6) 更新管控`（`doUpdateControl`），GUI 加「更新管控」按钮（`btn-update-control` → IPC `updateControl` → 主进程对话框选模式）。命令行侧的等价入口写进了 `--help`：`patch --update-control` / `patch --block-update` / `restore --group updateControl`。GUI 的模式选择在主进程对话框里做，preload 依旧只暴露「动作」不暴露参数——渲染进程无法伪造确认
-- [ ] 实测：开启后 GitHub Desktop 不再触发更新检查（开关状态 + 产物字节差异双重取证）；还原后回到官方行为
+- [x] 实测：开启后 GitHub Desktop 不再触发更新检查（开关状态 + 产物字节差异双重取证）；还原后回到官方行为
+      ——**在本机真实安装上做了**（`C:\Users\32471\AppData\Local\GitHubDesktop\app-3.6.6`，3.6.6 正式版，此前已汉化）。取证：
+      - **开关状态**：记账 `{"3.6.6":{"groups":["i18n","updateControl"]}}` ✓
+      - **产物字节差异**：main.js `240657 → 242241`（+1584），md5 前 12 位 `9e840388a8b5 → 2c4f8a8917d1` ✓
+      - **注入块与闸门就位**：`/*__GDZC_UPDATE_CONTROL_BEGIN__*/` 与 `if(!globalThis.__gdzcAllowUpdate())return;` 都在，且闸门恰好插在 `async checkForUpdates(e){` 之后 ✓；`renderer.js` 未被注入（只动 main.js）✓
+      - **语法合法**：注入后的 main.js / renderer.js 都能被 `vm.Script` 解析（69 ms）✓
+      - **`DICT_DIR` 正确内联**：`var DICT_DIR="E:\\github-desktop-zh-cn\\dictionaries";` ✓；**`TOOL` 未注入**（源码态，符合设计）✓
+      - **闸门逻辑**：用 vm 沙箱跑注入块，四种场景全对（等于上限→拦截、低于上限→放行、高于上限→拦截、目录不存在→放行）
+      **未做的一步**：没有主动启动 GitHub Desktop 去观察「更新检查确实没触发」——那是运行时行为，要动用户的应用，留给用户自己开一次确认。**副作用留档**：打补丁前的产物已复制到 `tmp/patch-test/before-real/`，官方原文在 `tmp/backup/3.6.6/`，随时可回滚
+      **本轮实测暴露并修掉的三个真实缺陷**（都已提交）：`restart.js` 的 `launch` 不接 `error` 事件导致 `ENOENT` 冒到进程级带崩调用方；`restartApp` 只按进程名判断「在不在跑」，把用户开着的应用关掉却起不来还回去；`restore --group` 在账为空但产物已汉化时（记账功能上线前的老用户）会把汉化一并还原掉
 
 ## 9. 工具自更新接 GUI
 
