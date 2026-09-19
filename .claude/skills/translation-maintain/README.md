@@ -8,6 +8,7 @@
 - `references/版本升级.md` — 官方版本更新后重建汉化包的完整步骤（备份核验 → 派生字典 → 全量干跑找失效条目 → 重建整模板键 → 补译新增文案）
 - `references/收录判定.md` — 「这条英文能不能译」的四步检查与已实证的不可译清单（含事故案例）
 - `references/probe.cjs` — 探针模板，拷到 `tmp/` 改候选后执行；`dry` 模式在官方原文上预演命中，`land` 模式在汉化产物上复查残留
+- `references/copilot-behavior-test.cjs` — 行为验证模板：改动发给模型的文本（Copilot 提示词 / 冲突输入文档 / 仓库约束说明）后，用应用自带 Copilot 运行时实测模型输出仍符合 JSON 契约（每条用例消耗 1 次 Copilot 请求）
 
 ## 用法
 
