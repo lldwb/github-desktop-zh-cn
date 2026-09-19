@@ -398,17 +398,34 @@ test('migrate：译文非法时拒绝迁移，原文件不动', (t) => {
 
 test('exportFlat：省略平台时导出当前平台视角（common ∪ 当前平台段）', (t) => {
   isolate(t);
-  writeDoc(segmented());
-
-  const mac = dictEdit.exportFlat(VERSION, { platform: 'macos' });
-  assert.deepStrictEqual(Object.keys(mac), ['Sign in', 'en-US']); // macos 段为空
-  const win = dictEdit.exportFlat(VERSION, { platform: 'windows' });
-  assert.deepStrictEqual(Object.keys(win), ['Sign in', 'en-US', 'label:"Open &with…"']);
-  // groups 不是条目，绝不进扁平导出
-  assert.ok(!('菜单' in win));
-
-  assert.deepStrictEqual(
-    Object.keys(dictEdit.exportFlat(VERSION)),
-    ['Sign in', 'en-US', 'label:"Open &with…"'] // 本机是 win32
+  // 三个平台段各放一条独有键：省略平台这条断言在哪个 runner 上都要有东西可验。
+  // 只给 windows 段放键的话，macOS / Linux runner 上「省略平台」的期望与「只取 common」
+  // 完全同形，断言测不到任何东西（v0.3.0 的 CI 就是因为这里写死了 win32 而三平台全红）
+  const SEGMENT_KEYS = {
+    windows: 'label:"Open &with…"',
+    macos: 'label:"File"',
+    linux: 'Show in your File Manager',
+  };
+  writeDoc(
+    segmented({
+      macos: { [SEGMENT_KEYS.macos]: 'label:"文件"' },
+      linux: { [SEGMENT_KEYS.linux]: '在文件管理器中打开' },
+    })
   );
+
+  for (const p of ['windows', 'macos', 'linux']) {
+    assert.deepStrictEqual(
+      Object.keys(dictEdit.exportFlat(VERSION, { platform: p })),
+      ['Sign in', 'en-US', SEGMENT_KEYS[p]],
+      `显式指定 ${p} 段`
+    );
+  }
+  // groups 不是条目，绝不进扁平导出
+  assert.ok(!('菜单' in dictEdit.exportFlat(VERSION, { platform: 'windows' })));
+
+  // 省略平台取的是 common.currentPlatform()，不是写死的某一段——期望随运行平台走
+  const cur = common.currentPlatform();
+  const expected = ['Sign in', 'en-US'];
+  if (SEGMENT_KEYS[cur]) expected.push(SEGMENT_KEYS[cur]);
+  assert.deepStrictEqual(Object.keys(dictEdit.exportFlat(VERSION)), expected, `当前平台段：${cur}`);
 });
