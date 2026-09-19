@@ -1,6 +1,7 @@
 // scripts/restart.js — 关闭并重启 GitHub Desktop
 // 汉化/还原后必须重启才生效：Electron 已把代码载入内存，磁盘上的替换不会自动重载。
 'use strict';
+const fs = require('fs');
 const path = require('path');
 const { execFileSync, spawn } = require('child_process');
 
@@ -60,12 +61,22 @@ function launch(resourcesDir) {
   const args = process.platform === 'darwin' ? [target] : [];
   const cmd = process.platform === 'darwin' ? 'open' : target;
   const child = spawn(cmd, args, { detached: true, stdio: 'ignore' });
+  // spawn 的失败是**异步**的（ENOENT 走 error 事件，不抛在调用处）。不接这个事件，
+  // 目标不存在时它会冒到进程级把调用方整个带崩——而调用方（patch / restore）此刻
+  // 产物早就写好了，崩在这一步纯属误伤。
+  child.on('error', () => {});
   child.unref();
   return target;
 }
 
 // 原本在运行 → 关闭并重新启动；原本没运行 → 不动（避免替用户多开一个窗口）
 function restartApp(resourcesDir) {
+  // **kill 之前先确认目标存在**：进程识别只能按进程名（Windows 的 tasklist 拿不到路径），
+  // 所以「本机装的那份在跑」与「我们正要改的那份」未必是同一个。目标不存在时若照杀，
+  // 结果是「把用户开着的应用关掉、却起不来还回去」。产物此刻已经写好了，这种情况按
+  // 「没在运行」处理，由调用方提示用户手动启动即可。
+  const target = appTarget(resourcesDir);
+  if (process.platform !== 'darwin' && !fs.existsSync(target)) return 'not-running';
   if (!isRunning()) return 'not-running';
   kill();
   // 等句柄释放；强杀通常立即生效，这里只做一次短等待

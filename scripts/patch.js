@@ -9,6 +9,7 @@ const path = require('path');
 const common = require('./common.js');
 const dictSync = require('./dict-sync.js');
 const restart = require('./restart.js');
+const updateControl = require('./update-control.js');
 
 const {
   locateApp,
@@ -27,12 +28,14 @@ const {
 const TARGETS = ['main.js', 'renderer.js'];
 
 function parseArgs(argv) {
-  const args = { dryRun: false, explicitPath: null, version: null };
+  const args = { dryRun: false, explicitPath: null, version: null, updateControl: null };
   for (let i = 2; i < argv.length; i++) {
     const a = argv[i];
     if (a === '--dry-run') args.dryRun = true;
     else if (a === '--path') args.explicitPath = argv[++i];
     else if (a === '--version') args.version = argv[++i];
+    else if (a === '--update-control') args.updateControl = 'guard';
+    else if (a === '--block-update') args.updateControl = 'off';
     else if (a === '--help' || a === '-h') args.help = true;
     else throw new Error(`未知参数：${a}（--help 查看用法）`);
   }
@@ -50,6 +53,8 @@ function printHelp() {
   --dry-run        预览替换结果，不写盘
   --version <版本>  指定字典版本（默认取 dictionaries/ 下最新版本）
   --path <目录>    显式指定 resources 目录
+  --update-control 额外打「更新管控」补丁：没有对应版本的字典时不放行自动更新
+  --block-update   额外打「更新管控」补丁，且完全禁止自动更新（不看字典）
   -h, --help       显示本帮助`);
 }
 
@@ -127,9 +132,43 @@ async function run(args = {}) {
 
   log(`\n合计命中 ${totalAll} 处。`);
 
+  // —— 更新管控补丁组 ——
+  // 与汉化同属「补丁」，但改的是逻辑不是文案：往 main.js 注入一道闸。
+  // 只动 main.js——checkForUpdates 的方法体与 IPC 入口都在那里，renderer 侧只是调用方。
+  let injected = false;
+  if (args.updateControl) {
+    if (args.dryRun) {
+      log('\n（--dry-run：更新管控未注入）');
+    } else {
+      const mainFile = path.join(app.appDir, 'main.js');
+      const r = updateControl.inject(fs.readFileSync(mainFile, 'utf8'), {
+        dictDir: path.join(common.dataRoot(), 'dictionaries'),
+        mode: args.updateControl,
+      });
+      if (r.changed) {
+        fs.writeFileSync(mainFile, r.content, 'utf8');
+        injected = true;
+        const what = args.updateControl === 'off' ? '完全禁止自动更新' : '没有字典就不更新';
+        log(`\n已注入更新管控（${what}）：main.js`);
+      } else {
+        log(`\n更新管控未注入：${r.reason}`);
+      }
+    }
+  }
+
+  // 记账：i18n 是本轮必打的（run 的主体就是它），updateControl 按参数。
+  // **并入已有记录而不是覆盖**——不带 --update-control 再跑一次，不该把上次打的更新管控
+  // 从账上抹掉，那会让「按组还原」漏掉它。要撤该组得走 restore 的按组还原。
+  if (!args.dryRun) {
+    const groups = new Set(['i18n', ...common.getPatchGroups(version)]);
+    if (injected) groups.add('updateControl');
+    common.setPatchGroups(version, [...groups]);
+  }
+
   // 汉化后重启：Electron 已把旧代码载入内存，不重启看不到效果。
   // 应用原本没在运行时不动它（避免替用户多开窗口），只提示。
-  const restarted = args.dryRun ? 'skipped' : restart.restartApp(app.resourcesDir);
+  // noRestart：按组还原时由 restore 统一重启一次，避免「还原→重启→重新应用→再重启」两次拉起。
+  const restarted = args.dryRun || args.noRestart ? 'skipped' : restart.restartApp(app.resourcesDir);
 
   return {
     version,
@@ -138,6 +177,7 @@ async function run(args = {}) {
     dryRun: !!args.dryRun,
     restarted,
     downloaded: synced.downloaded,
+    updateControl: injected ? args.updateControl : null,
   };
 }
 

@@ -567,6 +567,44 @@ function isPatched(appDir, version) {
   });
 }
 
+// —— 补丁组记账 ——
+// 补丁分两组：i18n（文案替换）与 updateControl（更新管控注入）。记账文件记下「对哪个版本
+// 应用了哪几组」，还原时按组执行——只撤某一组时，从官方原文备份重新应用剩下的组即可。
+// **备份因此始终只有一份（官方原文）**：按组还原不能靠「每组各存一份备份」，那样每加一组
+// 就多一份中间态，版本一多就没法收拾，而且「当前产物到底是哪几组的叠加」也说不清。
+const PATCH_GROUPS = ['i18n', 'updateControl'];
+const PATCH_GROUP_LABELS = { i18n: '汉化', updateControl: '更新管控' };
+
+function patchStatePath() {
+  return path.join(getTmpDir(), 'patch-state.json');
+}
+
+function readPatchState() {
+  try {
+    const raw = JSON.parse(fs.readFileSync(patchStatePath(), 'utf8'));
+    return raw && typeof raw === 'object' ? raw : {};
+  } catch {
+    return {}; // 不存在或损坏都当空账——它只是记账，丢了顶多退化成「按备份整体还原」
+  }
+}
+
+// 记录某版本已应用的补丁组。groups 是**全集**（覆盖写），不是增量——调用方拼好再传。
+// 传空数组即销账（该版本已回到官方原版）。
+function setPatchGroups(version, groups) {
+  const state = readPatchState();
+  const clean = [...new Set(groups)].filter((g) => PATCH_GROUPS.includes(g));
+  if (clean.length === 0) delete state[version];
+  else state[version] = { groups: clean, updatedAt: new Date().toISOString() };
+  fs.mkdirSync(path.dirname(patchStatePath()), { recursive: true });
+  fs.writeFileSync(patchStatePath(), `${JSON.stringify(state, null, 2)}\n`, 'utf8');
+  return clean;
+}
+
+function getPatchGroups(version) {
+  const entry = readPatchState()[version];
+  return entry && Array.isArray(entry.groups) ? entry.groups : [];
+}
+
 // 关键字后可直接跟正则字面量（如 return/regex/、typeof/x/），此时 '/' 前是关键字末尾字母
 const REGEX_AFTER = new Set([
   'return', 'typeof', 'instanceof', 'in', 'of', 'new', 'delete', 'void', 'throw',
@@ -759,6 +797,12 @@ module.exports = {
   backupAppFiles,
   backupExists,
   isPatched,
+  PATCH_GROUPS,
+  PATCH_GROUP_LABELS,
+  patchStatePath,
+  readPatchState,
+  setPatchGroups,
+  getPatchGroups,
   stringLiterals,
   applyDictInStrings,
   checkSyntax,

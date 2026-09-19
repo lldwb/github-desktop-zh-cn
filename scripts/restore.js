@@ -10,6 +10,7 @@ const path = require('path');
 const common = require('./common.js');
 const dictSync = require('./dict-sync.js');
 const restart = require('./restart.js');
+const updateControl = require('./update-control.js');
 
 const {
   locateApp,
@@ -20,16 +21,22 @@ const {
   applyDictInStrings,
   checkSyntax,
   isPackaged,
+  PATCH_GROUPS,
+  PATCH_GROUP_LABELS,
+  getPatchGroups,
+  setPatchGroups,
+  dataRoot,
 } = common;
 
 const TARGETS = ['main.js', 'renderer.js'];
 
 function parseArgs(argv) {
-  const args = { explicitPath: null, version: null };
+  const args = { explicitPath: null, version: null, groups: [] };
   for (let i = 2; i < argv.length; i++) {
     const a = argv[i];
     if (a === '--path') args.explicitPath = argv[++i];
     else if (a === '--version') args.version = argv[++i];
+    else if (a === '--group') args.groups.push(argv[++i]);
     else if (a === '--help' || a === '-h') { args.help = true; }
     else throw new Error(`未知参数：${a}（--help 查看用法）`);
   }
@@ -47,7 +54,63 @@ function printHelp() {
 选项：
   --path <目录>    显式指定 resources 目录（绕过自动探测，跨平台可用）
   --version <版本>  指定版本（默认取安装版本）
+  --group <组名>    只撤指定的补丁组（可重复），其余组原样保留。
+                    组名：i18n（汉化）、updateControl（更新管控）。
+                    不给该参数时整份还原成官方原版。
   -h, --help       显示本帮助`);
+}
+
+// 按组还原：只撤指定的补丁组，其余组从官方原文备份重新应用一遍。
+// **重放而不是逐组撤销**——产物是若干补丁叠加的结果，逆运算既难写又易错（注入块要精确
+// 摘除、文案替换要逐条逆推），而从权威的官方原文重放剩下的组，结果与「一开始就只打这几组」
+// 逐字节相同。这也正是备份始终只有一份（官方原文）的原因。
+async function restoreGroups(app, version, removeGroups, log) {
+  const bad = removeGroups.filter((g) => !PATCH_GROUPS.includes(g));
+  if (bad.length > 0) {
+    throw new Error(`未知补丁组：${bad.join(', ')}（可用：${PATCH_GROUPS.join(' / ')}）`);
+  }
+  if (!backupExists(version)) {
+    throw new Error(`没有 ${version} 的官方原文备份（${backupDir(version)}），无法按组还原——请改用整份还原`);
+  }
+
+  const current = getPatchGroups(version);
+  const keep = current.filter((g) => !removeGroups.includes(g));
+  const label = (gs) => (gs.length ? gs.map((g) => PATCH_GROUP_LABELS[g] || g).join('、') : '无');
+  log(`补丁组：当前 ${label(current)}；撤 ${label(removeGroups)}；保留 ${label(keep)}`);
+
+  // 1) 先回到官方原文
+  for (const f of TARGETS) {
+    const dst = path.join(app.appDir, f);
+    fs.copyFileSync(path.join(backupDir(version), f), dst);
+    log(`已还原官方原文：app/${f}`);
+  }
+
+  // 2) 重放要保留的组
+  if (keep.includes('i18n')) {
+    log('\n重新应用汉化…');
+    // noRestart：由本函数末尾统一重启一次，避免两次拉起应用
+    await require('./patch.js').run({ version, explicitPath: app.resourcesDir, quiet: false, noRestart: true });
+  }
+  if (keep.includes('updateControl')) {
+    const mainFile = path.join(app.appDir, 'main.js');
+    const r = updateControl.inject(fs.readFileSync(mainFile, 'utf8'), {
+      dictDir: path.join(dataRoot(), 'dictionaries'),
+      mode: 'guard',
+    });
+    if (r.changed) {
+      fs.writeFileSync(mainFile, r.content, 'utf8');
+      log('已重新注入更新管控（没有字典就不更新）');
+    } else {
+      log(`更新管控未重新注入：${r.reason}`);
+    }
+  }
+
+  // 3) 记账以 keep 为准。上一步的 patch.run 会把旧账并进来（它按「并入已有」写账），
+  //    所以撤掉的那组必须在最后显式落定，否则账上还留着它。
+  setPatchGroups(version, keep);
+
+  const restarted = restart.restartApp(app.resourcesDir);
+  return { version, app, source: 'groups', removed: removeGroups, kept: keep, restarted };
 }
 
 // 无备份时的逆向还原：先全部算好并做语法校验，通过后再统一落盘。
@@ -96,6 +159,11 @@ async function run(args = {}) {
 
   log(`安装版本：${app.version}`);
 
+  // 按组还原：只撤指定的组，其余组从官方原文重放（见 restoreGroups）
+  if (args.groups && args.groups.length > 0) {
+    return restoreGroups(app, version, args.groups, log);
+  }
+
   let source = 'backup';
   let total = 0;
   let ambiguous = 0;
@@ -108,6 +176,9 @@ async function run(args = {}) {
       fs.copyFileSync(path.join(backup, f), dst);
       log(`已还原：app/${f}（${fs.statSync(dst).size} 字节）`);
     }
+    // 整份还原 = 回到官方原文，账上不该再留着任何补丁组：留着会让「按组还原」以为还有
+    // 东西可撤，也会让下次 patch 把早已撤掉的组当成仍在生效（记账是「并入已有」的写法）。
+    setPatchGroups(version, []);
   } else {
     source = 'reverse';
     ({ total, ambiguous, skipped } = await restoreByReverse(app, version, log));
@@ -135,7 +206,13 @@ async function main() {
 
   try {
     const r = await run(args);
-    const how = r.source === 'backup' ? '已从备份精确还原' : `已按字典逆向还原（${r.total} 处）`;
+    const nameOf = (gs) => gs.map((g) => PATCH_GROUP_LABELS[g] || g).join('、');
+    const how =
+      r.source === 'groups'
+        ? `已撤 ${nameOf(r.removed)}${r.kept.length ? `，保留 ${nameOf(r.kept)}` : '（已回到官方原版）'}`
+        : r.source === 'backup'
+          ? '已从备份精确还原'
+          : `已按字典逆向还原（${r.total} 处）`;
     console.log(
       r.restarted === 'restarted'
         ? `还原完成：${how}，并已重启 GitHub Desktop。`

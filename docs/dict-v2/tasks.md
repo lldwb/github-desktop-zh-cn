@@ -198,10 +198,19 @@
 
 ## 8. 更新管控注入
 
-- [ ] **先取证**：确认产物 main.js 里注入代码可用的运行时能力（`require('fs')` / 全局 `fetch` / `__dirname`），据结果定版本上限用"外部清单 + 内联常量"双级还是只用内联常量
-- [ ] `patch.js` 补丁组记账：记录当前应用了哪几组（汉化 / 更新管控），还原按组执行，备份始终是官方原文那一份
-- [ ] 注入实现「禁止自动更新」：替换 `setFeedURL + checkForUpdates` 调用对为空操作，IPC 契约不变
-- [ ] 注入实现「没有字典就拦截」：放行前比对当前版本与已支持版本上限
+- [x] **先取证**：确认产物 main.js 里注入代码可用的运行时能力（`require('fs')` / 全局 `fetch` / `__dirname`），据结果定版本上限用"外部清单 + 内联常量"双级还是只用内联常量
+      ——**取证结论**（3.6.6 正式版 main.js，241919 字符）：产物结构是「行 0 版权注释 + 行 1 单个 IIFE（241824 字符）+ 行 2 sourceMappingURL」，**全部代码在一个 IIFE 里**。
+      - **`require` 可用**：产物里 `require("fs")` / `require("http")` / `require("https")` / `require("electron")` 各出现 1 次——这些是 webpack 的 externals，被保留成 Node 原生 require。注入点选在 **IIFE 之外**（行 0 与行 1 之间）：那里是 CommonJS 模块顶层，`require` 是原生的，不受 webpack 运行时的 `__webpack_require__` 拦截
+      - **路径能力可用**：`__dirname` 6 次、`app.getPath(` 5 次、`app.getAppPath` 2 次；`process.resourcesPath` **未出现**（0 次），别用它
+      - **`fetch` 产物未用**（0 次）——注入代码要联网得走 `require('https')` 或 `require('electron').net`
+      **据此定版**：**只用内联常量 + 运行时扫字典目录**，不引入外部清单——「哪些版本有字典」这件事字典目录本身就是权威（SSOT），再加一份清单只是多一处要对齐的地方。注入时把字典目录的绝对路径写死进代码，运行时扫它取最大版本号当「已支持版本上限」
+      **注入点定位**：`setFeedURL` 在 main.js 里只出现 **1 次**，就在 `async checkForUpdates(e){try{r.autoUpdater.setFeedURL({url:await me(e)}),r.autoUpdater.checkForUpdates()}catch(e){return e}}` 里；IPC 契约是 `ae("check-for-updates",async(e,t)=>qt?.checkForUpdates(t))` 与 `se("quit-and-install-updates",()=>qt?.quitAndInstallUpdate())`。**方法名 `checkForUpdates` 未被压缩**（它是被 IPC 调用的类方法），可作稳定锚点
+- [x] `patch.js` 补丁组记账：记录当前应用了哪几组（汉化 / 更新管控），还原按组执行，备份始终是官方原文那一份
+      ——记账落在 `<数据目录>/tmp/patch-state.json`（`common.js` 的 `PATCH_GROUPS` / `setPatchGroups` / `getPatchGroups`），记的是**全集**不是增量。`patch` 写账时**并入已有**而不是覆盖（不带 `--update-control` 再跑一次，不该把上次打的更新管控从账上抹掉）；整份 `restore` 则**销账**（回到官方原文，账上不该留着任何组）。按组还原走 `restore --group <组名>`：**从官方原文备份重放剩下的组**，而不是逐组撤销——产物是若干补丁叠加的结果，逆运算既难写又易错（注入块要精确摘除、文案替换要逐条逆推），重放的结果与「一开始就只打这几组」逐字节相同。**备份因此始终只有一份（官方原文）**。`patch.run` 为此加了 `noRestart`，避免「还原→重启→重放→再重启」两次拉起应用
+- [x] 注入实现「禁止自动更新」：替换 `setFeedURL + checkForUpdates` 调用对为空操作，IPC 契约不变
+      ——落为 `scripts/update-control.js` 的 `mode: 'off'`：`__gdzcAllowUpdate` 恒返回 false，`checkForUpdates` 一进门就 `return`，`setFeedURL` / `autoUpdater.checkForUpdates()` 都不会被调到。**没有整段替换方法体**，而是在方法体开头插一道闸（`async checkForUpdates(e){if(!globalThis.__gdzcAllowUpdate())return;try{…}`）——整段替换要精确匹配方法体结尾，插闸只要锚点唯一即可。**IPC 契约不变**：`check-for-updates` / `quit-and-install-updates` 两个事件名与处理器签名原样保留，renderer 侧无感。入口是 `patch --block-update`
+- [x] 注入实现「没有字典就拦截」：放行前比对当前版本与已支持版本上限
+      ——`mode: 'guard'`（`patch --update-control`）。**已支持版本上限 = 字典目录里带 `zh-CN.json` 的最大版本号**，运行时扫出来（不引入外部清单，字典目录本身就是权威）。**放行条件是「上限 > 当前版本」**：说明新版本的字典已经就位、更新过去还能是中文；相等或更低时拦截，因为工具还没跟上，更新过去就只剩英文界面。**判断不了就放行**——字典目录读不到（被移走 / 权限不足）时返回 true，宁可让用户更新，也不要因为工具自己的问题把人锁死在旧版本上。注入块用首尾标记 `/*__GDZC_UPDATE_CONTROL_BEGIN__*/` … `END` 包住，重复注入是幂等的
 - [ ] 注入实现「更新后自动汉化」：放行后由工具在新版本目录落地时补打补丁
 - [ ] `cli.js` / GUI 增加「禁止自动更新」与「恢复自动更新」两个开关
 - [ ] 实测：开启后 GitHub Desktop 不再触发更新检查（开关状态 + 产物字节差异双重取证）；还原后回到官方行为
