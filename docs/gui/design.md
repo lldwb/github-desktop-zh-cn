@@ -205,4 +205,4 @@ Electron 里 `process.execPath` 是**应用可执行文件**（改名后的 exe�
 | Electron 二进制 / electron-builder 构建工具下载失败（国内网络，且构建工具自身**不走系统代理**） | 镜像**固化在文件里**（`.npmrc` 的 `electron_mirror` / `electron_builder_binaries_mirror`，加 `electron-builder.yml` 的 `electronDownload.mirror`——后者不可省，electron-builder 取 Electron 走 `resolveAssetURL`、**不读** `ELECTRON_MIRROR`），无需手动设环境变量；CI 在境外，workflow 删掉 `.npmrc` 并把下载地址覆盖回官方源 |
 | 实测汉化会改动本机 GitHub Desktop | 汉化前备份（现有逻辑，写 `tmp/backup/<版本>/`），实测后按需 `restore`；实测前向用户确认 |
 | 渲染进程误加编辑能力导致字典被改坏 | 表格 `readonly` + 无写盘 IPC 通道；字典写盘通道在 GUI 中**不存在**（`writeDict` 仅由 `dict-sync` 调用） |
-| 窗口在 macOS / Linux 未验证 | 打包脚本按当前平台工作（复制对应平台 Electron 运行时，与 `build.js` 的「不能交叉构建」一致）；CI 的 `gui` job 会出三平台产物并做静态结构自检，但**窗口行为、数据根与播种链路仍待对应平台实机实测**（runner 没有桌面会话） |
+| 窗口在 macOS / Linux 未验证 | 打包脚本按当前平台工作（复制对应平台 Electron 运行时，与 `build.js` 的「不能交叉构建」一致）；CI 的 `gui` job 出四平台产物，每平台跑静态结构自检 + **产物启动冒烟**（`--smoke-test` 真起一次窗口，核对窗口尺寸 / 界面按钮数 / 真实 IPC 往返，四平台均已通过；runner 都没有 GPU，这一轮同时验证了删掉软渲染组件后的**软件回退路径**）。**数据根与播种链路**仍待对应平台实机实测——冒烟只证「起得来」，不证「写得进」 |
