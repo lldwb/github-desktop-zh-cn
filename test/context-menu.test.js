@@ -226,5 +226,11 @@ test('注入块里除标签外的字面量，不与任何版本字典的键相�
 
 function dictVersions() {
   const root = path.join(__dirname, '..', 'dictionaries');
-  return fs.readdirSync(root).filter((v) => fs.existsSync(path.join(root, v, 'zh-CN.json')));
+  // 只认版本号形态的目录。dict-edit 的临时夹具（0.0.0-test）与真版本同住 dictionaries/，
+  // 而 node --test 是**并行**跑各测试文件的：夹具存在的那几百毫秒里会被这里读到，它加载得到、
+  // 只是没有菜单标签，撞上就红（CI 上 ubuntu / macos-15-intel 正是这么挂的，本机复现见
+  // tmp/repro-race.cjs）。夹具名不是版本号形态，按形态过滤即可，不必与那个文件互相知道。
+  return fs
+    .readdirSync(root)
+    .filter((v) => /^\d+\.\d+\.\d+$/.test(v) && fs.existsSync(path.join(root, v, 'zh-CN.json')));
 }
