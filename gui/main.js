@@ -18,6 +18,95 @@ const PKG = require('../package.json');
 
 const APP_TITLE = 'GitHub Desktop - 汉化工具';
 
+// —— 冒烟自检（--smoke-test）：产物「到底能不能起来」的机器判据，CI 与本地共用同一条命令。
+// 窗口与界面就绪后，在渲染进程里走一遍**真实的 IPC 往返**（window.api.state()，即 preload →
+// ipcMain → scripts 的完整链路）并核对界面骨架，结果打成一行 SMOKE_OK 输出后 exit 0；任一步
+// 失败或超时打 SMOKE_FAIL 并 exit 1。判据刻意不含「字典表格有多少行」——CI 上没有 GitHub
+// Desktop，行数必为 0，那是环境差异不是产物缺陷（行数照打，供本地对照）。
+// CI 的四个 runner 都没有 GPU，正好打在「删掉软渲染组件后还有没有回退路径」这条风险链上，
+// 所以输出里带上 GPU 合成 / WebGL / Vulkan 状态，供裁剪前后对照（见 .github/workflows/build.yml
+// 的冒烟步骤与 build/after-pack.js 的裁剪清单）。
+const SMOKE = process.argv.includes('--smoke-test');
+const SMOKE_TIMEOUT_MS = 30000;
+
+// 直写 fd 1：stdout 走管道时是异步的，console.log 之后紧接 app.exit() 会把输出丢掉
+function smokeOut(line) {
+  try {
+    fs.writeSync(1, `${line}\n`);
+  } catch {
+    /* 没有 stdout 时（双击启动）忽略 */
+  }
+}
+
+// 失败路径要能在 app ready 之前调用——单实例锁那段就在 ready 之前（见文件末尾）
+function smokeFail(reason) {
+  smokeOut(`SMOKE_FAIL platform=${process.platform} reason=${reason}`);
+  if (app.isReady()) app.exit(1);
+  else process.exit(1);
+}
+
+async function runSmokeTest(win) {
+  const timer = setTimeout(() => smokeFail(`超时 ${SMOKE_TIMEOUT_MS} ms`), SMOKE_TIMEOUT_MS);
+  try {
+    // 页面可能已经 load 完（isLoading 为假），那时再挂 once 会永远等不到
+    if (win.webContents.isLoading()) {
+      await new Promise((resolve, reject) => {
+        win.webContents.once('did-finish-load', resolve);
+        win.webContents.once('did-fail-load', (_e, code, desc) =>
+          reject(new Error(`页面加载失败 ${code} ${desc}`))
+        );
+      });
+    }
+
+    // 界面初始化是异步的（渲染脚本启动时先取一次状态）：轮询到状态栏有字再取样
+    const r = await win.webContents.executeJavaScript(`(async () => {
+      const deadline = Date.now() + 15000;
+      const hasApi = () => window.api && typeof window.api.state === 'function';
+      const bar = () => document.querySelector('#statusbar');
+      while (Date.now() < deadline) {
+        if (hasApi() && bar() && bar().textContent.trim()) break;
+        await new Promise((res) => setTimeout(res, 200));
+      }
+      if (!hasApi()) return { error: 'preload 未生效（window.api 缺失）' };
+      if (!bar() || !bar().textContent.trim()) return { error: '状态栏 15 秒内没有内容' };
+      let state;
+      try {
+        state = await window.api.state();
+      } catch (e) {
+        return { error: 'IPC 调用失败：' + e.message };
+      }
+      if (!state || typeof state !== 'object') return { error: 'IPC 返回值不是对象' };
+      if (typeof state.dataRoot !== 'string' || !state.dataRoot) return { error: 'IPC 未返回 dataRoot' };
+      return {
+        buttons: document.querySelectorAll('button').length,
+        rows: document.querySelectorAll('#dict-body tr').length,
+        status: bar().textContent.trim().replace(/\\s+/g, ' ').slice(0, 60),
+        toolVersion: state.toolVersion,
+        dataRoot: state.dataRoot,
+      };
+    })()`);
+
+    if (r.error) throw new Error(r.error);
+
+    const [w, h] = win.getContentSize();
+    if (w < 900 || h < 600) throw new Error(`窗口内容区异常 ${w}x${h}`);
+    if (r.buttons !== 6) throw new Error(`按钮数 ${r.buttons}（期望 6）`);
+
+    const gpu = app.getGPUFeatureStatus() || {};
+    smokeOut(
+      `SMOKE_OK platform=${process.platform} arch=${process.arch} window=${w}x${h} buttons=${r.buttons}` +
+        ` rows=${r.rows} ipc=true toolVersion=${r.toolVersion}` +
+        ` gpu_compositing=${gpu.gpu_compositing || '?'} webgl=${gpu.webgl || '?'} vulkan=${gpu.vulkan || '?'}` +
+        ` dataRoot="${r.dataRoot}" status="${r.status}"`
+    );
+    clearTimeout(timer);
+    app.exit(0);
+  } catch (e) {
+    clearTimeout(timer);
+    smokeFail(e.message);
+  }
+}
+
 let mainWindow = null;
 
 // —— 目标定位（与 cli.js 的 resolveTarget 同源：手动指定的路径优先，否则自动探测）
@@ -448,7 +537,10 @@ function createWindow() {
 
 // 单实例：面板是「一个窗口控制一个目标」，多开只会让状态互相打架
 if (!app.requestSingleInstanceLock()) {
-  app.quit();
+  // 冒烟自检必须把这条区分出来：已有实例时新进程会静默 exit 0，那是「没拿到锁」而不是「起来了」，
+  // 不区分的话 CI 上留着残留进程就会把冒烟判成通过（实测踩过：连续起多个实例全 exit 0）。
+  if (SMOKE) smokeFail('未拿到单实例锁（本机已有实例在跑）');
+  else app.quit();
 } else {
   app.on('second-instance', () => {
     if (!mainWindow) return;
@@ -463,6 +555,11 @@ if (!app.requestSingleInstanceLock()) {
     seedBundledDicts();      // 必须在 registerIpc 之前：状态与字典表格读的就是数据根里的字典
     registerIpc();
     createWindow();
+    if (SMOKE) {
+      // 冒烟自检：测完自己 exit，不挂后台检查（那条 4 秒后才发请求，纯属浪费）
+      runSmokeTest(mainWindow);
+      return;
+    }
     scheduleToolUpdateCheck(); // 延迟检查工具版本：不阻塞界面，无新版不打扰
     app.on('activate', () => {
       if (BrowserWindow.getAllWindows().length === 0) createWindow();

@@ -121,8 +121,8 @@ jobs:
           if-no-files-found: error
 
   # GUI 产物：Electron 打包，每平台一套（Windows 安装包 + zip / macOS dmg + zip / Linux AppImage + deb）。
-  # 运行态实测在本地做（runner 无桌面会话，起不了窗口），这里只做静态自检——结构对了才上传，
-  # 免得「构建成功但产物缺东西」混进 Release。
+  # 每平台构建后跑两道验证——静态自检（结构 / 语言包裁剪 / 体积）与产物启动冒烟（真的起一次窗口），
+  # 都过了才上传，免得「构建成功但产物缺东西或起不来」混进 Release。
   gui:
     name: 构建 GUI（${{ matrix.os }}）
     needs: check-version
@@ -154,6 +154,43 @@ jobs:
         run: npm run dist -- --config.electronDownload.mirror=https://github.com/electron/electron/releases/download/
       - name: 产物自检
         run: node build/check-gui-dist.js
+      # 产物启动冒烟：真的把产物起一次，确认窗口与界面能加载——静态自检看不出「删掉的组件是不是
+      # 启动必需的」。判据与输出见 gui/main.js 的 --smoke-test（窗口尺寸 / 按钮数 / IPC 往返），
+      # 失败或 30 秒超时都会打印 SMOKE_FAIL 并以非 0 退出。**四个 runner 都没有 GPU**，正好打在
+      # 「软渲染组件删掉后还有没有回退路径」这条风险链上（裁剪清单见 build/after-pack.js）。
+      - name: 产物启动冒烟
+        if: runner.os == 'Windows'
+        shell: pwsh
+        timeout-minutes: 5
+        run: |
+          # GUI 子系统程序的 stdout 用 & 调不出来（PowerShell 既不等待也不捕获），必须 Start-Process 重定向
+          $out = "$env:RUNNER_TEMP\smoke.txt"
+          $p = Start-Process -FilePath "dist\gui\win-unpacked\GitHubDesktopZhTool.exe" `
+               -ArgumentList '--smoke-test' -PassThru -Wait `
+               -RedirectStandardOutput $out -RedirectStandardError "$out.err"
+          Get-Content $out -ErrorAction SilentlyContinue
+          Get-Content "$out.err" -ErrorAction SilentlyContinue
+          if ($p.ExitCode -ne 0) { Write-Error "产物启动冒烟失败（退出码 $($p.ExitCode)）"; exit 1 }
+      - name: 产物启动冒烟
+        if: runner.os == 'macOS'
+        shell: bash
+        timeout-minutes: 5
+        run: |
+          # 直接执行 .app 里的可执行文件，不走 open（绕开 LaunchServices，输出与退出码都是自己的）；
+          # runner 有 WindowServer 用户会话，能真的开窗
+          APP=$(find dist/gui -maxdepth 2 -name '*.app' -print -quit)
+          [ -n "$APP" ] || { echo "没找到 .app"; exit 1; }
+          echo "启动：$APP"
+          "$APP/Contents/MacOS/GitHubDesktopZhTool" --smoke-test
+      - name: 产物启动冒烟
+        if: runner.os == 'Linux'
+        shell: bash
+        timeout-minutes: 5
+        run: |
+          # runner 没有显示：xvfb 提供虚拟 X；容器里 Chromium 沙箱开不起来、/dev/shm 也偏小，两个开关都关掉
+          EXE=dist/gui/linux-unpacked/GitHubDesktopZhTool
+          [ -x "$EXE" ] || { echo "找不到可执行文件"; ls -l dist/gui/linux-unpacked | head -20; exit 1; }
+          xvfb-run -a "$EXE" --no-sandbox --disable-dev-shm-usage --smoke-test
       - name: 上传产物
         uses: actions/upload-artifact@v7
         with:
