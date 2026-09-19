@@ -16,6 +16,16 @@
 #      `gh release create` 创建，不走 electron-builder，所以这里显式关掉，见 AGENTS.md「已知坑」。
 
 appId: com.lldwb.github-desktop-zh-cn
+
+# 运行时裁剪（win-unpacked 368 → 292 MB，NSIS 安装包 107 → 91 MB）。
+#   electronLanguages：Electron 二进制里约 50 MB 是 55 个 Chromium 语言包，缺语言包时回退
+#     en-US，而本应用的界面是自绘 HTML——只保留中英两个，省约 48 MB（三平台通用）。
+#   afterPack：打包后删掉用不到的运行时组件（软渲染 / WebGPU 编译器），清单与实测见 build/after-pack.js。
+# 体积构成与「zip 为何压不到 100 MB」见 docs/打包与分发.md「常见问题」。
+electronLanguages:
+  - en-US
+  - zh-CN
+afterPack: build/after-pack.js
 productName: GitHub Desktop 汉化工具
 executableName: GitHubDesktopZhTool
 copyright: GPL-3.0

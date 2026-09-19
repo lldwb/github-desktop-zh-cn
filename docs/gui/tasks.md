@@ -123,3 +123,14 @@
 
 - 一次误判记录：首次点「汉化」时目标**已经是汉化态**，只命中 **2** 处，且探针在状态刷新前读到旧快照（显示「未汉化 · 无备份」）。等界面刷新后重读为「已汉化 · 有备份」，与磁盘一致——**是探针时序，不是产物缺陷**；`tmp/read-status.cjs` 即为此写的对照探针（同时读 DOM 状态栏与 `window.api.state()`）。
 - 收尾：`taskkill` 关闭产物进程、删除 `tmp/gui-test/`，安装目录回到 `95dddacf7716 / 48788ecc8e22`。
+
+## 十、产物体积裁剪（v0.3.0 之后）
+
+目标：把 GUI 产物压进 Gitee 附件的单文件上限（100 MB）——Gitee 侧只发正文，附件上不去就少一个下载入口。**「压缩包 + 在线下载补齐内容」这个方向不成立**：应用自有内容合计 776 KB（app.asar 300 KB + 字典 476 KB），产物体积 100% 是 Electron 运行时，能拆的都是小件、大件（Chromium 内核、ICU 数据、渲染库）拆了应用起不来；唯一能让 zip 也进 100 MB 的是「引导器 + 首次运行下载」形态，跨平台各写一套、用户下载总量反而更大，评估后否决。
+
+- [x] **基线实测**（Windows x64 / Electron 44.4.1）：win-unpacked **368 MB**、zip **147 MB**、NSIS 安装包 **107 MB**。运行时大头：electron.exe 235 MB、locales 49 MB（55 个语言包）、dxcompiler.dll 25 MB、LICENSES.chromium.html 20 MB。
+- [x] **两项裁剪**：① `electronLanguages: [en-US, zh-CN]`（官方配置，三平台通用）——语言包 49 → 1.2 MB，界面是自绘 HTML，缺语言包时 Chromium 回退 en-US；② `afterPack` 钩子 `build/after-pack.js` 删 `vk_swiftshader.dll` / `vk_swiftshader_icd.json` / `dxcompiler.dll`（Vulkan 软渲染与 WebGPU 编译器，约 31 MB 未压缩）——清单是**逐项实测后收敛**出来的，更激进的大件（dxil.dll / ffmpeg.dll / LICENSES.chromium.html）收益递减且带兼容与合规风险，不做。
+- [x] **裁剪后实测**：win-unpacked **292 MB**、NSIS **90.7 MB ✓**（进 100 MB）、zip **123.6 MB ✗**。zip 受 deflate 硬限制——主程序 electron.exe 单文件压缩后仍占 zip 的 83%，压不到 100 MB（NSIS 用 LZMA，压缩率更高，同内容多压出 32 MB）。
+- [x] **裁剪态启动验证**（win-unpacked 解压目录）：窗口正常创建（标题「GitHub Desktop 汉化工具」）、进程稳定运行 30 分钟以上、无错误日志（仅无害的 WSALookupServiceBegin 警告）。**两个排查陷阱记下来**：连续 spawn 多个实例全部 exit 0 **不是**启动失败——是单实例锁（`gui/main.js` 的 `requestSingleInstanceLock`）把后来者正常劝退，验证前先杀光残留进程；中文 Windows 的 `tasklist` 输出是 GBK，按 utf16le 解码会把活着的进程判成「已退出」。
+- [x] **自检增强**：`build/check-gui-dist.js` 增加语言包裁剪核验与产物体积报告（超 100 MB 打 `::warning::`）——四平台体积直接看 CI 日志，不必下载附件。
+- [ ] **四平台 CI 实测**：macOS / Linux 的裁剪效果与产物体积待 `workflow_dispatch` 跑一次看；Windows 之外平台的运行时组件删除（`libvk_swiftshader.so` 等）待各自实测数据再定。用户决策：zip 接受 123.6 MB、macOS / Linux 本轮只上 locales 裁剪。

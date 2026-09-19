@@ -1,7 +1,8 @@
 // build/check-gui-dist.js — GUI 产物自检（零依赖，CI 与本地共用）
 //
 // 只做**静态**检查：产物文件在不在、应用包结构对不对、内置字典进没进包、
-// Windows 产物是不是 GUI 子系统（双击不弹控制台）。界面能不能起、汉化能不能成
+// Windows 产物是不是 GUI 子系统（双击不弹控制台）、体积裁剪有没有生效、
+// 各产物多少 MB（日志里直接看得到，不必下载附件）。界面能不能起、汉化能不能成
 // 属于运行态，得在带桌面的机器上实测——CI runner 没有桌面会话，起不了窗口。
 //
 // 用法：npm run dist 之后 `node build/check-gui-dist.js`（按当前平台检查对应产物）
@@ -12,6 +13,8 @@ const path = require('path');
 
 const OUT = path.join(__dirname, '..', 'dist', 'gui');
 const PE_SIGNATURE = Buffer.from('PE');
+// 与 electron-builder.yml 的 electronLanguages 一致：只保留这两个语言包（裁剪理由见该文件注释）
+const KEEP_LOCALES = ['en-US', 'zh-CN'];
 const results = [];
 const ok = (msg) => results.push([true, msg]);
 const bad = (msg) => results.push([false, msg]);
@@ -52,6 +55,21 @@ function checkResources(resourcesDir, label) {
   else bad(`${label}：resources/dictionaries 下没有可用的 zh-CN.json`);
 
   return exists(asar) ? asar : null;
+}
+
+// 语言包裁剪核验（electron-builder.yml 的 electronLanguages）：Electron 自带 55 个语言包
+// 共约 50 MB，本应用界面是自绘 HTML，只需中英两个（缺语言包时 Chromium 回退 en-US）。
+// Windows / Linux 的布局是 locales/<语言>.pak；macOS 是 Contents/Resources/<语言>.lproj，
+// 条目名与数量口径都不同，那边只报告数量、不判定（见 checkMac）。
+function checkLocales(dir, label) {
+  const paks = listDir(dir).filter((f) => f.endsWith('.pak'));
+  if (!paks.length) {
+    bad(`${label}：找不到 locales 目录或里面没有 .pak（${dir}）`);
+    return;
+  }
+  const extra = paks.filter((f) => !KEEP_LOCALES.includes(f.replace(/\.pak$/, '')));
+  if (extra.length) bad(`${label}：语言包没裁干净，多出 ${extra.length} 个（${extra.slice(0, 5).join(' / ')}…）`);
+  else ok(`${label}：语言包已裁剪到 ${paks.join(' / ')}`);
 }
 
 // asar 头解析：8 字节 pickle 头之后是一段 pickle 包裹的 JSON 目录树。
@@ -139,6 +157,7 @@ function checkWindows() {
   }
   const asar = checkResources(path.join(unpacked, 'resources'), 'win-unpacked');
   if (asar) checkAsarContents(asar);
+  checkLocales(path.join(unpacked, 'locales'), 'win-unpacked');
 }
 
 function checkMac() {
@@ -156,6 +175,10 @@ function checkMac() {
     else bad(`${label}：缺 Contents/MacOS 下的主可执行文件`);
     const asar = checkResources(path.join(app, 'Contents/Resources'), label);
     if (asar) checkAsarContents(asar);
+    // macOS 的语言包是 .lproj 目录，名字与 electronLanguages 的写法（en-US）不同一套，
+    // 只把实际留下来的列出来供核对；数量判定留给拿到 mac 实测数据之后再收紧。
+    const lproj = listDir(path.join(app, 'Contents/Resources')).filter((f) => f.endsWith('.lproj'));
+    ok(`${label}：语言目录（.lproj）${lproj.length} 个${lproj.length ? `：${lproj.join(' / ')}` : ''}`);
   }
 }
 
@@ -165,10 +188,15 @@ function checkLinux() {
   else ok('linux-unpacked 里有主可执行文件');
   const asar = checkResources(path.join(unpacked, 'resources'), 'linux-unpacked');
   if (asar) checkAsarContents(asar);
+  checkLocales(path.join(unpacked, 'locales'), 'linux-unpacked');
 }
 
 // 产物文件：任何平台都至少要有一个能直接分发的（不能只有中间目录），且名字必须走 gui 通道命名
-//（<项目名>-gui-v<版本>-<平台>-<架构>…，规范见 AGENTS.md「发版」一节）
+//（<项目名>-gui-v<版本>-<平台>-<架构>…，规范见 AGENTS.md「发版」一节）。
+// 顺带把每个产物的体积打进日志——「跑一次 CI 看四平台体积」靠的就是这里，不必下载附件；
+// 超 100 MB 只告警不判失败（CI 上打成 ::warning:: 注解，本地是一行提示）：Gitee 附件单文件
+// 上限 100 MB（见 AGENTS.md「发版」），但 zip 免安装包受 deflate 限制本就压不进 100 MB（见
+// docs/打包与分发.md）。
 function checkArtifacts() {
   const files = listDir(OUT).filter((f) => /\.(exe|zip|dmg|AppImage|deb)$/.test(f));
   if (!files.length) {
@@ -176,6 +204,15 @@ function checkArtifacts() {
     return;
   }
   ok(`可分发产物 ${files.length} 个：${files.join(' / ')}`);
+  for (const f of files) {
+    const mb = fs.statSync(path.join(OUT, f)).size / (1024 * 1024);
+    const line = `${f}：${mb.toFixed(1)} MB`;
+    if (mb > 100) {
+      console.log(process.env.CI ? `::warning::${line}（超过 Gitee 附件单文件上限 100 MB）` : `  !  ${line}（超过 Gitee 附件单文件上限 100 MB）`);
+    } else {
+      console.log(`  ·  ${line}`);
+    }
+  }
   const offName = files.filter((f) => !/^github-desktop-zh-cn-gui-v\d+\.\d+\.\d+-/.test(f));
   if (offName.length) bad(`产物名不符合命名规范（应为 github-desktop-zh-cn-gui-v<版本>-…）：${offName.join(' / ')}`);
   else ok('产物名符合 gui 通道命名规范');

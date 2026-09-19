@@ -71,7 +71,7 @@ github-desktop-zh-cn/
 - **官网下载（推荐）**：<https://desktop.github.com> —— 页面会自动识别你的系统，点对应按钮下载 Windows / macOS / Linux 版；
 - 装好后记下**版本号**（应用内 `Help` → `About GitHub Desktop`，或本工具菜单的 `3) 详细信息`）——汉化字典与版本**强对应**，错配可能导致应用无法启动。
 
-本工具自身的下载：优先 **GitHub Releases**（<https://github.com/lldwb/github-desktop-zh-cn/releases>），国内访问不畅时用 **Gitee 镜像**（<https://gitee.com/lldwb/github-desktop-zh-cn/releases>）——两边由 CI 自动同步、附件一致。工具内的「检查更新」也是**先问 GitHub、取不到再退回 Gitee**。
+本工具自身的下载：优先 **GitHub Releases**（<https://github.com/lldwb/github-desktop-zh-cn/releases>），国内访问不畅时用 **Gitee 镜像**（<https://gitee.com/lldwb/github-desktop-zh-cn/releases>）——发行版正文两边由 CI 自动同步，但**产物附件只在 GitHub**（Gitee 附件有单文件 100 MB、单仓库合计 1 GB 的限制，装不下这些安装包），Gitee 页面里的下载指引会带你回 GitHub。工具内的「检查更新」也是**先问 GitHub、取不到再退回 Gitee**（Gitee 兜底只够告知版本号，下载仍须走 GitHub）。
 
 ## 使用方式
 
