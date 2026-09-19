@@ -1,5 +1,35 @@
 # Changelog
 
+## [0.4.0] - 2026-09-20
+
+> 把界面最后一处常年英文的地方——**文本框的右键菜单**——也汉化了：那批标签由 Electron 按 `role` 在运行时生成，字典的字面量匹配够不着，于是往产物里**注入**一段代码先把英文原文造进产物，再由**同一次字典替换**译掉。GUI 产物这边接着瘦身（运行时裁剪 + 压缩拉满 + 免安装包改 7z + mac 只发 dmg），**六个产物里五个已进 Gitee 的 100 MB 附件上限**，并给产物加了启动冒烟护栏；自动更新挑错产物（挑中 zip / 7z 这类非可执行文件）的毛病修掉。
+
+### 新增
+
+- **右键菜单汉化**（`scripts/context-menu.js`，属 `i18n` 组）：文本框（分支筛选、提交摘要那些输入框）右键弹出的 `Undo / Redo / Cut / Copy / Paste / Delete / Select All` 一直是英文。**不是字典漏收，是字典机制够不着**——`build-context-menu.ts` 的 `getEditMenuItems()` 用 `Menu.buildFromTemplate([{ role: 'editMenu' }])` 取展开项，标签由 Electron 在运行时按 role 硬编码生成，官方 `main.js` 里 `Delete` 这个字面量 **0 处**（`scan` 也扫不出来）。做法是注入一段包装 `Menu.buildFromTemplate` 的代码（锚点与 `update-control.js` 同一处，落在产物 IIFE **之外**）：模板里出现 `role: 'editMenu'` 就把展开项 label 按 role 重打成英文原文，再由 `patch` 的**同一次字典替换**译成中文——注入块**只带英文、不带中文**，翻译资产仍只有字典那唯一一份。标签取 `build-default-menu.ts` 菜单栏「编辑」子菜单那一批（非 darwin 带 `&` 助记符、darwin 不带），字典没覆盖的保持英文原样；`patch` 把这类命中单独计数（`其中右键菜单标签 N 处`），`verify` 报注入块与字典覆盖状态。10 条单测，含「`vm` 里用假 Electron 真跑注入块展开菜单」与「块内除标签外的字面量不与任何版本字典的键相撞」。
+- **产物启动冒烟护栏**（`gui/main.js` 的 `--smoke-test`，CI 四平台各跑一次）：静态自检看不出「删掉的运行时组件是不是启动必需」，于是让产物自己起一次——核对窗口内容区尺寸、界面按钮数与一次**真实 IPC 往返**，打印 `SMOKE_OK` 且退出码 0 才算过，冒烟不过就不上传产物。**四个 runner 都没有 GPU**，这轮冒烟同时是「软渲染组件删掉后还有没有回退路径」的验证（输出里带 GPU 合成 / WebGL / Vulkan 状态，裁剪前后可直接对照）。不带这个开关时行为与从前完全一致。
+
+### 变更
+
+- **GUI 产物体积：运行时裁剪 + 压缩拉满 + 换打包形态**（`electron-builder.yml` + `build/after-pack.js`）：三平台各删各的软渲染与 WebGPU 编译器（Windows 的 `vk_swiftshader.dll` / `dxcompiler.dll`、macOS 的 `libvk_swiftshader.dylib`、Linux 的 `libvk_swiftshader.so`），语言包只留中英两个；`compression` 显式拉满（不设时 AppImage 落在 mksquashfs 的默认 gzip、比同内容的 deb 胖 24 MB，dmg 落在 UDZO/zlib 上）；Windows 免安装包由 zip 改 **7z**（zip 受 deflate 硬限制，同一份内容 7z 81.2 MB、zip 123.6 MB），macOS **只发 dmg、不再出 zip**（两者装的是同一份 `.app`，zip 那份纯属重复附件）。四平台实测（裁剪后）：Windows 7z **81.2 MB** / NSIS 安装包 **90.8 MB**、macOS dmg **95.9**（arm64）/ **102.5**（x64）MB、Linux AppImage **91.6 MB** / deb **91.1 MB**——**六个产物里五个已在 Gitee 附件上限内**，只剩 macOS x64 的 dmg 超 2.5 MB。逐项压测的结论是「**Electron 这条路已经到底**」：主程序一个文件占整包 83%、`resources.pak` 占 15% 且几乎压不动，两者合计 98%；两条反直觉的实测——`LICENSES.chromium.html` 未压缩 20.5 MB 但 xz 后只剩 0.19 MB（删了不合规、还省不下 0.2 MB），`d3dcompiler_47.dll` **删不得**（删掉后本机冒烟仍 `SMOKE_OK`，但 GPU 合成从 `enabled` 掉到 `disabled_software`、硬件加速失效，而这类退化 CI 测不出来）。再降一个量级只能换运行时基底（Tauri / Wails 那类系统 WebView 形态），留待下次重构评估。
+- **字典自动产出回填历史版本**：`dict-auto` 链路此前只在 3.6.5 / 3.6.6 上跑过，这次把 **3.6.0 / 3.6.4** 也各跑一遍（CI 定时任务与人肉回填共用同一条链路），四个版本齐了。
+- **Gitee 发版只发正文、不传附件**（`.github/workflows/build.yml`）：Gitee 的附件配额（单文件 100 MB、单仓库合计 1 GB）放不下这些产物，正文里那段指向 GitHub Release 的下载指引就是唯一的下载入口；缺 `GITEE_TOKEN` 打 `::warning::` 后跳过，不阻断发布。
+- **文档**：`AGENTS.md` 补分支命名规范（`<type>/<内容>-<修改者>-<MMDD>`）与 CI 首跑失败的教训、合并约定；`docs/打包与分发.md` 同步裁剪与冒烟的四平台实测数字与「还能再压吗」的结论；`dictionaries/README.md` 与 `.claude/skills/translation-maintain/` 补「产物里到底有没有这个字面量」这道零步检查与右键菜单一类的收录判据。
+
+### 修复
+
+- **自动更新会挑中 zip / 7z 这类非可执行产物**（`scripts/update.js`）：挑附件只看平台与架构词，于是发布页里同一套命名规则下的压缩包可能被选中，下载下来替换自身只会把工具弄坏。现在**按平台后缀收口**——Windows 只认 `.exe`、macOS / Linux 认 `.bin`（无后缀的老产物仍认，免得还留在旧版本上的使用者更新时找不到附件）；GUI 侧另有一套只认名字里带 `-gui-` 的，且 Windows 只认 `-setup.exe`、macOS 只认 `.dmg`、Linux 认 `.AppImage` / `.deb`（免安装包 7z 不是可执行文件，挑中它只会让更新失败；它仍随 Release 分发，手动解压即可）。
+- **AI 配置错在发请求前就拦下**（`scripts/dict-auto.js`）：配错 `AI_BASE_URL` 的失败形态是「未译 11/11 条（100%）超过上限 30%」整版被门槛拦下，结论离原因很远。现在发请求前按 URL 语法再校验一次，并拦下**看不见的字符**——不换行空格、零宽空格、串内空格（语法上过得去，只是请求会打到别的路径上 404，报错里给出码点）；失败原因随结论一并外露（注解 / step summary / 提交信息三处），脱敏 needle **补上主机名**（网络层报错只带 host，漏了它脱敏就落空）。
+- **CI 测试日志里的假 `::warning::`**（`test/dict-auto.test.js`）：单测里 `console.warn` 打出的行只要以 `::warning::` 开头，就会被 Actions 认成一条真注解收进日志，读日志的人以为 Secret 配错了。现在截获并断言，不直接打。
+
+### 说明
+
+- 本次新增脚本（`context-menu.js`）并调整 GUI 打包形态（压缩级别、7z、语言包裁剪），属工具链变更，故取**中版本** 0.4.0。
+- 注入块里的 **role 名不得写成字面量**：写成带引号的 JSON 键就落进字典的匹配范围，哪天字典收了 `copy` / `delete` 这样的键就会被译掉、查表静默落空。故把角色名整体塞进一个字符串再 `JSON.parse`，单测有断言钉住。
+- 四个版本的字典各加一条作用域键 `main.js|Delete`（3.6.6 总键 2153 → 2154）：官方 `main.js` 里 `Delete` 字面量 0 处，它只匹配注入块里的标签；`renderer.js` 那 9 处（键盘映射表）靠作用域隔离，不受影响。
+- 真机取证：干跑合计 **2406** 处（`main.js` 128，其中右键菜单标签 7 处 + `renderer.js` 2278）与实际 `patch` 命中完全一致；落地复查用**真实 Electron 44.4.1** 跑安装目录里已打补丁产物的注入块，展开项标签为 `["&撤销","&重做","","剪&切","&复制","&粘贴","删除","","全&选"]`，应用菜单栏自带 label 未被动。
+- `package.json` 版本号 0.3.0 → 0.4.0
+
 ## [0.3.0] - 2026-09-19
 
 > 让汉化跟得上 GitHub Desktop 的更新：给它装一道**更新管控**闸——字典没跟上就不放行，字典备好了还能**自动补打汉化**；字典本身改成**分段结构 + 唯一写入口**并接上**定时自动产出**，3.6.6 一次补译 292 条（1861 → 2153）；Gitee 镜像也能看到发行版了。
