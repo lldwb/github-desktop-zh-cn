@@ -16,6 +16,7 @@ const {
   locateApp,
   backupDir,
   backupExists,
+  isPatched,
   loadDict,
   reverseEntries,
   applyDictInStrings,
@@ -74,6 +75,15 @@ async function restoreGroups(app, version, removeGroups, log) {
   }
 
   const current = getPatchGroups(version);
+  // 账上没有记录、产物却已改动：多半是**记账功能上线前**打的补丁（老用户装的就是这种）。
+  // 这时按组还原会把没记上账的那组一起还原掉——用户只想撤更新管控，汉化却一并没了。
+  // 与其猜「他大概打过汉化」，不如让他先重打一次把账补上（patch 是幂等的）。
+  if (current.length === 0 && isPatched(app.appDir, version)) {
+    throw new Error(
+      `账上没有 ${version} 的补丁记录，产物却已不是官方原文——无法判断该保留哪几组。` +
+        `请先执行一次 patch（会补记账），或改用整份还原（不带 --group）。`
+    );
+  }
   const keep = current.filter((g) => !removeGroups.includes(g));
   const label = (gs) => (gs.length ? gs.map((g) => PATCH_GROUP_LABELS[g] || g).join('、') : '无');
   log(`补丁组：当前 ${label(current)}；撤 ${label(removeGroups)}；保留 ${label(keep)}`);
