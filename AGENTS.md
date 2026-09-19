@@ -151,6 +151,7 @@ node build/tools/check-naming.cjs              # pickAsset 只挑 cli 产物（�
 - 提交信息不带任何 `Co-Authored-By` 类署名。
 - 只做本地提交，不自动 push / merge / 建 PR；显式 `git add <文件>`，禁止 `-A` / `.`。
 - 仓库为开源仓库：文件内容不写绝对路径、机器名、凭据等敏感信息。
+- **分支命名规范**：新建的本地开发分支按 `<type>/<内容>-<修改者>-<MMDD>` 命名，如 `fix/dictionaries-lldwb-0919`——`type` 限定与提交类型一致的词表（feat / fix / chore / docs / refactor 等），`内容` 用小写连字符短语概括改动主题，`修改者` 用 git 用户名，`时间` 用两位月两位日（MMDD）。`main` 分支与 `backup/` 类历史 / 备份分支不受此约束。
 
 ## 发版
 
