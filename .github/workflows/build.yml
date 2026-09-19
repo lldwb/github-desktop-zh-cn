@@ -291,6 +291,13 @@ jobs:
 
       # 同步到 Gitee。放在 GitHub Release 发布**之后**：Gitee 是镜像渠道，它出问题不该
       # 影响权威源的成果（下面失败时只让 job 标红，已发布的 GitHub Release 原样保留）。
+      #
+      # **只建发行版 + 放正文，不传附件**：Gitee 的配额放不下这些产物——附件**单文件上限
+      # 100 MB**（13 个产物里 10 个是 106～146 MB，实测传 125 MB 的被拒：「文件大小已超出
+      # 限制：100 MB」），**单仓库附件总容量 1 GB**（产物合计 1.38 GB）；这两项在 SaaS 各档位
+      # 都一样（企业版单文件同样是 100 MB），只有私有化部署才提供定制配额。所以传附件这条路
+      # 不是「不稳」而是「不通」，不该留在发布链路上。正文里给出 GitHub Release 的地址——
+      # Gitee 侧没有产物，这段链接就是唯一的下载入口，少了它使用者只会看到一个空壳。
       - name: 发布到 Gitee
         env:
           GITEE_TOKEN: ${{ secrets.GITEE_TOKEN }}
@@ -310,56 +317,29 @@ jobs:
           rid="$(printf '%s' "$existing" | jq -r 'if type=="object" then (.id // empty) else empty end' 2>/dev/null || true)"
 
           if [ -n "$rid" ]; then
-            echo "Gitee 上已有 $TAG 的发行版（id=$rid），跳过创建、只补缺的附件"
-          else
-            payload="$(jq -n --arg t "$TAG" --rawfile b notes.md \
-              '{tag_name:$t, name:$t, body:$b, target_commitish:"main", prerelease:false}')"
-            resp="$(curl -sfS -m 60 -X POST "$API/releases" -H "$AUTH" \
-              -H "Content-Type: application/json" -d "$payload" 2>&1 || true)"
-            rid="$(printf '%s' "$resp" | jq -r '.id // empty' 2>/dev/null || true)"
-            if [ -z "$rid" ]; then
-              echo "::error::在 Gitee 创建 $TAG 的发行版失败：$(printf '%s' "$resp" | tr '\n' ' ' | tail -c 300)"
-              exit 1
-            fi
-            echo "已在 Gitee 创建发行版（id=$rid）"
+            # 与 GitHub 侧同一原则：已发布的发行版与它的正文都不再改动。
+            echo "Gitee 上已有 $TAG 的发行版（id=$rid），跳过"
+            echo "Gitee 发行版：https://gitee.com/$GITHUB_REPOSITORY/releases/tag/$TAG"
+            exit 0
           fi
 
-          # 幂等判据只能是文件名：Gitee 的资产对象实测只有 browser_download_url 与 name，
-          # 没有 sha256 / size 可比（GitHub 那边靠 digest）。代价是「上次传到一半的残缺附件」
-          # 会被当成已传——Gitee 没有可用的完整性凭据，只能接受这个上限。
-          have="$(curl -sfS -m 30 -H "$AUTH" "$API/releases/tags/$TAG" | jq -r '.assets[]?.name' 2>/dev/null || true)"
+          # 正文 = CHANGELOG 段落 + 下载指引
+          {
+            cat notes.md
+            printf '\n\n---\n\n**构建产物不在 Gitee 存放**，请到 GitHub Release 下载：\n\n'
+            printf 'https://github.com/%s/releases/tag/%s\n' "$GITHUB_REPOSITORY" "$TAG"
+          } > gitee-notes.md
 
-          failed=""
-          for f in dist/*; do
-            name="$(basename "$f")"
-            if printf '%s\n' "$have" | grep -Fxq "$name"; then
-              echo "Gitee 上已有同名附件，跳过：$name"
-              continue
-            fi
-            ok=""
-            for attempt in 1 2 3; do
-              if out="$(curl -sfS -m 1800 -X POST "$API/releases/$rid/attach_files" \
-                -H "$AUTH" -F "file=@$f" 2>&1)"; then
-                echo "已上传到 Gitee：$name（$(du -h "$f" | cut -f1)）"
-                ok=1
-                break
-              fi
-              detail="$(printf '%s' "$out" | tr '\n' ' ' | tr -d '\r' | tail -c 200)"
-              if [ "$attempt" -lt 3 ]; then
-                echo "附件 $name 第 $attempt 次上传到 Gitee 失败，15 秒后重试：$detail"
-                sleep 15
-              else
-                echo "附件 $name 第 $attempt 次上传到 Gitee 失败：$detail"
-              fi
-            done
-            if [ -z "$ok" ]; then
-              failed="$failed $name"
-              echo "::error::附件 $name 上传到 Gitee 失败：$(printf '%s' "$out" | tr '\n' ' ' | tr -d '\r' | tail -c 300)"
-            fi
-          done
-
-          if [ -n "$failed" ]; then
-            echo "::error::本次未能上传到 Gitee：$failed（重跑即可续传，已传成功的不会重来；GitHub Release 已发布，不受影响）"
+          # payload 走文件、**不走命令行参数**：Windows 版 curl 会把 argv 里的非 ASCII 转成
+          # 本地代码页（实测中文变 GBK 字节发出去，Gitee 上正文成乱码，而报错里看不出线索）；
+          # --data-binary @文件 不经过 argv，两个平台行为一致。
+          jq -n --arg t "$TAG" --rawfile b gitee-notes.md \
+            '{tag_name:$t, name:$t, body:$b, target_commitish:"main", prerelease:false}' > gitee-payload.json
+          resp="$(curl -sfS -m 60 -X POST "$API/releases" -H "$AUTH" \
+            -H "Content-Type: application/json" --data-binary @gitee-payload.json 2>&1 || true)"
+          rid="$(printf '%s' "$resp" | jq -r '.id // empty' 2>/dev/null || true)"
+          if [ -z "$rid" ]; then
+            echo "::error::在 Gitee 创建 $TAG 的发行版失败：$(printf '%s' "$resp" | tr '\n' ' ' | tail -c 300)"
             exit 1
           fi
-          echo "Gitee 同步完成：https://gitee.com/$GITHUB_REPOSITORY/releases/tag/$TAG"
+          echo "已在 Gitee 创建发行版（id=$rid）：https://gitee.com/$GITHUB_REPOSITORY/releases/tag/$TAG"
