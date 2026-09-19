@@ -32,6 +32,26 @@ function pickAsset(assets) {
   return hit.url ? hit : { ...hit, url: hit.browser_download_url };
 }
 
+// GUI 产物（Electron 安装包）的匹配规则。**与 pickAsset 分开**：那个服务 CLI 自更新
+//（下载单文件可执行体替换自身），这个服务 GUI（下载安装包交给用户去装）——两者的命名
+// 与扩展名都不一样，混在一个函数里只会让两边都判不准。
+// 命名见 AGENTS.md「产物命名」：github-desktop-zh-cn-gui-v<版本>-<平台>-<架构>[-setup].<扩展名>
+// 实测核对过：GUI 的 Windows 产物以 `-setup.exe` 结尾，pickAsset 的 `-win32-x64.exe`
+// 匹配不到；macOS / Linux 是 .dmg / .AppImage / .deb，更是完全在它的扩展名表之外。
+function pickGuiAsset(assets) {
+  const suffix = `-${process.platform}-${process.arch}`;
+  const exts =
+    { win32: ['.exe'], darwin: ['.dmg', '.zip'], linux: ['.AppImage', '.deb'] }[process.platform] || ['.zip'];
+  const hit =
+    assets.find((a) => {
+      const name = String(a.name);
+      if (!name.includes('-gui-')) return false; // 只认 gui 那一套，别把 cli 产物当安装包
+      return exts.some((e) => name.endsWith(suffix + e) || name.endsWith(`${suffix}-setup${e}`));
+    }) || null;
+  if (!hit) return null;
+  return hit.url ? hit : { ...hit, url: hit.browser_download_url };
+}
+
 async function check() {
   // 优先 GitHub；取不到时退回 Gitee 镜像。Gitee 的镜像只同步 commit / 分支 / tag，
   // **发行版要 CI 补发**（build.yml 的「发布到 Gitee」步骤），所以两边都得问一次。
@@ -52,6 +72,7 @@ async function check() {
     latest,
     hasUpdate: common.compareVersions(latest, current) > 0,
     asset: pickAsset(release.assets || []),
+    guiAsset: pickGuiAsset(release.assets || []),
     // Gitee 的 release 对象没有 html_url 字段（实测字段：id / tag_name / name / body /
     // prerelease / author / created_at / assets），按 tag 拼一个出来
     releaseUrl: release.html_url || `https://gitee.com/${common.GH_OWNER}/${common.GH_REPO}/releases/tag/${release.tag_name}`,
@@ -126,4 +147,4 @@ function cleanup() {
   }
 }
 
-module.exports = { check, apply, cleanup, pickAsset };
+module.exports = { check, apply, cleanup, pickAsset, pickGuiAsset };

@@ -5,13 +5,15 @@
 
 const fs = require('fs');
 const path = require('path');
-const { app, BrowserWindow, ipcMain, dialog, Menu } = require('electron');
+const { spawn } = require('child_process');
+const { app, BrowserWindow, ipcMain, dialog, Menu, shell } = require('electron');
 
 const common = require('../scripts/common.js');
 const patch = require('../scripts/patch.js');
 const restore = require('../scripts/restore.js');
 const dictSync = require('../scripts/dict-sync.js');
 const update = require('../scripts/update.js');
+const net = require('../scripts/net.js');
 const PKG = require('../package.json');
 
 const APP_TITLE = 'GitHub Desktop - 汉化工具';
@@ -259,6 +261,22 @@ function registerIpc() {
     }
   });
 
+  // 工具自更新：GUI 产物是**安装包**，不能像 CLI 那样替换自身（见 installGuiUpdate 的注释）。
+  // 这个处理器给启动时那条自动提示用——用户点「下载并安装」时进来，不再重复问一遍。
+  handle('toolUpdateInstall', async () => {
+    const info = await update.check();
+    if (!info.hasUpdate) return { ok: false, error: `当前已是最新版本（v${info.current}）。` };
+    if (!info.guiAsset) {
+      return {
+        ok: false,
+        error: `发现新版本 v${info.latest}，但没有本平台（${process.platform}-${process.arch}）的安装包。`,
+        hint: `可到 ${info.releaseUrl} 手动下载。`,
+      };
+    }
+    const r = await installGuiUpdate(info);
+    return { ok: true, notes: r.notes };
+  });
+
   handle('pickPath', async () => {
     const r = await dialog.showOpenDialog(mainWindow, {
       title: '选择 GitHub Desktop 的 resources 目录',
@@ -310,21 +328,95 @@ function registerIpc() {
       }
     }
 
-    // 工具自更新在 GUI 态不适用：安装包形态的更新是「下载新安装包再安装」，
-    // 而 scripts/update.js 的 apply 是替换自身 exe 并重启（那是 SEA 单文件产物的方式）
+    // 工具自更新：GUI 产物是安装包，走「下载 + 启动安装向导」，不替换自身（见 installGuiUpdate）。
+    // 这里是**用户主动**点的检查更新，弹确认框不唐突；启动时那条自动检查只推提示、不打断。
     try {
       const info = await update.check();
-      notes.push(
-        info.hasUpdate
-          ? `发现新版本 v${info.latest}（当前 v${info.current}）：请到 ${info.releaseUrl} 下载安装包。`
-          : `本工具已是最新版本（v${info.current}）。`
-      );
+      if (!info.hasUpdate) {
+        notes.push(`本工具已是最新版本（v${info.current}）。`);
+      } else if (info.guiAsset) {
+        const choice = await dialog.showMessageBox(mainWindow, {
+          type: 'question',
+          buttons: ['下载并安装', '稍后', '打开下载页'],
+          defaultId: 0,
+          cancelId: 1,
+          noLink: true,
+          title: APP_TITLE,
+          message: `发现新版本 v${info.latest}（当前 v${info.current}）`,
+          detail: '将下载安装包并启动安装向导。装完后请重新打开本工具。',
+        });
+        if (choice.response === 0) {
+          const r = await installGuiUpdate(info);
+          notes.push(...r.notes);
+        } else if (choice.response === 2) {
+          shell.openExternal(info.releaseUrl);
+          notes.push(`已打开下载页：${info.releaseUrl}`);
+        } else {
+          notes.push(`发现新版本 v${info.latest}，已跳过。`);
+        }
+      } else {
+        notes.push(`发现新版本 v${info.latest}（当前 v${info.current}）：请到 ${info.releaseUrl} 下载安装包。`);
+      }
     } catch (e) {
       notes.push(`检查工具版本失败：${e.message}`);
       hasError = true;
     }
     return { ok: true, notes, hasError };
   });
+}
+
+// 下载并启动 GUI 安装包。抽出来是因为两处要用：用户主动点「检查更新」时问过之后装，
+// 以及启动时自动检查到新版、用户点提示里的「下载并安装」。
+// GUI 产物是**安装包**（不是 CLI 那种单文件可执行体），所以不能像 scripts/update.js 的
+// apply 那样替换自身——那是 SEA 产物的方式，在 Electron 打包态会直接抛错。
+async function installGuiUpdate(info) {
+  const dest = path.join(app.getPath('temp'), info.guiAsset.name);
+  notifyBusy('toolUpdate', `正在下载 v${info.latest} …`);
+  try {
+    await net.download(info.guiAsset.url, dest, {
+      onProgress: (got, total) => {
+        const pct = total ? `${Math.round((got / total) * 100)}%` : `${(got / 1048576).toFixed(0)} MB`;
+        notifyBusy('toolUpdate', `正在下载 v${info.latest} … ${pct}`);
+      },
+    });
+  } finally {
+    notifyBusy(null, null);
+  }
+
+  // macOS 的 .dmg 与 Linux 的 .deb 不能直接当可执行文件起，交给系统打开；
+  // Windows 的 -setup.exe 与 Linux 的 .AppImage 直接 spawn。
+  const direct = process.platform === 'win32' || dest.endsWith('.AppImage');
+  const cmd = direct ? dest : process.platform === 'darwin' ? 'open' : 'xdg-open';
+  const child = spawn(cmd, direct ? [] : [dest], { detached: true, stdio: 'ignore' });
+  // spawn 的失败是异步的（ENOENT 走 error 事件）：不接住会冒到进程级把 GUI 带崩
+  child.on('error', () => {});
+  child.unref();
+
+  return {
+    notes: [`已下载 v${info.latest} 的安装包并启动安装向导。`, '按向导装完后请重新打开本工具。'],
+  };
+}
+
+// 启动后延迟检查工具自身有无新版本。**不阻塞界面、无新版不打扰**：等几秒让界面稳定下来
+// 再看，有新版才推一条提示；检查失败静默——启动时的自动检查不该因为网络问题给用户报错，
+// 用户主动点「检查更新」时才把失败原因说出来。
+function scheduleToolUpdateCheck() {
+  setTimeout(async () => {
+    try {
+      const info = await update.check();
+      if (!info.hasUpdate) return;
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.send('toolUpdate', {
+          current: info.current,
+          latest: info.latest,
+          releaseUrl: info.releaseUrl,
+          canInstall: !!info.guiAsset,
+        });
+      }
+    } catch {
+      /* 静默：理由见上 */
+    }
+  }, 4000);
 }
 
 function createWindow() {
@@ -365,9 +457,13 @@ if (!app.requestSingleInstanceLock()) {
   });
 
   app.whenReady().then(() => {
+    // 上次自更新留下的 .old 在这里清掉——替换策略是「改名而不是删除」（Windows 不允许
+    // 删除正在运行的 exe），残留只能等新进程启动时清，见 AGENTS.md「在线能力」。
+    update.cleanup();
     seedBundledDicts();      // 必须在 registerIpc 之前：状态与字典表格读的就是数据根里的字典
     registerIpc();
     createWindow();
+    scheduleToolUpdateCheck(); // 延迟检查工具版本：不阻塞界面，无新版不打扰
     app.on('activate', () => {
       if (BrowserWindow.getAllWindows().length === 0) createWindow();
     });

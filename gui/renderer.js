@@ -229,4 +229,10 @@ els.search.addEventListener('input', () => {
 // 主进程推送的阶段文字（如「正在同步 3.6.6 字典 …」）；task 为 null 即回到空闲
 window.api.onBusy(({ task, phase }) => setPhase(task ? phase : null));
 
+// 启动后主进程自动检查到新版本时才推（无新版不推）：提示一句就够，不打断用户手上的事——
+// 想装的时候点「检查更新」，那边会弹确认框问要不要下载。
+window.api.onToolUpdate((info) => {
+  showToast(`发现新版本 v${info.latest}（当前 v${info.current}）——点「检查更新」可下载安装。`);
+});
+
 refresh().catch((e) => showToast(`初始化失败：${e.message || e}`, true));

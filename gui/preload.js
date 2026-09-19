@@ -17,11 +17,19 @@ contextBridge.exposeInMainWorld('api', {
   update: () => ipcRenderer.invoke('update'),
   // 更新管控：模式选择也在主进程的对话框里做，这里同样只暴露「动作」不带参数
   updateControl: () => ipcRenderer.invoke('updateControl'),
+  // 工具自更新：确认框与下载都在主进程做，渲染进程只发起
+  toolUpdateInstall: () => ipcRenderer.invoke('toolUpdateInstall'),
 
   // 主进程推进度（「正在汉化 …」）；返回反注册函数，界面重载时不会留下重复监听
   onBusy: (fn) => {
     const listener = (_event, payload) => fn(payload);
     ipcRenderer.on('busy', listener);
     return () => ipcRenderer.removeListener('busy', listener);
+  },
+  // 启动后主进程自动检查到新版本时推过来（无新版不推）
+  onToolUpdate: (fn) => {
+    const listener = (_event, payload) => fn(payload);
+    ipcRenderer.on('toolUpdate', listener);
+    return () => ipcRenderer.removeListener('toolUpdate', listener);
   },
 });

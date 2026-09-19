@@ -228,10 +228,15 @@
 
 ## 9. 工具自更新接 GUI
 
-- [ ] `gui/main.js`：启动后延迟调用 `update.check()`，有新版则提示（无新版不打扰）；启动时 `cleanup()` 清理 `.old`
-- [ ] `gui/main.js`：确认后调用 `update.apply()`，并在失败时给出可读原因
-- [ ] 核对 `update.js` 的 `pickAsset()` 与 electron-builder 的 GUI 产物命名是否匹配，不匹配则补齐
+- [x] `gui/main.js`：启动后延迟调用 `update.check()`，有新版则提示（无新版不打扰）；启动时 `cleanup()` 清理 `.old`
+      ——`scheduleToolUpdateCheck()` 在 `whenReady` 里挂一个 4 秒延迟：界面稳定后再查，**有新版本才推**一条 `toolUpdate` 给渲染进程（toast 提示，不弹模态框、不打断手上操作）；**检查失败静默**——启动时的自动检查不该因为网络问题给用户报错，用户主动点「检查更新」时才把失败原因说出来。`update.cleanup()` 加在 `whenReady` 开头（替换策略是「改名而不是删除」，`.old` 只能等新进程启动时清）
+- [x] `gui/main.js`：确认后调用 `update.apply()`，并在失败时给出可读原因
+      ——**改成了「下载安装包 + 启动安装向导」，不调 `apply`**：`apply` 是替换自身 exe（SEA 单文件产物的方式），在 Electron 打包态 `isPackaged()` 为假、会直接抛错。抽出 `installGuiUpdate()` 供两处复用：用户主动点「检查更新」时弹确认框（下载并安装 / 稍后 / 打开下载页），以及启动时自动检查到新版后用户点提示进来。下载走 `net.download` 并推进度；装完启动：Windows 的 `-setup.exe` 与 Linux 的 `.AppImage` 直接 spawn，macOS 的 `.dmg` 与 Linux 的 `.deb` 交给 `open` / `xdg-open`。spawn 同样接了 `error` 事件——不接会冒到进程级把 GUI 带崩
+- [x] 核对 `update.js` 的 `pickAsset()` 与 electron-builder 的 GUI 产物命名是否匹配，不匹配则补齐
+      ——**核对结果：不匹配**。GUI 产物是 `github-desktop-zh-cn-gui-v<版本>-<平台>-<架构>[-setup].<扩展名>`（AGENTS.md「产物命名」），Windows 以 `-setup.exe` 结尾，`pickAsset` 的 `-win32-x64.exe` 匹配不到；macOS / Linux 是 `.dmg` / `.AppImage` / `.deb`，更在它的扩展名表之外。**补齐为独立的 `pickGuiAsset()`**——不塞进 `pickAsset`：那个服务 CLI 自更新（下载单文件可执行体替换自身），这个服务 GUI（下载安装包交给用户装），命名与扩展名都不一样，混在一起只会让两边都判不准。`pickGuiAsset` 只认带 `-gui-` 的名字（别把 cli 产物当安装包），同样做 Gitee 的 `url` 归一化。`check()` 现在同时返回 `asset` 与 `guiAsset`。**实测**：用 AGENTS.md 那套命名构造资产列表，三个平台（win32-x64 / darwin-arm64 / linux-x64）的 CLI 与 GUI 匹配全对；列表里只有 cli 产物时 `pickGuiAsset` 返回 null ✓
 - [ ] 实测：存在新版本时 GUI 弹提示；确认后替换成功、重启版本号变化
+      ——**做不了，缺前置条件**：当前工具版本就是最新（v0.2.0），`update.check()` 永远返回 `hasUpdate: false`，没有「存在新版本」这个场景可测。要等下一次发版（或把 `check()` 临时指向一个构造的 release）才能验。**另外判据本身要改**：GUI 态是「下载安装包交给用户装」，不是 CLI 那种「替换自身 exe」，所以「重启后版本号变化」应改为「装完后版本号变化」。
+      **本地能验的部分已验**：`pickGuiAsset` 对三个平台的命名匹配全对（含「只有 cli 产物时返回 null」的边界）；preload 的 `invoke` / `ipcRenderer.on` 与主进程的 `handle` / `webContents.send` 两两对齐（无暴露未注册、无监听未推送）；启动检查的「无新版不打扰」在当前版本下天然成立
 
 ## 10. 文档同步与提交
 
