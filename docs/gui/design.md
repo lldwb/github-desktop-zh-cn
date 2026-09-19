@@ -17,7 +17,7 @@
 | 方案 | 思路 | 代价 | 结论 |
 |------|------|------|------|
 | 手工打包 | 复制 electron 运行时目录 + 把 `gui/` `scripts/` 放进 `resources/app/`，exe 改名 | 无额外依赖；与既有 `build.js` 同风格 | 不采用：**用户选定 electron-builder**（要安装包） |
-| **electron-builder** | 官方打包器，产出 NSIS 安装包 + zip 免安装包 | 引入 devDependencies（含 electron-builder 及其依赖）；构建期需下载 `winCodeSign` / `nsis` 等二进制（国内须配镜像，见下）；后续 CI 需配套 | **采用** |
+| **electron-builder** | 官方打包器，产出 NSIS 安装包 + 7z 免安装包 | 引入 devDependencies（含 electron-builder 及其依赖）；构建期需下载 `winCodeSign` / `nsis` 等二进制（国内须配镜像，见下）；后续 CI 需配套 | **采用** |
 | electron-packager | 比 builder 轻 | 仍是额外依赖，且无安装包能力 | 不采用 |
 
 **构建期网络**（本机实测的坑，非代码问题）：Electron 的二进制与 electron-builder 的 `winCodeSign` / `nsis` 由构建工具自己下载，**不走系统代理**（`ProxyEnable=1`、`127.0.0.1:7890` 的环境下 `fetch` 直连超时）。解法是配镜像直连——两个镜像都已**固化进仓库**，使用者无须在命令行设环境变量：
@@ -32,7 +32,7 @@ ELECTRON_MIRROR=https://registry.npmmirror.com/-/binary/electron/
 ELECTRON_BUILDER_BINARIES_MIRROR=https://registry.npmmirror.com/-/binary/electron-builder-binaries/
 ```
 
-**免安装包为什么用 zip 而不是 electron-builder 的 portable 目标**：portable 版运行时会把自身解压到临时目录再启动，`process.execPath` 指向那个临时位置，于是 `dataRoot()` 会把备份与 `config.json` 写进临时目录（退出后可能被清理）。zip 目标是普通压缩包，解压后 `process.execPath` 就在解压目录里，与 NSIS 安装版语义一致。
+**免安装包为什么用压缩包而不是 electron-builder 的 portable 目标**：portable 版运行时会把自身解压到临时目录再启动，`process.execPath` 指向那个临时位置，于是 `dataRoot()` 会把备份与 `config.json` 写进临时目录（退出后可能被清理）。压缩包（Windows 是 7z）解压后 `process.execPath` 就在解压目录里，与 NSIS 安装版语义一致。压缩格式选 7z 而不是 zip 是体积使然——zip 的 deflate 压不进 Gitee 的 100 MB 附件上限，同一份内容 7z 81.2 MB / zip 123.6 MB，见 [docs/打包与分发.md](../打包与分发.md)「常见问题」。
 
 ## 选定方案
 

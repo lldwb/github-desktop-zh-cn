@@ -89,19 +89,19 @@ github-desktop-zh-cn/
 
 它往 GitHub Desktop 的 `main.js` 里注入一段代码，**改动的是逻辑不是文案**；和汉化一样可以单独撤掉，备份始终只有一份（官方原文）。注入的代码读不到工具的字典目录时**一律放行**——宁可让你更新，也不会因为工具自己的问题把你锁死在旧版本上。
 
-GUI 产物**随 Release 分发**（三平台）：Windows 用 `github-desktop-zh-cn-gui-v0.2.0-win32-x64-setup.exe`（安装包，可选安装目录）或 `…-gui-v0.2.0-win32-x64.zip`（免安装），macOS 用 `…-gui-v0.2.0-darwin-arm64.dmg`（Intel 机是 `…-gui-v0.2.0-darwin-x64.dmg`），Linux 用 `…-gui-v0.2.0-linux-x86_64.AppImage` / `…-gui-v0.2.0-linux-amd64.deb`。也可以自行构建：
+GUI 产物**随 Release 分发**（三平台）：Windows 用 `github-desktop-zh-cn-gui-v<版本>-win32-x64-setup.exe`（安装包，可选安装目录）或 `…-gui-v<版本>-win32-x64.7z`（免安装，Windows 11 可直接解压），macOS 用 `…-gui-v<版本>-darwin-arm64.dmg`（Intel 机是 `…-gui-v<版本>-darwin-x64.dmg`），Linux 用 `…-gui-v<版本>-linux-x86_64.AppImage` / `…-gui-v<版本>-linux-amd64.deb`。也可以自行构建：
 
 ```bash
 npm install       # 首次：安装 Electron 与 electron-builder（仅构建期依赖，不进产物逻辑）
 npm run gui       # 开发态：直接打开窗口，用仓库里的字典与备份
-npm run dist      # 按当前平台打包到 dist/gui/（Windows：NSIS + zip；macOS：dmg + zip；Linux：AppImage + deb）
+npm run dist      # 按当前平台打包到 dist/gui/（Windows：NSIS + 7z；macOS：dmg；Linux：AppImage + deb）
 ```
 
 首次构建会下载 Electron 二进制与打包工具（国内直连 GitHub 较慢）。仓库已把镜像固化在 `.npmrc` 与 `electron-builder.yml` 里，**无需手动设环境变量**。
 
 GUI 与命令行是**同一套脚本**的两种界面——定位 / 替换 / 备份 / 还原规则完全一致，没有第二份实现。GUI 产物把数据目录定在**可执行文件所在目录**（与单文件产物相同），备份与 `config.json` 就地存放，两种界面可以随时换用；**macOS 是例外**——`.app` 包内写入会让签名失效（下次启动被 Gatekeeper 判为「已损坏」），故数据根恒为用户数据目录（`~/Library/Application Support/github-desktop-zh-cn`）。
 
-> 免安装包请用 **zip**（解压即用）。electron-builder 的 portable 目标会把自身解压到临时目录再运行，备份与配置会跟着写进临时目录、退出后可能被清理，本仓库不提供该目标。
+> 免安装包请用 **7z**（解压即用，Windows 11 文件资源管理器原生支持）。electron-builder 的 portable 目标会把自身解压到临时目录再运行，备份与配置会跟着写进临时目录、退出后可能被清理，本仓库不提供该目标。
 
 > GUI 产物放在**可写目录**使用（如 `D:\工具\`）。装进 `C:\Program Files` 时数据目录会按既有规则回退到用户数据目录，状态栏会如实显示当前数据根。
 
