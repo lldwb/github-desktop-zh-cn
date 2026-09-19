@@ -193,8 +193,8 @@
       ——**此前已完成**（`common.js` 第 386-389 行的返回顺序即为此），连同 `GITEE_RAW` / `GITEE_API` 两个常量一并核过
 - [x] `scripts/update.js` 的 `check()` 增加 Gitee Releases API 兜底
       ——GitHub 取不到时退回 `${GITEE_API}/releases/latest`；返回值多一个 `source` 字段标明来源（两个调用方只用 `hasUpdate`/`latest`/`current`/`asset`/`releaseUrl`，不受影响）。**顺带修掉一处会直接崩的缺陷**：Gitee 的资产对象没有 `url` 字段，而 `apply()` 只认 `asset.url`——`pickAsset` 现在把 `browser_download_url` 补进 `url`。`releaseUrl` 在 Gitee 侧按 tag 拼（那边没有 `html_url`）。**实测**：把 GitHub 指向不存在的仓库、Gitee 指向 `mindspore/mindspore`，`check()` 返回 `source=gitee` / `latest=2.7.2` / `releaseUrl` 指向 gitee.com ✓
-- [ ] 实测：发一个 tag → Gitee Releases 页出现同名发行版且附件数与 GitHub 一致
-      ——**只能由真实 CI 触发**：需先在仓库 Actions secrets 配好 `GITEE_TOKEN` 再推 tag。本地既无令牌、也没有脚本依赖的 `jq`（runner 自带）；Gitee API 的端点行为、认证方式与返回结构已在本地用 curl 逐条实测（见上四项）
+- [x] 实测：发一个 tag → Gitee Releases 页出现同名发行版且附件数与 GitHub 一致
+      ——**实测完成（v0.3.0）**：推 `v0.3.0` tag 后 CI 在 Gitee 创建了同名发行版 ✓。**验收标准随定案更新**：Gitee 侧最终定为「只发正文、不传附件」（配额放不下产物，见 `AGENTS.md`「发版」一节），故「附件数与 GitHub 一致」不再成立——现在验收是「发行版存在、正文含 CHANGELOG 段落 + 指向 GitHub Release 的下载指引」；正文的 Gitee 端修改与逐字复核在 0.3.0 上做过一轮（`de823b1`）
 
 ## 8. 更新管控注入
 
