@@ -464,7 +464,11 @@ async function installGuiUpdate(info) {
   const dest = path.join(app.getPath('temp'), info.guiAsset.name);
   notifyBusy('toolUpdate', `正在下载 v${info.latest} …`);
   try {
+    // accept 头与 scripts/update.js 的 apply 同一条兜底口径（见那里的 downloadUrl 注释）：
+    // 直链不看这个头，带上无害；万一拿到的是 API 端点，少了它只会回一份元数据 JSON——
+    // 那东西会被当成安装包启动，这里没有 CLI 那边的文件头护栏，只能靠这条头挡住。
     await net.download(info.guiAsset.url, dest, {
+      headers: { accept: 'application/octet-stream' },
       onProgress: (got, total) => {
         const pct = total ? `${Math.round((got / total) * 100)}%` : `${(got / 1048576).toFixed(0)} MB`;
         notifyBusy('toolUpdate', `正在下载 v${info.latest} … ${pct}`);

@@ -19,17 +19,28 @@ const MAGIC = {
   linux: ['7f454c46'], // \x7fELF
 };
 
+// 资产的**下载直链**。GitHub 的资产对象有两个地址：`url` 是 **API 端点**
+//（`api.github.com/repos/<owner>/<repo>/releases/assets/<id>`），`browser_download_url` 才是
+// 发布页上那条下载直链。API 端点少了 `Accept: application/octet-stream` 只会回一份**元数据 JSON**
+//（2026-09-20 实测：HTTP 200 + `application/json`，正文开头 `{"url":"https://api.github.com/…`）——
+// 直接 GET 它下载到的是几十 KB 的 JSON，被 `verifyExecutable` 的文件头校验拦下并中止替换
+//（护栏本身有效，工具没被写坏；但自更新因此**从来装不上**，v0.1.1 起一直如此，真机复现见
+// tmp/asset-url.cjs）。Gitee 的资产对象连 `url` 都没有、只有 `browser_download_url`，本来走的就是
+// 这条路；两边现在统一取直链。取不到直链的极端形态仍退回 API 端点，下载时补上那个 accept 头（见 apply）。
+function downloadUrl(asset) {
+  return asset.browser_download_url || asset.url || null;
+}
+
 // Release 资产名形如 <name>-cli-v<版本>-<platform>-<arch>[.exe|.bin]；按「-平台-架构」后缀匹配，不拼死名字。
 // 后缀随平台：Windows 是 .exe，macOS / Linux 是 .bin（v0.2.0 起）；无后缀的老产物也认，
 // 免得还留在旧版本上的使用者更新时找不到附件。
+// 返回的是**归一后的副本**：`url` 一律是能直接下载到二进制的那条（见 downloadUrl），调用方不必再分辨来源。
 function pickAsset(assets) {
   const suffix = `-${process.platform}-${process.arch}`;
   const exts = process.platform === 'win32' ? ['.exe'] : ['.bin', ''];
   const hit = assets.find((a) => exts.some((e) => String(a.name).endsWith(suffix + e))) || null;
   if (!hit) return null;
-  // Gitee 的资产对象只有 browser_download_url 与 name（实测无 url / size / digest），
-  // 把直链补进 url 字段——apply() 只认 url，补过之后两条来源的资产对下游是同一种形状。
-  return hit.url ? hit : { ...hit, url: hit.browser_download_url };
+  return { ...hit, url: downloadUrl(hit) };
 }
 
 // GUI 产物（Electron 安装包）的匹配规则。**与 pickAsset 分开**：那个服务 CLI 自更新
@@ -64,7 +75,7 @@ function pickGuiAsset(assets) {
       return suffixes.some((s) => exts.some((e) => name.endsWith(s + e) || name.endsWith(`${s}-setup${e}`)));
     }) || null;
   if (!hit) return null;
-  return hit.url ? hit : { ...hit, url: hit.browser_download_url };
+  return { ...hit, url: downloadUrl(hit) }; // 与 pickAsset 同一条口径：url 一律是下载直链
 }
 
 async function check() {
@@ -126,7 +137,12 @@ async function apply(asset, opts = {}) {
 
   const mb = asset.size ? `（${(asset.size / 1024 / 1024).toFixed(1)} MB）` : '';
   log(`下载 ${asset.name}${mb} …`);
-  await net.download(asset.url, newFile, { onProgress: opts.onProgress });
+  // accept 头是给「退回 API 端点」那种极端形态兜底的：那个端点少了它只会回元数据 JSON（见 downloadUrl）。
+  // 直链（github.com/…/releases/download/…）不看这个头，带上无害。
+  await net.download(asset.url, newFile, {
+    headers: { accept: 'application/octet-stream' },
+    onProgress: opts.onProgress,
+  });
   try {
     verifyExecutable(newFile);
     fs.chmodSync(newFile, 0o755);
