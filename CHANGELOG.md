@@ -20,6 +20,7 @@
 
 - **自动更新会挑中 zip / 7z 这类非可执行产物**（`scripts/update.js`）：挑附件只看平台与架构词，于是发布页里同一套命名规则下的压缩包可能被选中，下载下来替换自身只会把工具弄坏。现在**按平台后缀收口**——Windows 只认 `.exe`、macOS / Linux 认 `.bin`（无后缀的老产物仍认，免得还留在旧版本上的使用者更新时找不到附件）；GUI 侧另有一套只认名字里带 `-gui-` 的，且 Windows 只认 `-setup.exe`、macOS 只认 `.dmg`、Linux 认 `.AppImage` / `.deb`（免安装包 7z 不是可执行文件，挑中它只会让更新失败；它仍随 Release 分发，手动解压即可）。
 - **AI 配置错在发请求前就拦下**（`scripts/dict-auto.js`）：配错 `AI_BASE_URL` 的失败形态是「未译 11/11 条（100%）超过上限 30%」整版被门槛拦下，结论离原因很远。现在发请求前按 URL 语法再校验一次，并拦下**看不见的字符**——不换行空格、零宽空格、串内空格（语法上过得去，只是请求会打到别的路径上 404，报错里给出码点）；失败原因随结论一并外露（注解 / step summary / 提交信息三处），脱敏 needle **补上主机名**（网络层报错只带 host，漏了它脱敏就落空）。
+- **右键菜单单测会被并行跑的夹具撞红**（`test/context-menu.test.js`）：`dictVersions()` 把 `dictionaries/` 下任何带 `zh-CN.json` 的目录都当成一个版本，而 `dict-edit` 的临时夹具 `0.0.0-test` 正落在同一目录里；`node --test` 并行跑各测试文件，夹具存在的那几百毫秒里被读到——夹具加载得到、只是没有右键菜单标签，断言必然红。谁挂谁绿全看 runner 的并行调度：同一个提交在 windows-latest / macos-latest 上绿、ubuntu-latest / macos-15-intel 上红。现在按目录名形态过滤，只认 `x.y.z`。
 - **CI 测试日志里的假 `::warning::`**（`test/dict-auto.test.js`）：单测里 `console.warn` 打出的行只要以 `::warning::` 开头，就会被 Actions 认成一条真注解收进日志，读日志的人以为 Secret 配错了。现在截获并断言，不直接打。
 
 ### 说明
