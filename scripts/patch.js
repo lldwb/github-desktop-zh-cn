@@ -2,6 +2,8 @@
 // 策略：只在字符串字面量内做整串替换（common.applyDictInStrings），
 // 保护标识符 / 属性名 / 正则 / 注释，并避免子串误伤协议串与拼接片段。
 // 字典来源：本地外部字典 → 内嵌字典 → 联网下载（dict-sync.js）；汉化后重启应用（restart.js）。
+// i18n 组里除了纯文案替换，还有一处注入：右键菜单的标签由 Electron 运行时按 role 生成、产物里没有
+// 字面量，得靠 context-menu.js 先把英文标签造进产物，再由同一次字典替换译掉。
 'use strict';
 
 const fs = require('fs');
@@ -10,6 +12,7 @@ const common = require('./common.js');
 const dictSync = require('./dict-sync.js');
 const restart = require('./restart.js');
 const updateControl = require('./update-control.js');
+const contextMenu = require('./context-menu.js');
 
 const {
   locateApp,
@@ -92,12 +95,30 @@ async function run(args = {}) {
   const perFile = {};
   for (const f of TARGETS) {
     const file = path.join(app.appDir, f);
-    const content = fs.readFileSync(file, 'utf8');
+    const raw = fs.readFileSync(file, 'utf8');
+    // 右键菜单的标签由 Electron 运行时按 role 生成、产物里没有字面量，字典够不着——先注入一段
+    // 「按 role 重打标签」的代码把字面量造出来，紧接着由下面的字典替换译掉（见 context-menu.js）。
+    // 只 main.js：菜单在 main 进程里拼（build-context-menu.ts）。干跑也注入（只在内存里），
+    // 否则预览会少掉这批标签、与实际写盘结果对不上。
+    let content = raw;
+    if (f === 'main.js') {
+      const inj = contextMenu.inject(raw, { darwin: process.platform === 'darwin' });
+      content = inj.content;
+      if (inj.changed) log('已注入右键菜单汉化代码（按 role 重打编辑菜单标签）：main.js');
+    }
+
     // 只在字符串字面量内替换，保护标识符 / 属性名 / 正则 / 注释（单字词如 Error 亦是 JS 标识符）
     // 生效条目 = 全局键 + 作用域指向本文件的键（同名文本在两个文件中语义不同时按文件隔离）
-    const { content: patched, total, perKey } = applyDictInStrings(content, scopedEntries(entries, f));
+    const effective = scopedEntries(entries, f);
+    const { content: patched, total, perKey } = applyDictInStrings(content, effective);
     perFile[f] = perKey;
-    log(`\n${f}：命中 ${total} 处`);
+    // 注入块单独再跑一次替换：块里的字面量只有标签与几个 API 名，命中数即「本轮译掉几个菜单标签」。
+    // 与整文件命中数分开报——混在一起就看不出右键菜单到底动没动（标签只有 7 个，淹没在数百条文案里）。
+    const range = contextMenu.blockRange(content);
+    const menuHits = range
+      ? applyDictInStrings(content.slice(range.start, range.end), effective).total
+      : 0;
+    log(`\n${f}：命中 ${total} 处${range ? `（其中右键菜单标签 ${menuHits} 处）` : ''}`);
     totalAll += total;
 
     if (args.dryRun) continue;

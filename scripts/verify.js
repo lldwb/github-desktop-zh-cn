@@ -6,6 +6,7 @@ const path = require('path');
 const {
   locateApp, listDictVersions, loadDict, scopedEntries, stringLiterals, checkSyntax, backupDir,
 } = require('./common');
+const contextMenu = require('./context-menu.js');
 
 const TARGETS = ['main.js', 'renderer.js'];
 
@@ -84,6 +85,22 @@ function main() {
       }
       perFile[f] = keyHits;
       console.log(`${f}：命中 ${hits} 处`);
+    }
+
+    // 2b. 右键菜单：标签由 Electron 运行时按 role 生成、产物里没有字面量，靠注入的代码造出来再由字典译掉
+    //（见 context-menu.js）。这里只看两件事：代码在不在、本平台这套标签字典覆盖得全不全。
+    const mainContent = fs.readFileSync(path.join(app.appDir, 'main.js'), 'utf8');
+    const menuRange = contextMenu.blockRange(mainContent);
+    if (menuRange) {
+      const labels = Object.values(contextMenu.labelsFor(process.platform === 'darwin'));
+      const mainEntries = scopedEntries(entries, 'main.js');
+      const uncovered = labels.filter((l) => !mainEntries.has(l));
+      const state = uncovered.length === 0 ? '✓' : `（${uncovered.join(' / ')} 保持英文）`;
+      console.log(
+        `右键菜单代码：已注入，标签 ${labels.length} 个，字典未覆盖 ${uncovered.length} 个${state}`
+      );
+    } else {
+      console.log('右键菜单代码：未注入（产物是还原过的、或补丁是旧版工具打的）');
     }
 
     // 已汉化判定：备份存在且与当前文件不一致

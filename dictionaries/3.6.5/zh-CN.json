@@ -1858,7 +1858,8 @@
     "`${r} pull request${1===r?\"\":\"s\"} found`": "`找到 ${r} 个拉取请求`",
     "`${this.commitCount} ${n}`": "`${this.commitCount} 个提交`",
     "` ${this.commitCount} ${n}`": "` ${this.commitCount} 个提交`",
-    "`(${e} applied)`": "`（已应用 ${e} 项）`"
+    "`(${e} applied)`": "`（已应用 ${e} 项）`",
+    "main.js|Delete": "删除"
   },
   "windows": {},
   "macos": {},
@@ -3732,7 +3733,8 @@
       "Edit ",
       "Select &all",
       "Select all",
-      "Undo"
+      "Undo",
+      "main.js|Delete"
     ],
     "菜单-视图": [
       "&Branches list",

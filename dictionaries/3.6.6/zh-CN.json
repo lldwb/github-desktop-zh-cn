@@ -1925,7 +1925,8 @@
     "File path is outside the repository": "文件路径在仓库之外",
     "File path could not be resolved safely": "文件路径无法安全解析",
     "\\nThe combined commit message (the title followed by a blank line and then\\nthe description) MUST satisfy ALL of the following constraints:\\n": "\\n合并后的提交信息（先标题、空行，再描述）必须同时满足以下所有约束：\\n",
-    "Rebase": "变基"
+    "Rebase": "变基",
+    "main.js|Delete": "删除"
   },
   "windows": {},
   "macos": {
@@ -4166,7 +4167,8 @@
       "Select &all",
       "Select All",
       "Select all",
-      "Undo"
+      "Undo",
+      "main.js|Delete"
     ],
     "菜单-仓库": [
       "&Fetch",

@@ -1842,7 +1842,8 @@
     "{{count}} weeks": "{{count}} 周",
     "{{count}} years": "{{count}} 年",
     " as determined by your": "，取决于你的",
-    "…and ": "……以及另外 "
+    "…and ": "……以及另外 ",
+    "main.js|Delete": "删除"
   },
   "windows": {},
   "macos": {
@@ -4043,7 +4044,8 @@
       "Select &all",
       "Select All",
       "Select all",
-      "Undo"
+      "Undo",
+      "main.js|Delete"
     ],
     "菜单-仓库": [
       "&Fetch",
