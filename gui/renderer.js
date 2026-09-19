@@ -8,6 +8,7 @@ const els = {
   restore: document.getElementById('btn-restore'),
   pick: document.getElementById('btn-pick'),
   update: document.getElementById('btn-update'),
+  updateControl: document.getElementById('btn-update-control'),
   refresh: document.getElementById('btn-refresh'),
   tabLabel: document.getElementById('tab-label'),
   search: document.getElementById('search'),
@@ -20,7 +21,7 @@ const els = {
   toast: document.getElementById('toast'),
 };
 
-const BUTTONS = [els.patch, els.restore, els.pick, els.update, els.refresh];
+const BUTTONS = [els.patch, els.restore, els.pick, els.update, els.updateControl, els.refresh];
 
 let rows = []; // 全部字典条目（搜索在内存里过滤，不重新读盘）
 let emptyHint = ''; // 字典读不到时的原因，显示在表格空态里
@@ -201,11 +202,21 @@ async function doUpdate() {
   });
 }
 
+// 模式选择在主进程的对话框里做（渲染进程拿不到参数），这里只负责发起与展示结果
+async function doUpdateControl() {
+  await withPending('正在设置更新管控', async () => {
+    const r = await window.api.updateControl();
+    if (!r.ok) return r.canceled ? undefined : showError(r);
+    showToast(r.notes.join('\n'));
+  });
+}
+
 // —— 绑定 ——
 els.patch.addEventListener('click', doPatch);
 els.restore.addEventListener('click', doRestore);
 els.pick.addEventListener('click', doPick);
 els.update.addEventListener('click', doUpdate);
+els.updateControl.addEventListener('click', doUpdateControl);
 els.refresh.addEventListener('click', () => withPending('正在刷新', async () => {}));
 
 // 1862 条逐个过滤有开销，等输入停下来再算

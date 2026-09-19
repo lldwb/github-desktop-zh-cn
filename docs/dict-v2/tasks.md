@@ -211,8 +211,10 @@
       ——落为 `scripts/update-control.js` 的 `mode: 'off'`：`__gdzcAllowUpdate` 恒返回 false，`checkForUpdates` 一进门就 `return`，`setFeedURL` / `autoUpdater.checkForUpdates()` 都不会被调到。**没有整段替换方法体**，而是在方法体开头插一道闸（`async checkForUpdates(e){if(!globalThis.__gdzcAllowUpdate())return;try{…}`）——整段替换要精确匹配方法体结尾，插闸只要锚点唯一即可。**IPC 契约不变**：`check-for-updates` / `quit-and-install-updates` 两个事件名与处理器签名原样保留，renderer 侧无感。入口是 `patch --block-update`
 - [x] 注入实现「没有字典就拦截」：放行前比对当前版本与已支持版本上限
       ——`mode: 'guard'`（`patch --update-control`）。**已支持版本上限 = 字典目录里带 `zh-CN.json` 的最大版本号**，运行时扫出来（不引入外部清单，字典目录本身就是权威）。**放行条件是「上限 > 当前版本」**：说明新版本的字典已经就位、更新过去还能是中文；相等或更低时拦截，因为工具还没跟上，更新过去就只剩英文界面。**判断不了就放行**——字典目录读不到（被移走 / 权限不足）时返回 true，宁可让用户更新，也不要因为工具自己的问题把人锁死在旧版本上。注入块用首尾标记 `/*__GDZC_UPDATE_CONTROL_BEGIN__*/` … `END` 包住，重复注入是幂等的
-- [ ] 注入实现「更新后自动汉化」：放行后由工具在新版本目录落地时补打补丁
-- [ ] `cli.js` / GUI 增加「禁止自动更新」与「恢复自动更新」两个开关
+- [x] 注入实现「更新后自动汉化」：放行后由工具在新版本目录落地时补打补丁
+      ——注入块里带一段 `autoPatch()`：GitHub Desktop 每次启动时，若**当前版本有字典、账上却没有 i18n 组**，就 spawn 工具 `patch --version <当前版本>` 补打一次。判据用记账文件（`<字典目录>/../tmp/patch-state.json`）而不是「产物里有没有中文」——记账既是「打过没有」的权威记录，也避免了每次启动都白跑一次 patch。**工具路径在注入时写死**（`process.execPath`），且**只在打包态注入**：源码态下工具就是仓库本身（用户自己 `npm run patch`），往产物里写死一个 node 路径换台机器就指向不存在的东西了。spawn 失败一律吞掉——这是锦上添花的一步，不能因为它让 GitHub Desktop 起不来
+- [x] `cli.js` / GUI 增加「禁止自动更新」与「恢复自动更新」两个开关
+      ——两边都做成**三选一**而不是两个独立开关：「没有字典就不更新」与「完全禁止」是同一处注入的两种模式，两个开关会让人以为能同时开，而它们改的是同一行代码。CLI 菜单加 `6) 更新管控`（`doUpdateControl`），GUI 加「更新管控」按钮（`btn-update-control` → IPC `updateControl` → 主进程对话框选模式）。命令行侧的等价入口写进了 `--help`：`patch --update-control` / `patch --block-update` / `restore --group updateControl`。GUI 的模式选择在主进程对话框里做，preload 依旧只暴露「动作」不暴露参数——渲染进程无法伪造确认
 - [ ] 实测：开启后 GitHub Desktop 不再触发更新检查（开关状态 + 产物字节差异双重取证）；还原后回到官方行为
 
 ## 9. 工具自更新接 GUI

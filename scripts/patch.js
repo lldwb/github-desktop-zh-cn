@@ -144,6 +144,9 @@ async function run(args = {}) {
       const r = updateControl.inject(fs.readFileSync(mainFile, 'utf8'), {
         dictDir: path.join(common.dataRoot(), 'dictionaries'),
         mode: args.updateControl,
+        // 「更新后自动汉化」只在打包态注入：源码态下工具就是仓库本身（npm run patch 即可），
+        // 往产物里写死一个 node 路径，换台机器就指向不存在的东西了。
+        toolPath: isPackaged() ? process.execPath : null,
       });
       if (r.changed) {
         fs.writeFileSync(mainFile, r.content, 'utf8');

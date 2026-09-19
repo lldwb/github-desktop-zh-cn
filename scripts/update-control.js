@@ -20,7 +20,11 @@ const END = '/*__GDZC_UPDATE_CONTROL_END__*/';
 //   'off'          ——**完全禁止自动更新**：一律不放行，连查都不查
 // 两种模式共用同一套注入块，只有 __gdzcAllowUpdate 的返回不同——这样「切换模式」等价于
 // 重新注入，而不是「撤掉再打另一套」，产物里永远只有一份更新管控代码。
-function buildInjection(dictDir, { mode = 'guard' } = {}) {
+//
+// toolPath：工具可执行文件路径。给了才注入「更新后自动汉化」——**只有打包态才有意义**，
+// 源码态下工具就是仓库本身，用户自己跑 npm run patch 即可，写死一个 node 路径进产物
+// 反而会在换机器后指向不存在的东西。
+function buildInjection(dictDir, { mode = 'guard', toolPath = null } = {}) {
   const allow =
     mode === 'off'
       ? 'return false;'
@@ -31,6 +35,30 @@ function buildInjection(dictDir, { mode = 'guard' } = {}) {
         var v=[];for(var i=0;i<cur.length;i++)v.push(Number(cur[i]));
         return cmp(v,lim)<0;
       }catch(e){return true;}`;
+  const autoPatch = toolPath
+    ? `
+    // —— 更新后自动汉化 ——
+    // 工具已备好当前版本的字典、产物却还是英文时，调工具补打一次补丁。判据是记账文件里
+    // 没有 i18n 组：它既是「打过没有」的权威记录，也避免了每次启动都白跑一次 patch。
+    // 工具路径在注入时写死（打包态才有）。spawn 失败一律吞掉——这是锦上添花的一步，
+    // 不能因为它让 GitHub Desktop 起不来。
+    function autoPatch(){
+      try{
+        var v=require('electron').app.getVersion();
+        if(!fs.existsSync(path.join(DICT_DIR,v,'zh-CN.json')))return;
+        var raw={};
+        try{raw=JSON.parse(fs.readFileSync(path.join(DICT_DIR,'..','tmp','patch-state.json'),'utf8'))||{};}catch(e){}
+        var groups=(raw[v]&&raw[v].groups)||[];
+        if(groups.indexOf('i18n')>=0)return;
+        var TOOL=${JSON.stringify(toolPath)};
+        if(!fs.existsSync(TOOL))return;
+        var c=require('child_process').spawn(TOOL,['patch','--version',v],{detached:true,stdio:'ignore'});
+        c.on('error',function(){});
+        c.unref();
+      }catch(e){}
+    }
+    autoPatch();`
+    : '';
   return `${BEGIN}
 ;(function(){
   try{
@@ -63,7 +91,7 @@ function buildInjection(dictDir, { mode = 'guard' } = {}) {
     // 更新过去还能是中文；相等或更低时拦截，因为工具还没跟上，更新过去就只剩英文界面了。
     globalThis.__gdzcAllowUpdate=function(){
       ${allow}
-    };
+    };${autoPatch}
   }catch(e){}
 })();
 ${END}
@@ -74,12 +102,12 @@ ${END}
 // 已注入过（标记还在）则原样返回，changed=false——重复调用是安全的。
 // **换模式不在这里做**：要 guard ↔ off 互换，先还原成官方原文再按新模式打一遍，
 // 这样产物里永远只有一份注入块，不会出现两套 __gdzcAllowUpdate 抢着赋值。
-function inject(content, { dictDir, mode = 'guard' }) {
+function inject(content, { dictDir, mode = 'guard', toolPath = null }) {
   if (content.includes(BEGIN)) return { content, changed: false, reason: '已注入过（标记已存在）' };
 
   // 支撑代码：锚点优先用文件末尾的 sourceMappingURL 注释（打包器生成的固定结构），
   // 没有就退回文件末尾——两处都在 IIFE 之外，等价。
-  const block = buildInjection(dictDir, { mode });
+  const block = buildInjection(dictDir, { mode, toolPath });
   const marker = '\n//# sourceMappingURL=';
   const at = content.lastIndexOf(marker);
   const withSupport =

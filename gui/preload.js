@@ -15,6 +15,8 @@ contextBridge.exposeInMainWorld('api', {
   restore: () => ipcRenderer.invoke('restore'),
   pickPath: () => ipcRenderer.invoke('pickPath'),
   update: () => ipcRenderer.invoke('update'),
+  // 更新管控：模式选择也在主进程的对话框里做，这里同样只暴露「动作」不带参数
+  updateControl: () => ipcRenderer.invoke('updateControl'),
 
   // 主进程推进度（「正在汉化 …」）；返回反注册函数，界面重载时不会留下重复监听
   onBusy: (fn) => {

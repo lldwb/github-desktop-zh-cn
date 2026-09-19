@@ -7,7 +7,7 @@ const path = require('path');
 const readline = require('readline');
 const {
   locateApp, listDictVersions, loadDict, dictLabel, backupDir, backupExists, isPatched,
-  isPackaged, dataRoot, readConfig, writeConfig, APP_NAME,
+  isPackaged, dataRoot, readConfig, writeConfig, APP_NAME, getPatchGroups,
 } = require('./common');
 
 // 静态映射（不是模板字符串）：bundle.js 靠字面量扫描收集依赖，动态 require 不会被收集
@@ -59,6 +59,11 @@ auto 子命令（完整用法见 github-desktop-zh-cn auto -h）：
   --path <目录>    显式指定 resources 目录（自动探测失败或非默认安装位置时用）
   --version <版本>  指定字典版本
   -h, --help       显示本帮助
+
+更新管控（交互菜单 6) 的等价命令）：
+  patch --update-control          开启「没有对应字典就不更新」
+  patch --block-update            开启「完全禁止自动更新」
+  restore --group updateControl   恢复自动更新（只撤更新管控，汉化保留）
 
 运行 GitHub Desktop 汉化工具 ${require('../package.json').version}`);
 }
@@ -190,6 +195,50 @@ async function doRestore(rl, state) {
   }
 }
 
+// 更新管控：往 GitHub Desktop 注入或撤掉一道闸。
+// 做成「三选一」而不是两个独立开关——「没有字典就不更新」与「完全禁止」是同一处注入的
+// 两种模式，两个开关会让人以为能同时开，而它们改的是同一行代码。
+async function doUpdateControl(rl, state) {
+  if (state.error) {
+    console.log('\n 未找到 GitHub Desktop，请先选择「4) 指定安装位置」。');
+    return;
+  }
+  const version = state.app.version;
+  const on = getPatchGroups(version).includes('updateControl');
+  console.log(`\n 更新管控（当前：${on ? '已开启' : '未开启'}）：往 GitHub Desktop 注入一道闸，决定它能不能自动更新。`);
+  console.log('  1) 没有对应字典就不更新 —— 工具的字典跟上新版本了才放行（推荐）');
+  console.log('  2) 完全禁止自动更新 —— 不看字典，一律不放行');
+  console.log('  3) 恢复自动更新 —— 撤掉这道闸，回到官方行为');
+  console.log('  0) 返回');
+  const c = await ask(rl, ' 请选择：');
+  if (c === '0' || c === '') return;
+
+  try {
+    if (c === '3') {
+      const r = await require('./restore.js').run({
+        explicitPath: state.explicitPath, version, groups: ['updateControl'], quiet: true,
+      });
+      const kept = r.kept.includes('i18n') ? '，汉化保留' : '（已回到官方原版）';
+      console.log(`\n 已恢复自动更新：撤掉了更新管控${kept}。`);
+      console.log(restartLine(r.restarted));
+      return;
+    }
+    if (c !== '1' && c !== '2') {
+      console.log(' 输入无效。');
+      return;
+    }
+    const mode = c === '1' ? 'guard' : 'off';
+    const r = await require('./patch.js').run({
+      explicitPath: state.explicitPath, version, quiet: true, updateControl: mode,
+    });
+    console.log(`\n 已开启更新管控（${mode === 'off' ? '完全禁止自动更新' : '没有对应字典就不更新'}）。`);
+    console.log(restartLine(r.restarted));
+  } catch (e) {
+    console.log(`\n 操作失败：${e.message}`);
+    if (e.hint) console.log(` ${e.hint}`);
+  }
+}
+
 // 检查更新：先看工具自身有无新版本，再拉当前安装版本的字典
 async function doUpdate(rl, state) {
   console.log('');
@@ -282,7 +331,7 @@ async function menu() {
       console.log(LINE);
       console.log(' 1) 汉化 GitHub Desktop       2) 还原官方原版');
       console.log(' 3) 详细信息                  4) 指定安装位置');
-      console.log(' 5) 检查更新（工具 + 字典）');
+      console.log(' 5) 检查更新（工具 + 字典）    6) 更新管控');
       console.log(' 0) 退出');
       const choice = await ask(rl, ' 请选择：');
       if (choice === '0' || choice === 'q' || choice === '') break;
@@ -291,7 +340,8 @@ async function menu() {
       if (choice === '3') { await showDetail(state); continue; }
       if (choice === '4') { state = await setPath(rl); continue; }
       if (choice === '5') { await doUpdate(rl, state); state = resolveTarget(); continue; }
-      console.log(' 输入无效，请输入 0-5 的数字。');
+      if (choice === '6') { await doUpdateControl(rl, state); state = resolveTarget(); continue; }
+      console.log(' 输入无效，请输入 0-6 的数字。');
     }
     console.log(' 已退出。');
   } finally {

@@ -216,6 +216,49 @@ function registerIpc() {
     }
   });
 
+  // 更新管控：三选一（与 CLI 菜单同一套语义，两边不各写一份判定）。
+  // 确认框在主进程内弹——渲染进程无法伪造，这是 preload 只暴露「动作」不暴露参数的原因。
+  handle('updateControl', async () => {
+    const target = resolveTarget();
+    if (target.error) return { ok: false, error: '未找到 GitHub Desktop：请先点「选择」指定安装位置。' };
+
+    const version = target.app.version;
+    const on = common.getPatchGroups(version).includes('updateControl');
+    const choice = await dialog.showMessageBox(mainWindow, {
+      type: 'question',
+      buttons: ['没有字典就不更新', '完全禁止更新', '恢复自动更新', '取消'],
+      defaultId: 0,
+      cancelId: 3,
+      noLink: true,
+      title: APP_TITLE,
+      message: `更新管控（当前：${on ? '已开启' : '未开启'}）`,
+      detail: '往 GitHub Desktop 注入一道闸，决定它能不能自动更新。\n\n'
+        + '· 没有对应字典就不更新：工具的字典跟上新版本了才放行（推荐）\n'
+        + '· 完全禁止更新：不看字典，一律不放行\n'
+        + '· 恢复自动更新：撤掉这道闸，回到官方行为（汉化保留）',
+    });
+    if (choice.response === 3) return { ok: false, canceled: true };
+
+    notifyBusy('updateControl', '正在设置更新管控 …');
+    try {
+      if (choice.response === 2) {
+        const r = await restore.run({
+          explicitPath: target.explicitPath, version, groups: ['updateControl'], quiet: true,
+        });
+        const kept = r.kept.includes('i18n') ? '，汉化保留' : '（已回到官方原版）';
+        return { ok: true, notes: [`已恢复自动更新：撤掉了更新管控${kept}。`], restarted: r.restarted };
+      }
+      const mode = choice.response === 1 ? 'off' : 'guard';
+      const r = await patch.run({
+        explicitPath: target.explicitPath, version, quiet: true, updateControl: mode,
+      });
+      const what = mode === 'off' ? '完全禁止自动更新' : '没有对应字典就不更新';
+      return { ok: true, notes: [`已开启更新管控（${what}）。`], restarted: r.restarted };
+    } finally {
+      notifyBusy(null, null);
+    }
+  });
+
   handle('pickPath', async () => {
     const r = await dialog.showOpenDialog(mainWindow, {
       title: '选择 GitHub Desktop 的 resources 目录',
