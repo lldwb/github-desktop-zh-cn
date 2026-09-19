@@ -509,9 +509,9 @@ jobs:
             case "${new##*-}" in
               *.*) ;;
               *) case "$new" in
-                   *-win32-*) new="$new.exe" ;;
-                   *)         new="$new.bin" ;;
-                 esac ;;
+                *-win32-*) new="$new.exe" ;;
+                *)         new="$new.bin" ;;
+              esac ;;
             esac
             printf '%s\t%s\n' "$name" "$new" >> rename.tsv
           done < assets.tsv
