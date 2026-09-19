@@ -1,6 +1,6 @@
 # GUI 操作面板 · 任务清单
 
-> 状态：**第一～八组完成**（GUI 已实现、打包已实测、文档已同步、改动已本地提交）；**第九组「随 Release 分发」进行中**——Windows 产物已实机实测，macOS / Linux 产物待 CI 出包后验证。完成一项即改 `- [x]`；第六 / 七 / 八组因会话中断为事后补勾，逐项证据见条目本身。
+> 状态：**第一～八组完成**（GUI 已实现、打包已实测、文档已同步、改动已本地提交）；**第九组「随 Release 分发」进行中**——Windows 产物已实机实测，macOS / Linux 产物待 CI 出包后验证；**第十组「产物体积裁剪」已完成**——四平台 CI 实测通过、配置与文档已同步，只剩 macOS / Linux 的平台特定组件删除待定。完成一项即改 `- [x]`；第六 / 七 / 八组因会话中断为事后补勾，逐项证据见条目本身。
 
 ## 一、前置：运行形态判据（`common.js`）
 
@@ -133,4 +133,7 @@
 - [x] **裁剪后实测**：win-unpacked **292 MB**、NSIS **90.7 MB ✓**（进 100 MB）、zip **123.6 MB ✗**。zip 受 deflate 硬限制——主程序 electron.exe 单文件压缩后仍占 zip 的 83%，压不到 100 MB（NSIS 用 LZMA，压缩率更高，同内容多压出 32 MB）。
 - [x] **裁剪态启动验证**（win-unpacked 解压目录）：窗口正常创建（标题「GitHub Desktop 汉化工具」）、进程稳定运行 30 分钟以上、无错误日志（仅无害的 WSALookupServiceBegin 警告）。**两个排查陷阱记下来**：连续 spawn 多个实例全部 exit 0 **不是**启动失败——是单实例锁（`gui/main.js` 的 `requestSingleInstanceLock`）把后来者正常劝退，验证前先杀光残留进程；中文 Windows 的 `tasklist` 输出是 GBK，按 utf16le 解码会把活着的进程判成「已退出」。
 - [x] **自检增强**：`build/check-gui-dist.js` 增加语言包裁剪核验与产物体积报告（超 100 MB 打 `::warning::`）——四平台体积直接看 CI 日志，不必下载附件。
-- [ ] **四平台 CI 实测**：macOS / Linux 的裁剪效果与产物体积待 `workflow_dispatch` 跑一次看；Windows 之外平台的运行时组件删除（`libvk_swiftshader.so` 等）待各自实测数据再定。用户决策：zip 接受 123.6 MB、macOS / Linux 本轮只上 locales 裁剪。
+- [x] **四平台 CI 实测**（两次 `workflow_dispatch`，run #16 / #17）：裁剪前 → 后，Windows setup 106.4 → **90.7 ✓**、zip 146.3 → 123.6；macOS arm64 dmg/zip 122.1/122.2 → **110.3/110.2**、x64 125.6/125.8 → **113.8/113.7**；Linux deb 94.4 → **92.4 ✓**、AppImage 119.4 → **116.9**。四平台自检全绿。用户决策：zip 接受 123.6 MB、macOS / Linux 本轮只上 locales 裁剪。
+- [x] **macOS 语言包被误删的修复**（第二次实测发现）：首次实测两个 mac 产物的语言目录都只剩 `en.lproj`。根因在 electron-builder 的匹配规则（`app-builder-lib/out/electron/ElectronFramework.js`）：语言名相等、或前缀 + 分隔符（`-` / `_`）、比较前都转小写——`zh-CN` 匹配不到 mac 的 `zh_CN.lproj`（下划线），而 Windows / Linux 的 `zh-CN.pak` 是连字符，同一份配置在两处认的不是一套写法。`electronLanguages` 补上 `zh_CN` 后复测：两个 mac 产物的语言目录都是 `en.lproj / zh_CN.lproj`，体积各 +0.2 MB（多留的正是中文那一份）。自检的 mac 分支也一并改对——语言目录分布在**应用级 `Contents/Resources` 与 Electron Framework 的 `Resources` 两处**（electron-builder 两处都裁），原先只查前者（那里只有 1 个 `en.lproj`，看不到主体）；改为两处合并去重后核对，并加判定：缺中文报错（提示配置要同时列 `zh-CN` 与 `zh_CN`）、出现第三种语言报错。本机无 macOS，用假 `.app` 目录树把 `platform` 顶成 `darwin` 跑通三种情形（en + zh_CN 通过 / 只有 en 报错 / 混入 fr 报错）。
+- [x] **Linux 只瘦 2 MB 的疑点查清**：不是打包器排除了 locales（CI 日志确认 linux-unpacked 已裁到 `en-US.pak / zh-CN.pak`），而是 **Linux 版 Electron 的语言包天生就小**。用 HTTP Range 取官方发行包（`electron-v44.4.1-*.zip`，只下载末尾的中央目录几十 KB）实测：语言资源未压缩 Windows 48.3 MB（55 个 `.pak`）/ macOS 48.0 MB（495 个 `.lproj` 文件 = 55 语言 × 9）/ **Linux 8.6 MB**，zip 包内压缩后依次 12.3 / 12.4 / 2.6 MB。裁剪收益与这三个数一一对应——Windows zip 瘦的 22.7 MB ≈ 语言包 12.3 + 删掉的三个 dll 约 11.8；mac zip 瘦的 12 MB ≈ 语言包；Linux deb 瘦 2.0 / AppImage 瘦 2.5 MB ≈ 语言包 2.6。（探针：`tmp/probe-electron-zip.cjs`，只取 zip 尾部中央目录，不下载整包。）
+- [ ] **平台特定组件的删除（macOS / Linux）待定**——本轮只上 locales（用户决策）。探针顺带取到的数据：mac 的 `libvk_swiftshader.dylib` 15.8 MB 未压缩 / 6.3 MB 压缩后（比 Windows 的 `vk_swiftshader.dll` 5.3 / 2.1 大得多，是各平台里最大的一块软渲染）、Linux 的 `libvk_swiftshader.so` 4.4 / 1.7 MB；macOS 发行包里没有 `dxcompiler.dll`（DirectX 专属）。删不删、删了在无 GPU 的 mac / Linux 上是否安全，等各自平台实机实测再定。
