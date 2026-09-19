@@ -317,8 +317,20 @@ test('assertBaseUrl：藏在地址里的不可见字符也拦下（它们不报�
       `含不可见字符的地址应被拦下：${JSON.stringify(bad)}`
     );
   }
-  // 首尾的半角空格与 Tab 是 URL 标准自己会去掉的，照旧放行（只提示日志脱敏可能失效）
-  assert.strictEqual(dictAuto.assertBaseUrl('  https://gw.example.com/v1\t').host, 'gw.example.com');
+  // 首尾的半角空格与 Tab 是 URL 标准自己会去掉的，照旧放行（只提示日志脱敏可能失效）。
+  // 这条提示要断言，但不能让它直接打到 stdout：`::warning::` 是工作流命令，CI 日志里会读成
+  // 「AI_BASE_URL 配错了」——那只是本用例的假地址，且默认 reporter 把它当注释原样带进日志，
+  // 换 reporter 时更会被 GitHub 当成一条真注解。截下来断言，日志里就干净了。
+  const warns = [];
+  const origWarn = console.warn;
+  console.warn = (m) => warns.push(m);
+  try {
+    assert.strictEqual(dictAuto.assertBaseUrl('  https://gw.example.com/v1\t').host, 'gw.example.com');
+  } finally {
+    console.warn = origWarn;
+  }
+  assert.strictEqual(warns.length, 1, '应提示一次');
+  assert.match(warns[0], /^::warning::AI_BASE_URL 首尾有空白字符/);
   // 串内的制表符 / 换行也一样：标准会把它们从整串里删掉（粘贴时折行很常见），拦下来是误伤
   assert.strictEqual(dictAuto.assertBaseUrl('https://gw.exam\nple.com/v1').host, 'gw.example.com');
   // 汉字域名、路径里的中文属字母类，不受这条判据影响（域名会按 IDNA 转成 punycode）
