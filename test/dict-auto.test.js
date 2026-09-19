@@ -277,6 +277,66 @@ test('isEcho：译文不同、为空或非字符串时都不算原样返回', ()
   assert.ok(!dictAuto.isEcho('GitHub desktop', 'GitHub Desktop'));
 });
 
+// ============================ AI 配置校验与失败原因 ============================
+
+test('assertBaseUrl：合法地址放行', () => {
+  assert.strictEqual(dictAuto.assertBaseUrl('https://gw.example.com/v1').host, 'gw.example.com');
+  assert.strictEqual(dictAuto.assertBaseUrl('http://127.0.0.1:8080').protocol, 'http:');
+});
+
+test('assertBaseUrl：拼错的地址报可操作的错，且不回显地址本身', () => {
+  // 这几种是复制粘贴配置时最常见的三种错法。它们的症状原本是「每条文案都失败一遍、
+  // 最后以未译 100% 收场」——报错只写 Invalid URL，看不出该去查哪个配置
+  for (const bad of ['gw.example.com/v1', '"https://gw.example.com"', 'https://gw.example.com /v1']) {
+    assert.throws(
+      () => dictAuto.assertBaseUrl(bad),
+      (e) => /AI_BASE_URL/.test(e.message) && !e.message.includes(bad),
+      `${bad} 应被拦下，且报错里不能带出地址值（AI_BASE_URL 是 Secret，注解与日志公开可见）`
+    );
+  }
+  // 协议不对的情况给出实际协议，便于判断是漏了前缀还是写成了别的协议
+  assert.throws(() => dictAuto.assertBaseUrl('ftp://gw.example.com'), /ftp/);
+});
+
+test('redact：抹掉服务地址与密钥，短串不误伤', () => {
+  const base = 'https://gw.example.com/v1';
+  const key = 'sk-1234567890abcdef';
+  // net.js 的报错大多以「……：<URL 或主机名>」收尾，直接进注解就等于把地址公开
+  assert.strictEqual(
+    dictAuto.redact(`请求超时（120 秒无响应）：${base}/chat/completions`, [base, key]),
+    '请求超时（120 秒无响应）：***/chat/completions'
+  );
+  assert.strictEqual(dictAuto.redact(`HTTP 401：${key} 无效`, [base, key]), 'HTTP 401：*** 无效');
+  // 太短的值不替换：它在正常文本里误伤的概率大于它是真凭据的概率
+  assert.strictEqual(dictAuto.redact('模型 deepseek-v4 不可用', ['deep', base]), '模型 deepseek-v4 不可用');
+});
+
+test('collapseReasons：同因合并计数、多的在前、只留前几条', () => {
+  const rows = [
+    { reason: 'Invalid URL' }, { reason: 'Invalid URL' }, { reason: 'Invalid URL' },
+    { reason: '译文为空' }, { reason: '译文为空' },
+    { reason: '占位符不一致（原文 {{count}}，译文 无）' },
+    { reason: '译文里没有中文："Hello"' },
+    { reason: '模型未返回 JSON：{}' },
+  ];
+  const s = dictAuto.collapseReasons(rows, []);
+  // 门槛只报「未译 7 条」时看不出主因是哪一类；条数排序让主因排在最前
+  assert.ok(s.startsWith('Invalid URL ×3；译文为空 ×2；'), s);
+  assert.strictEqual(s.split('；').length, 3, '默认只留 3 类');
+  assert.strictEqual(dictAuto.collapseReasons(rows, [], 5).split('；').length, 5);
+  // 多行 / 超长的原因要压成一行：它最终会进注解与 step summary，换行会把汇总截断
+  assert.strictEqual(dictAuto.collapseReasons([{ reason: 'HTTP 500：\n 第一行\n第二行' }], []), 'HTTP 500： 第一行 第二行');
+  assert.ok(dictAuto.collapseReasons([{ reason: 'x'.repeat(300) }], []).length <= 161);
+});
+
+test('failureText：有原因明细时结论后面跟上它', () => {
+  assert.strictEqual(dictAuto.failureText({ reason: '未译 11/11 条（100%）超过上限 30%' }), '未译 11/11 条（100%）超过上限 30%');
+  assert.strictEqual(
+    dictAuto.failureText({ reason: '未译 11/11 条（100%）超过上限 30%', reasonDetail: 'Invalid URL ×11' }),
+    '未译 11/11 条（100%）超过上限 30%——Invalid URL ×11'
+  );
+});
+
 // ============================ AI 请求接线（本地假服务器）============================
 
 // 起一个假 chat/completions，把收到的请求交给 handler。

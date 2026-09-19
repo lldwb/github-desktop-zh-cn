@@ -33,6 +33,10 @@
 # 不放大超时的话每批都会超时并退化成逐条重试（更慢，请求数还翻倍）。
 # **配置不全就直接失败**（三项必配），不降级成「只继承不新译」——残缺字典一旦落盘，下次重跑会因
 # 「已有字典」跳过，把残缺永久固化下来（脚本内部的「失败即删」防的也是这件事）。
+# **地址拼错同样直接失败**（AI_BASE_URL 得是带 http(s):// 前缀的绝对地址）：拼错时每条文案都会
+# 各失败一遍、最后以「未译 100%」收场，症状离原因很远——所以预检拦一次、脚本发请求前再拦一次，
+# 两处都只判形态、不回显值（该值是 Secret）。失败原因（地址错 / 鉴权失败 / 超时……）随结论一起
+# 写进注解、step summary 与提交信息，不必翻日志才对得上号。
 # 需要离线排查时用本地 `node scripts/dict-auto.js --no-ai`。
 
 name: 字典自动更新
@@ -92,6 +96,13 @@ jobs:
             echo "::error::翻译服务配置不全——自动产出必须能翻译官方新增文案，不能降级成只继承。三项必配：AI_BASE_URL、AI_API_KEY 在 Secrets 页，AI_MODEL 在 Variables 页（两处不在同一个地方，容易漏）。配置方法见 docs/dict-v2/design.md「CI 定时字典」一节"
             exit 1
           fi
+          # 地址不是绝对 URL 时，脚本会对每条文案各失败一次，最后以「未译 100% 超过上限」收场——
+          # 症状离原因很远，得翻日志才看得出是地址拼错了。这里先拦一次，两秒出结论。
+          # 只判前缀、不回显值：AI_BASE_URL 是 Secret，公开仓库的日志与注解人人可见
+          case "${AI_BASE_URL,,}" in
+            http://*|https://*) ;;
+            *) echo "::error::AI_BASE_URL 不是以 http:// 或 https:// 开头的绝对地址（该值本身已脱敏，请到 Secrets 页核对：常见原因是漏了前缀、整段被引号包住、或混进了空格/全角字符）"; exit 1 ;;
+          esac
           # AI_BASE_URL 是 Secret，这里会显示成 *** 而不是地址——那是脱敏，不是没配上
           echo "翻译服务：${AI_BASE_URL:-（默认）} / 模型 ${AI_MODEL:-（默认）} / 思考强度 ${AI_REASONING_EFFORT:-low（脚本默认）} / 单次超时 ${AI_TIMEOUT_SEC:-120（脚本默认）} 秒"
 
@@ -177,7 +188,7 @@ jobs:
               `新增 ${p.added} 条（译出 ${p.translated || 0}、判定无需翻译 ${p.echoed || 0}、未译 ${p.untranslated}），` +
               `官方已删除 ${p.dropped} 条；分段 common ${p.counts.common} / macos ${p.counts.macos}`
             );
-            for (const p of failed) body.push(`- ${p.version}：产出失败——${p.reason}`);
+            for (const p of failed) body.push(`- ${p.version}：产出失败——${p.reason}${p.reasonDetail ? `（${p.reasonDetail}）` : ""}`);
             fs.writeFileSync("tmp/dict-auto-message.txt", `${title}\n\n${body.join("\n")}\n`);
             console.log(fs.readFileSync("tmp/dict-auto-message.txt", "utf8"));
           '
@@ -197,8 +208,8 @@ jobs:
               for (const p of r.reports) {
                 if (p.skipped) out.push(`跳过 ${p.version}：${p.reason}`);
                 else if (p.diffMode) out.push(`对比 ${p.version}（磁盘未改动）：新增 ${p.diff.addedCount} / 删除 ${p.diff.removedCount} / 译文变化 ${p.diff.changedCount} / 换段 ${p.diff.movedCount} / 组归属变化 ${p.diff.groupsChangedCount}`);
-                else if (p.ok) out.push(`成功 ${p.version}：common ${p.counts.common} / macos ${p.counts.macos}，新译 ${p.translated || 0}，无需翻译 ${p.echoed || 0}，未译 ${p.untranslated}`);
-                else out.push(`失败 ${p.version}：${p.reason}`);
+                else if (p.ok) out.push(`成功 ${p.version}：common ${p.counts.common} / macos ${p.counts.macos}，新译 ${p.translated || 0}，无需翻译 ${p.echoed || 0}，未译 ${p.untranslated}${p.reasonDetail ? `（${p.reasonDetail}）` : ""}`);
+                else out.push(`失败 ${p.version}：${p.reason}${p.reasonDetail ? `——${p.reasonDetail}` : ""}`);
               }
               console.log(out.join("\n"));
               require("fs").appendFileSync(process.env.GITHUB_STEP_SUMMARY, "## 字典产出\n\n" + out.map((l) => "- " + l).join("\n") + "\n");

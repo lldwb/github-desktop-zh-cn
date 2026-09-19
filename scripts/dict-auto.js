@@ -360,6 +360,26 @@ function resolveEffort(spec) {
   return v === 'none' ? '' : v;
 }
 
+// 地址不合法时，每次请求都会在 net.js 的 `new URL()` 上抛 "Invalid URL"：两批 + 逐条重试
+// 会把这个同一个错误重复几十遍，日志里只留下满屏重复、看不出该去查哪个配置。在这里一次拦住，
+// 并直接说出该怎么改。**不回显地址本身**——AI_BASE_URL 是私密配置，而注解与 step summary
+// 在公开仓库上人人可见（日志里它会被 GitHub 脱敏成 ***，别指望别处也有这层）。
+function assertBaseUrl(base) {
+  let u;
+  try {
+    u = new URL(base);
+  } catch {
+    throw new Error(
+      'AI_BASE_URL 不是合法 URL：需要形如 https://主机/路径 的绝对地址' +
+        '（常见原因：漏了 http(s):// 前缀、整段被引号包住、混进了空格或全角字符）'
+    );
+  }
+  if (u.protocol !== 'http:' && u.protocol !== 'https:') {
+    throw new Error(`AI_BASE_URL 的协议是 ${u.protocol.replace(':', '')}，只支持 http / https`);
+  }
+  return u;
+}
+
 const SYSTEM_PROMPT = `你是 GitHub Desktop 中文汉化字典的译者。用户给你一批界面文案，你返回它们的简体中文译文。
 
 硬性要求：
@@ -536,6 +556,39 @@ async function translateAll(candidates, cfg, log) {
   }
   return { done, failed, echoed };
 }
+
+// 失败原因常把接口地址原样带出来：net.js 的报错大多以「……：<URL 或主机名>」收尾
+// （HTTP 401、请求超时、连接被拒绝都如此）。这些文本要写进注解、step summary 与提交信息，
+// 公开仓库上人人可见，所以进任何对外文本之前先替换掉。太短的值不参与替换——它在正常文本里
+// 误伤的概率大于它是真凭据的概率。
+function redact(text, secrets) {
+  let out = String(text ?? '');
+  for (const s of secrets) {
+    if (s && s.length >= 8 && out.includes(s)) out = out.split(s).join('***');
+  }
+  return out;
+}
+
+// 把「为什么全都没译出来」压成一行：同因合并计数、按条数排序、只留前几条。
+// 门槛只报「未译 11/11 条（100%）」时，看的人不知道是地址错、鉴权错还是模型不听话——
+// 而这三种的处理方式完全不同，所以原因必须跟结论一起出现。
+function collapseReasons(rows, secrets, limit = 3) {
+  const merged = new Map();
+  for (const r of rows) {
+    const text = redact(r.reason || '（无原因）', secrets).replace(/\s+/g, ' ');
+    const key = text.length > 160 ? `${text.slice(0, 160)}…` : text;
+    merged.set(key, (merged.get(key) || 0) + 1);
+  }
+  return [...merged]
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, limit)
+    .map(([text, n]) => (n > 1 ? `${text} ×${n}` : text))
+    .join('；');
+}
+
+// 失败条目的统一文案：结论 + 原因明细。只报「未译 11/11 条（100%）超过上限 30%」时，
+// 看的人不知道是地址错、鉴权错还是模型不听话——三种的处理方式完全不同。
+const failureText = (r) => (r.reasonDetail ? `${r.reason}——${r.reasonDetail}` : r.reason);
 
 // ============================ 干跑校验 ============================
 
@@ -800,6 +853,8 @@ async function buildOne(version, args, log) {
           '需要翻译但没有 AI 配置：请设置 AI_BASE_URL / AI_API_KEY / AI_MODEL 环境变量，或用 --no-ai 只做继承'
         );
       }
+      // 发请求之前先校验地址：拼错了就是几十次同样的失败，等失败回来再说就晚了
+      assertBaseUrl(base);
       const effort = resolveEffort(args.aiEffort ?? process.env.AI_REASONING_EFFORT);
       const timeout = resolveTimeout(args.aiTimeout || process.env.AI_TIMEOUT_SEC);
       const cfg = { base, key, model, effort, timeout, examples: buildExamples(table) };
@@ -817,6 +872,10 @@ async function buildOne(version, args, log) {
       report.translatedRows = [...done].map(([item, zh]) => ({ text: item.text, zh }));
       report.untranslated = failed.length;
       report.untranslatedRows = failed.map((it) => ({ text: it.text, reason: it.reason }));
+      if (failed.length) {
+        report.reasonDetail = collapseReasons(report.untranslatedRows, [base, key]);
+        log(`  未译原因：${report.reasonDetail}`);
+      }
       // 无需翻译的条目单列：它们既不算译出也不算未译，但要留痕——AI 若成片原样返回，
       // 这里就是唯一能看出来「它是在偷懒还是在正确地放过专有名词」的地方
       report.echoed = echoed.length;
@@ -985,7 +1044,7 @@ async function main() {
       }
       reports.push(r);
       if (r.skipped) console.log(`跳过：${r.reason}`);
-      else if (!r.ok) console.error(`::error::${version} 产出失败：${r.reason}`);
+      else if (!r.ok) console.error(`::error::${version} 产出失败：${failureText(r)}`);
     }
   } catch (e) {
     console.error(`错误：${e.message}`);
@@ -1015,7 +1074,7 @@ async function main() {
         `译文变化 ${c.changedCount} / 换段 ${c.movedCount} / 组归属变化 ${c.groupsChangedCount}`
     );
   }
-  for (const r of failed) console.log(`  ${r.version}：失败——${r.reason}`);
+  for (const r of failed) console.log(`  ${r.version}：失败——${failureText(r)}`);
 
   writeReport(args.report, { ok: failed.length === 0, reports });
   if (failed.length) process.exit(1);
@@ -1033,6 +1092,7 @@ module.exports = {
   main, buildOne, resolveVersions, inheritTable, literalIndex, resolveIn,
   buildCandidates, toSegments, dryRunPlatform, buildExamples, rejectReason, placeholdersOf,
   resolveTimeout, resolveEffort, isEcho, translateBatch,
+  assertBaseUrl, redact, collapseReasons, failureText,
   diffDicts, shapeDiff, segmentIndex, groupIndex, parseArgs,
   BATCH_SIZE, AI_EFFORT, AI_TIMEOUT, MIN_HIT_RATE, MAX_UNTRANSLATED_RATE,
   ON_EXIST, ON_EXIST_MODES, DIFF_LIMIT,
