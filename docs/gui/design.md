@@ -9,6 +9,7 @@
 | A：Node 内置 http + 系统浏览器 | `node:http` 起本地服务，浏览器打开页面 | 高（零依赖、单文件产物不变、三平台 CI 不动） | 窗口是浏览器形态（地址栏 / 标签页），非原生窗口 | 不采用：用户明确选择原生窗口 |
 | B：**Electron 原生窗口** | 引入 electron，自绘窗口 + 主进程复用 `scripts/` | 高（**已实测**：Electron 44.4.1 在本机 `--version` 正常，exit 0） | 打破仓库三条硬约束：引入 npm 依赖、产物不再是单文件（约 200MB 目录）、CI 需另加打包步骤 | **采用** |
 | C：C# / WPF（与参考工具同栈） | 照 `GithubDesktopZhTool.exe` 的技术栈 | Windows 专属 | 跨平台破坏（仓库支持 Win/macOS/Linux）、需新工具链、业务逻辑须重写一份 | 不采用 |
+| D：**系统 WebView 形态**（Tauri / Wails） | 不自带 Chromium，用系统 WebView2 / WKWebView / WebKitGTK 渲染，主进程仍复用 `scripts/` | 未评估 | GUI 层须重写（渲染进程与主进程的通信、打包链路、CI 全部换一套）；三平台 WebView 版本不一，行为差异要各自验证 | **留待下次重构时评估**——本次不采用的理由不是「不好」，而是它与「压缩」是两回事：产物能从 81 MB 降到 10 MB 级，但那是换运行时基底，不是把现有产物压小（详见「体积」一节） |
 
 **代价的处置（把影响面压到最小）**：新增形态，**不动**现有 CLI、SEA 产物与 CI 矩阵；Electron 仅作 `devDependencies`，`scripts/bundle.js` 的静态 `require` 收集不扫描 `gui/`（其入口是 `gui/main.js`，不经 bundler），故 SEA 打包链完全不受影响。
 
@@ -33,6 +34,17 @@ ELECTRON_BUILDER_BINARIES_MIRROR=https://registry.npmmirror.com/-/binary/electro
 ```
 
 **免安装包为什么用压缩包而不是 electron-builder 的 portable 目标**：portable 版运行时会把自身解压到临时目录再启动，`process.execPath` 指向那个临时位置，于是 `dataRoot()` 会把备份与 `config.json` 写进临时目录（退出后可能被清理）。压缩包（Windows 是 7z）解压后 `process.execPath` 就在解压目录里，与 NSIS 安装版语义一致。压缩格式选 7z 而不是 zip 是体积使然——zip 的 deflate 压不进 Gitee 的 100 MB 附件上限，同一份内容 7z 81.2 MB / zip 123.6 MB，见 [docs/打包与分发.md](../打包与分发.md)「常见问题」。
+
+### 体积：Electron 这条路的内容侧已经到底
+
+压缩算法与产物形态换完之后（根级 `compression: maximum`、Windows 改 7z、mac 只发 dmg），体积落点由**内容**决定，而内容侧实测已无空间。逐项压测（每项单独 `7z -mx=9 -m0=lzma2`，看各自对最终包的贡献）：
+
+- **主程序 `GitHubDesktopZhTool.exe` 单独压 = 67.4 MB，占整包 81.2 MB 的 83%**；`resources.pak` 12.3 MB 占 15%，**且几乎压不动**（12435 KB → 12319 KB）。两者合计 98%。
+- 其余全是配菜：`icudtl.dat` 3.4、`d3dcompiler_47.dll` 1.6、`ffmpeg.dll` 0.9、`dxil.dll` 0.5、`vulkan-1.dll` 0.3（单位 MB，均指压缩后）。全删也只省 2.4 MB。
+- `LICENSES.chromium.html` 未压缩 20.5 MB 看着最扎眼，**xz 后只剩 0.19 MB**——删它省不下 0.2 MB，还要担合规风险（Chromium 许可要求分发时附带），**不删**。
+- `d3dcompiler_47.dll` **删不得**：本机（有 GPU）实测删掉后冒烟仍 `SMOKE_OK`、退出码 0，但 `gpu_compositing` / `webgl` 从 `enabled` 掉到 `disabled_software` / `disabled_off`——硬件加速失效。**CI 四平台冒烟测不出这类退化**（runner 本来就没 GPU，`disabled_software` 是常态），涉及硬件能力的组件必须在**有该硬件的机器**上对照这两项状态才算验过。
+
+**要再降一个量级只能换运行时基底**（上表方案 D：Tauri / Wails 这类用系统 WebView 的形态，产物可到 10 MB 级）——那是重写 GUI 层，不是把现有产物压小，**留待下次重构时评估**。本次的取舍是：在 Electron 形态内把压缩做到零取舍的极限（六个产物五个已进 Gitee 的 100 MB 上限），不为最后 2.5 MB 牺牲硬件加速或合规性。
 
 ## 选定方案
 

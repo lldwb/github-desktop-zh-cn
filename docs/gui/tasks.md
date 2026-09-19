@@ -150,3 +150,24 @@
 - [x] **本机实测**：`npm run dist` 产出 7z **81.2 MB**（比手工 `7z -mx=9` 压的 84.3 MB 还小 3 MB）、NSIS **90.8 MB**；`node build/check-gui-dist.js` 全绿；打包态冒烟通过。**7z 产物解压验证**：用 electron-winstaller 自带的 `7z-x64.exe x` 解出 22 个文件（`Everything is Ok`），解压目录跑 `--smoke-test` 得 `SMOKE_OK … dataRoot="…\tmp\7z-test"`——**数据根落在解压目录**，正是免安装包「解压即用、数据跟着包走」的设计行为。
 - [x] **run#20 四平台 CI 实测**（`compression: maximum` + 7z + mac 只发 dmg 一起上）：Windows **7z 81.2 ✓** / setup 90.8 ✓、macOS arm64 dmg **95.9 ✓** / x64 dmg 102.5 ✗、Linux AppImage **91.6 ✓** / deb 91.1 ✓。**超 100 MB 的产物从 6 个降到 1 个**（只剩 macOS Intel 的 dmg，超出 2.5 MB）。四个平台自检与冒烟全绿（`gpu_compositing` 状态与 run#18 一致，说明冒烟判据在换压缩算法后仍稳）。
 - [x] **文档同步**：`README.md`（产物形态与免安装包说明）、`AGENTS.md`（`npm run dist` 注释、产物去处段落、Gitee 配额段落的三处体积数字）、`docs/打包与分发.md`（产物矩阵表、portable 段落、打包配置小节补 `compression` 与两个 target 的理由、Gitee 段落、检查清单、常见问题第一条的体积与算法说明）。
+
+### 内容侧还能压多少（实测后结论：到底了）
+
+算法与形态换完之后，问题变成「再删文件还能挤出多少」。逐项实测（本机 win-unpacked，每项单独 `7z -mx=9 -m0=lzma2` 压一遍，看**各自对最终包的贡献**——未压缩大 ≠ 压缩后占得多）：
+
+| 文件 | 未压缩 | 7z 后 | 占整包 |
+| --- | --- | --- | --- |
+| `GitHubDesktopZhTool.exe` | 246.3 MB | **67.4 MB** | **83%** |
+| `resources.pak` | 12.4 MB | **12.3 MB** | 15% |
+| `icudtl.dat` | 10.9 MB | 3.4 MB | 4.2% |
+| `d3dcompiler_47.dll` | 4.7 MB | 1.6 MB | 1.9% |
+| `ffmpeg.dll` | 3.1 MB | 0.9 MB | 1.2% |
+| `dxil.dll` | 1.5 MB | 0.5 MB | 0.6% |
+| `vulkan-1.dll` | 0.9 MB | 0.3 MB | 0.3% |
+| `LICENSES.chromium.html` | 20.5 MB | **0.19 MB** | 0.2% |
+
+- [x] **主程序占 83%、`resources.pak` 占 15%（且几乎压不动：12435 KB → 12319 KB）——两者合计 98%**，其余全是配菜：把 `dxil.dll` + `vulkan-1.dll` + `d3dcompiler_47.dll` 全删也只省 2.4 MB（压缩后）。
+- [x] **`LICENSES.chromium.html` 是反直觉的坑**：未压缩 20.5 MB 看着最扎眼，xz 后只剩 0.19 MB（高度重复的文本，算法已吃掉 99%）——删它省不下 0.2 MB，还要担合规风险（Chromium 许可要求分发时附带）。**结论：不删**。
+- [x] **`d3dcompiler_47.dll` 删不得，本机实测拿到反证**：删掉后冒烟**仍打印 `SMOKE_OK`、退出码 0**，但 GPU 状态从 `gpu_compositing=enabled` / `webgl=enabled` **掉到 `disabled_software` / `disabled_off`**——有 GPU 的机器上硬件加速直接失效。**这正是 CI 四平台冒烟测不出来的那类退化**：runner 本来就没 GPU，`disabled_software` 是它的常态，删与不删输出一模一样。教训记下来——**冒烟护栏能证明「删了能启动」，证明不了「删了不掉性能」**，涉及硬件能力的组件要在**有该硬件的机器**上对照 `gpu_compositing` / `webgl` 两项状态才算验过（本次删 d3dcompiler 的对照就靠这两项状态前后对比抓出来）。
+- [x] **结论：Electron 这条路的内容侧已经到底**。要再降一个量级只能换运行时基底（不自带 Chromium，改用系统 WebView 的 Tauri / Wails 形态，产物可到 10 MB 级）——那是重写 GUI 层、不是压缩，**留待下次重构时评估**（已记入 `design.md` 的方案对比表与 `docs/打包与分发.md`「常见问题」）。
+- [x] 实测用的临时目录（`tmp/cut-test` / `tmp/pack-probe`）已清理。
