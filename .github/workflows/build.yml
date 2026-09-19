@@ -120,7 +120,7 @@ jobs:
           path: dist/*
           if-no-files-found: error
 
-  # GUI 产物：Electron 打包，每平台一套（Windows 安装包 + zip / macOS dmg + zip / Linux AppImage + deb）。
+  # GUI 产物：Electron 打包，每平台一套（Windows 安装包 + 7z / macOS dmg / Linux AppImage + deb）。
   # 每平台构建后跑两道验证——静态自检（结构 / 语言包裁剪 / 体积）与产物启动冒烟（真的起一次窗口），
   # 都过了才上传，免得「构建成功但产物缺东西或起不来」混进 Release。
   gui:
@@ -198,7 +198,7 @@ jobs:
           # 只收最终产物，不收 win-unpacked / mac / linux-unpacked 这些中间目录
           path: |
             dist/gui/*.exe
-            dist/gui/*.zip
+            dist/gui/*.7z
             dist/gui/*.dmg
             dist/gui/*.AppImage
             dist/gui/*.deb

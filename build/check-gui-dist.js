@@ -218,10 +218,9 @@ function checkLinux() {
 //（<项目名>-gui-v<版本>-<平台>-<架构>…，规范见 AGENTS.md「发版」一节）。
 // 顺带把每个产物的体积打进日志——「跑一次 CI 看四平台体积」靠的就是这里，不必下载附件；
 // 超 100 MB 只告警不判失败（CI 上打成 ::warning:: 注解，本地是一行提示）：Gitee 附件单文件
-// 上限 100 MB（见 AGENTS.md「发版」），但 zip 免安装包受 deflate 限制本就压不进 100 MB（见
-// docs/打包与分发.md）。
+// 上限 100 MB（见 AGENTS.md「发版」）。各平台产物形态与压缩算法见 electron-builder.yml。
 function checkArtifacts() {
-  const files = listDir(OUT).filter((f) => /\.(exe|zip|dmg|AppImage|deb)$/.test(f));
+  const files = listDir(OUT).filter((f) => /\.(exe|zip|7z|dmg|AppImage|deb)$/.test(f));
   if (!files.length) {
     bad('dist/gui 下没有任何可分发产物（只有中间目录？）');
     return;

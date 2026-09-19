@@ -8,7 +8,8 @@
 #      common.dataRoot() 与字典查找逻辑零改动。
 #   2. 不做 portable 目标：portable 版运行时会把自己解压到临时目录，process.execPath
 #      指向那个临时位置，dataRoot() 会把备份与 config.json 写进临时目录里。
-#      免安装需求由 zip 目标满足——解压即用，数据根就落在解压目录。
+#      免安装需求由 7z 目标满足（Windows；解压即用，数据根就落在解压目录），macOS 是 dmg、
+#      Linux 是 AppImage，都是「取来即用、不改系统」的形态。
 #   3. macOS 不做代码签名（identity: null）：本仓库没有证书。未签名产物的打开方式见 README「方式一」。
 #   4. 本文件里**没有** publish 配置，且 package.json 的 dist 脚本固定带 `--publish never`：
 #      electron-builder 26 只要在 CI 上跑就隐式开发布（检出 tag 时按 onTag、仅检测到 CI 时按
@@ -38,6 +39,18 @@ directories:
   output: dist/gui
   buildResources: build
 
+# 压缩级别：本仓库**必须**显式设 maximum，否则各目标会落在各自的「默认」上，而那几个默认
+# 差别很大（实测同一份 win-unpacked 内容）：
+#   NSIS 安装包  90.7 MB（载荷本就是 7z/LZMA，不受此项影响）
+#   deb          91.1 MB（fpm 默认就是 xz）
+#   AppImage    115.2 MB ← 根级 compression 未设时 AppImageTarget 传给 mksquashfs 的是
+#                undefined，而 mksquashfs 默认 gzip——同一份内容比 deb 胖 24 MB，纯粹是算法差异
+#   dmg          UDZO（zlib）→ 设 maximum 后变 UDBZ（bzip2）
+# 设成 maximum 后：AppImage 走 xz、dmg 走 UDBZ、deb 仍是 xz、NSIS 不受影响。零取舍。
+# （依据：app-builder-lib/out/targets/appimage/AppImageTarget.js 的压缩选择分支、
+#   dmg-builder/out/dmg.js 的 format 决策、FpmTarget.js 的 defaultCompression。）
+compression: maximum
+
 # 产物命名与单文件产物（SEA）同一套词序：<name>-<通道>-v<版本>-<平台>-<架构>[...-setup].<扩展名>
 # 通道词 gui 紧跟项目名（单文件产物是 cli，见 scripts/build.js）——附件列表里同类相邻、一眼分得出
 # 用 ${platform}（darwin / win32 / linux）而不是 ${os}（mac / win / linux），与 SEA 产物的平台词一致
@@ -62,8 +75,11 @@ electronDownload:
 
 win:
   target:
+    # 7z 免安装包：zip 受 deflate 硬限制压不进 100 MB（主程序单文件就占压缩后的 83%），
+    # 同一份内容 7z 实测 84.3 MB（zip 123.6 MB）——本机实测数据与理由见 docs/打包与分发.md。
+    # 7z 是 electron-builder 的一等 target（archiveTargets），Windows 11 原生支持解压。
     - nsis
-    - zip
+    - 7z
 
 nsis:
   oneClick: false
@@ -77,8 +93,9 @@ nsis:
 
 mac:
   target:
+    # 只出 dmg，不出 zip：两者装的是同一份 .app，zip 那份纯属重复附件（dmg 本身就能挂载取用）。
+    # 少一个附件就少一份 100+ MB 的下载量，也少一份要传的字节。
     - dmg
-    - zip
   category: public.app-category.developer-tools
   identity: null
 
