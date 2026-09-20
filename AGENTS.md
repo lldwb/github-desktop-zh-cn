@@ -187,7 +187,7 @@ node tools/ops/check-naming.cjs              # pickAsset 只挑 cli 产物（回
 4. 打注解 tag：`git tag -a vX.Y.Z -m "vX.Y.Z: <一句话说明>"`；
 5. tag 与 main 一并推送：`git push origin main --follow-tags`（`--follow-tags` 只带注解 tag，与上面的 `-a` 配套）。发版推送是**用户明确要求的动作**，与「提交规范」里「不自动 push」不冲突——日常提交仍只落本地；
 6. CI（`.github/workflows/build.yml`）随即构建各平台产物并发 Release——单文件产物与 GUI 产物**两类都发**（四个平台、共十余个附件，见上「产物去处」），**正文取自 `CHANGELOG.md` 对应段落**（`tools/changelog.js` 提取，不是自动生成的变更列表）；GUI 产物随 Release 分发是既定行为，改 `gui/` 或 `electron-builder.yml` 后发版即自动带上。
-7. **发版后真机验证更新链路**（v0.4.0 实测教训：自更新从 v0.1.1 起就没装成过、两个版本无人发现，直到「测试更新功能」才暴露）：Release 就绪后，在打包产物上实跑一遍「检查更新 → 下载 → 替换」，确认**下载到的是产物不是 JSON / HTML**、版本号能更新、附件挑得对。方法：SEA 产物实测吃 `NODE_OPTIONS --require`，可挂代理预载（本机 `HTTPS_PROXY` 直连不通，见「已知坑」）走真网络；`isPackaged()` 的第一条判据是 `__BUNDLED__` 标志，拷一份 `node.exe` 伪装打包态即可在纯 Node 环境端到端（真下载、真替换、真重启），替换后与官方附件逐字节核对、`--version` 报新版本号。改 `scripts/update.js` / `gui/main.js` 后发版，这一步尤其不能省。
+7. **发版后真机验证更新链路**（v0.4.0 实测教训：自更新从 v0.1.1 起就没装成过、两个版本无人发现，直到「测试更新功能」才暴露）：Release 就绪后，在打包产物上实跑一遍「检查更新 → 下载 → 替换」，确认**下载到的是产物不是 JSON / HTML**、版本号能更新、附件挑得对。方法：SEA 产物实测吃 `NODE_OPTIONS --require`，可挂代理预载（本机 `HTTPS_PROXY` 直连不通，见「已知坑」）走真网络；`isPackaged()` 的第一条判据是 `__BUNDLED__` 标志，拷一份 `node.exe` 伪装打包态即可在纯 Node 环境端到端（真下载、真替换、真重启），替换后与官方附件逐字节核对；再不带参数跑一下，看交互菜单首行是不是新版本号（`echo 0 | ./产物`；产物只认子命令，**没有** `--version`，别照其他 CLI 的习惯找）。改 `scripts/update.js` / `gui/main.js` 后发版，这一步尤其不能省。
 
 **产物命名**（v0.2.0 起分 **cli / gui 两套**，通道词紧跟项目名、置于版本号之前）：
 
