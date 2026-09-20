@@ -11,6 +11,7 @@ const assert = require('node:assert');
 const fs = require('node:fs');
 const path = require('node:path');
 const { DICT_VERSION_RE, listDictVersions, dataRoot } = require('../../scripts/common');
+const scratch = require('../fixtures/scratch');
 
 test('DICT_VERSION_RE：只认三段数字', () => {
   for (const ok of ['3.6.6', '3.6.0', '0.0.0', '10.20.30']) {
@@ -21,19 +22,17 @@ test('DICT_VERSION_RE：只认三段数字', () => {
   }
 });
 
-test('listDictVersions：非版本形态的目录不算字典版本', () => {
+test('listDictVersions：非版本形态的目录不算字典版本', (t) => {
   // 夹具必须与真版本平级（dictionaries/<名字>/），才受同一套判据管辖——
   // 造深一层的话任何判据都不会收它，用例就成了空跑。
   const fixture = path.join(dataRoot(), 'dictionaries', '0.0.0-fixture');
+  // 清理走 scratch 约定（删除带门禁、断言失败也会执行），不再手写 try/finally
+  scratch.isolate(t, '0.0.0-fixture');
   fs.mkdirSync(fixture, { recursive: true });
   fs.writeFileSync(path.join(fixture, 'zh-CN.json'), JSON.stringify({ _meta: { formatVersion: 2 } }));
-  try {
-    assert.ok(fs.existsSync(path.join(fixture, 'zh-CN.json')), '夹具应已落盘');
-    assert.ok(fs.existsSync(path.join(dataRoot(), 'dictionaries', '3.6.6', 'zh-CN.json')), '真版本应同时在场');
-    assert.ok(!listDictVersions().includes('0.0.0-fixture'), '夹具目录不该出现在版本列表里');
-  } finally {
-    fs.rmSync(fixture, { recursive: true, force: true });
-  }
+  assert.ok(fs.existsSync(path.join(fixture, 'zh-CN.json')), '夹具应已落盘');
+  assert.ok(fs.existsSync(path.join(dataRoot(), 'dictionaries', '3.6.6', 'zh-CN.json')), '真版本应同时在场');
+  assert.ok(!listDictVersions().includes('0.0.0-fixture'), '夹具目录不该出现在版本列表里');
 });
 
 test('listDictVersions：真实版本仍能列出，且列表里没有非版本形态', () => {
