@@ -34,8 +34,8 @@ dictionaries/
 
 - **分段判据**：`common` 段对**所有平台**生效；平台段只对该平台生效。同名键同时在 `common` 与平台段时**平台段优先**（同一文案在不同平台语境不同的场合）。
 - **`linux` 段为空是预期**：官方从未发布 Linux 产物（近 30 个 release 的资产全为 Windows nupkg/exe/msi 与 macOS zip）。
-- **`groups` 只是分类参考**，不影响替换行为；由 `dict-groups.js` 读产物 sourcemap 推断源文件归属，未定位到的落「待分组」。
-- **唯一写入口是 `scripts/dict-edit.js`**（`add` / `update` / `remove` / `set-group` / `move` / `merge` / `regroup` / `migrate` / `apply`）：先校验再原子替换，校验不过时原文件保持不动。**别手工编辑这个 JSON**——手工改绕过校验，坏数据要等 `patch` 时才暴露。要重跑一个已有字典的版本，用 `dict-auto.js --on-exist=diff|overwrite`（`diff` 全程不写盘）。
+- **`groups` 只是分类参考**，不影响替换行为；由 `scripts/dict/dict-groups.js` 读产物 sourcemap 推断源文件归属，未定位到的落「待分组」。
+- **唯一写入口是 `scripts/dict/dict-edit.js`**（`add` / `update` / `remove` / `set-group` / `move` / `merge` / `regroup` / `migrate` / `apply`）：先校验再原子替换，校验不过时原文件保持不动。**别手工编辑这个 JSON**——手工改绕过校验，坏数据要等 `patch` 时才暴露。要重跑一个已有字典的版本，用 `scripts/dict/dict-auto.js --on-exist=diff|overwrite`（`diff` 全程不写盘）。
 
 ## 键形态与替换规则
 
@@ -52,7 +52,7 @@ dictionaries/
       "`${GE(e.length)} changed file${xU(e.length)}`": "`${GE(e.length)} 个更改的文件`"
     }
     ```
-- **作用域键**：`<文件名>.js|原文`（如 `renderer.js|en-US`）只对该文件生效，用于同一字面量在两个文件中语义不同的情况——`en-US` 在 renderer.js 是相对时间格式化的语言（改成 `zh-CN` 后「4 hours ago」变「4小时前」），在 main.js 是拼写检查的语言判断（必须保留）。应用时去掉前缀，统计按去前缀后的键合并。少数作用域键的由来要看产物才知道，**别凭「这个名字在主文件里没见过」当成冗余删掉**——如 `main.js|Delete`：官方 main.js 里 `Delete` 字面量 0 处，它只匹配注入块里的右键菜单标签（见 AGENTS.md 架构一节的 `scripts/context-menu.js`），删了右键菜单的「删除」就退回英文。
+- **作用域键**：`<文件名>.js|原文`（如 `renderer.js|en-US`）只对该文件生效，用于同一字面量在两个文件中语义不同的情况——`en-US` 在 renderer.js 是相对时间格式化的语言（改成 `zh-CN` 后「4 hours ago」变「4小时前」），在 main.js 是拼写检查的语言判断（必须保留）。应用时去掉前缀，统计按去前缀后的键合并。少数作用域键的由来要看产物才知道，**别凭「这个名字在主文件里没见过」当成冗余删掉**——如 `main.js|Delete`：官方 main.js 里 `Delete` 字面量 0 处，它只匹配注入块里的右键菜单标签（见 AGENTS.md 架构一节的 `scripts/inject/context-menu.js`），删了右键菜单的「删除」就退回英文。
 - **`_` 开头的键为元信息**（`_meta`），脚本读取时跳过，不影响替换。
 - **0 命中告警**：`patch` / `verify` 会列出两个文件中均未出现的条目——可能是条目失效或版本错配，需人工核对（已汉化状态不告警）。
 
