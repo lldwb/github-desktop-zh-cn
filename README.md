@@ -28,25 +28,31 @@ github-desktop-zh-cn/
 ├── .claude/skills/         # 翻译维护技能（补译与纠错的流程、判定标准与探针模板）
 ├── .github/workflows/      # CI：矩阵构建各平台产物；推 tag 自动发 Release
 ├── dictionaries/           # 语言字典（核心资产）：按版本目录组织，formatVersion 2 五段结构；
-│                           #   改字典一律走 scripts/dict-edit.js（唯一写入口，先校验再原子替换）
+│                           #   改字典一律走 scripts/dict/dict-edit.js（唯一写入口，先校验再原子替换）
 │   ├── 3.6.5/zh-CN.json    # 首个版本字典
 │   ├── 3.6.6/zh-CN.json    # 当前版本字典
 │   └── README.md           # 字典格式与贡献约定
-├── scripts/                # 补丁工具链（Node.js，零依赖）
+├── scripts/                # 运行时工具链（Node.js，零依赖；进 SEA bundle 与 Electron 应用包）
 │   ├── common.js           # 共享：定位 / 版本 / 字典 / 备份 / 扫描匹配器 / 逆向还原（SSOT）
-│   ├── locate.js           # 定位安装目录并备份
-│   ├── patch.js            # 按字典替换并写回
-│   ├── restore.js          # 还原官方原版（有备份用备份，没有则按字典逆向还原）
-│   ├── verify.js           # 校验版本、命中率与语法
-│   ├── scan.js             # 未翻译文案自查（读官方 sourcemap，输出待补清单）
 │   ├── net.js              # 零依赖 HTTPS 请求（下载字典 / 查更新 / 拉产物）
-│   ├── dict-sync.js        # 字典在线同步（缺失时下载、强制更新最新）
-│   ├── update.js           # 工具自更新（查 latest release → 下载 → 替换自身 → 重启）
-│   ├── restart.js          # 汉化 / 还原后重启 GitHub Desktop
 │   ├── cli.js              # 交互式中文菜单入口（SEA 产物的双击形态）
-│   ├── bundle.js           # 零依赖 CJS 单文件打包器
-│   ├── build.js            # 打包成单文件可执行（Node SEA）
-│   └── changelog.js        # 从 CHANGELOG.md 提取指定版本段落（发版用）
+│   ├── update.js           # 工具自更新（查 latest release → 下载 → 替换自身 → 重启）
+│   ├── cmd/                # 面向 GitHub Desktop 安装目录的操作（npm run 的对应项）
+│   │   ├── locate.js       # 定位安装目录并备份
+│   │   ├── patch.js        # 按字典替换并写回
+│   │   ├── restore.js      # 还原官方原版（有备份用备份，没有则按字典逆向还原）
+│   │   ├── verify.js       # 校验版本、命中率与语法
+│   │   ├── scan.js         # 未翻译文案自查（读官方 sourcemap，输出待补清单）
+│   │   └── restart.js      # 汉化 / 还原后重启 GitHub Desktop
+│   ├── dict/               # 字典资产工具链
+│   │   ├── dict-edit.js    # 字典的唯一写入口（增删改 / 分组 / 迁移，先校验再原子替换）
+│   │   ├── dict-groups.js  # 组名自动推断（按条目在 sourcemap 里的出处）
+│   │   ├── dict-auto.js    # 按官方新版本产物自动产出字典（AI 翻译 + 干跑校验）
+│   │   ├── dict-sync.js    # 字典在线同步（缺失时下载、强制更新最新）
+│   │   └── release-assets.js  # 官方产物按需提取（HTTP Range，不下载整包）
+│   └── inject/             # 往官方产物注入代码的补丁组（改逻辑不改文案）
+│       ├── context-menu.js    # 右键菜单汉化（按 role 重打标签，随 patch 生效）
+│       └── update-control.js  # 更新管控（禁止自动更新 / 没有字典就拦截）
 ├── gui/                    # 图形界面（Electron 原生窗口；业务逻辑仍来自 scripts/，无第二份实现）
 │   ├── main.js             # 主进程：窗口 + IPC（直接 require ../scripts 的模块）
 │   ├── preload.js          # contextBridge 暴露 window.api（渲染进程无 Node 能力）
@@ -55,12 +61,23 @@ github-desktop-zh-cn/
 │   └── style.css           # 样式
 ├── electron-builder.yml    # GUI 打包配置（npm run dist → dist/gui/）
 ├── build/                  # 构建期资源（electron-builder 的 buildResources）
-│   └── check-gui-dist.js   # GUI 产物静态自检（包结构 / 内置字典 / Windows 子系统），CI 与本地共用
+│   └── after-pack.js       # 打包钩子（electron-builder.yml 引用）：打包后删运行时组件
+├── tools/                  # 构建与发布工具（不进产物）
+│   ├── build.js            # 打包成单文件可执行（Node SEA）
+│   ├── bundle.js           # 零依赖 CJS 单文件打包器
+│   ├── changelog.js        # 从 CHANGELOG.md 提取指定版本段落（发版用）
+│   ├── check-gui-dist.js   # GUI 产物静态自检（包结构 / 内置字典 / Windows 子系统），CI 与本地共用
+│   └── ops/                # CI / Release 运维探针（匿名只读、参数化、自包含）
 ├── .npmrc                  # 构建期镜像（Electron 与 electron-builder 二进制走 npmmirror）
-├── test/                   # 匹配器单元测试（npm test）
+├── test/                   # 单元测试（npm test）：目录镜像 scripts/
+│   ├── common/             # 匹配引擎与逆向还原
+│   ├── dict/               # 字典工具链
+│   ├── inject/             # 注入块
+│   ├── fixtures/           # 夹具约定与清理助手
+│   └── update.test.js      # 自更新（镜像 scripts/ 顶层）
 └── docs/                   # 文档
     ├── 打包与分发.md        # 分发给普通用户：用法、构建、跨平台、常见问题
-    ├── gui/                # GUI 形态的方案 / 设计 / 任务清单
+    ├── design/             # 设计过程记录：gui/ 与 dict-v2/ 的方案 / 设计 / 任务清单
     └── README.md           # 文档索引
 ```
 
@@ -211,7 +228,7 @@ npm run scan           # 自查还有哪些界面文案没翻译（输出待补�
 - `patch` 前建议先 `patch --dry-run` 预览命中统计（不写盘）；
 - 替换前已自动备份：恢复官方版 = `npm run restore`（等价于把 `tmp/backup/<版本>/` 下的 `main.js` / `renderer.js` 复制回 `resources/app/`）；
 - `patch` 是**原地替换**：删掉或改掉字典条目后不会自动从产物里退出，必须先 `npm run restore` 再 `npm run patch` 重打；
-- 自动探测仅支持 Windows；macOS / Linux 或其他位置用 `--path <resources目录>` 显式指定（`node scripts/locate.js --path /path/to/resources`）；
+- 自动探测仅支持 Windows；macOS / Linux 或其他位置用 `--path <resources目录>` 显式指定（`node scripts/cmd/locate.js --path /path/to/resources`）；
 - 官方更新覆盖汉化后，用对应新版本的字典重新执行 `locate` + `patch` 即可。
 
 ## 与上游的关系与版权

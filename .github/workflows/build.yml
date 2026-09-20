@@ -5,7 +5,7 @@
 #   - 推注解 tag（git tag -a v0.2.0 -m "..." && git push origin main --follow-tags）：构建 + 发 Release。
 #
 # 发版规范见 AGENTS.md「发版」一节：CHANGELOG.md 顶部条目 / package.json 的 version /
-# 注解 tag 三处对齐；Release 正文取自 CHANGELOG.md 对应段落（scripts/changelog.js 提取），
+# 注解 tag 三处对齐；Release 正文取自 CHANGELOG.md 对应段落（tools/changelog.js 提取），
 # 不是自动生成的变更列表。
 #
 # 两种产物形态各跑一遍矩阵，都是「每平台一个原生 runner」：
@@ -84,7 +84,7 @@ jobs:
             echo "::error::tag v$tag 与 package.json 的版本 $pkg 不一致"
             exit 1
           fi
-          if ! node scripts/changelog.js "$tag" > /dev/null; then
+          if ! node tools/changelog.js "$tag" > /dev/null; then
             echo "::error::CHANGELOG.md 里没有 $tag 的条目"
             exit 1
           fi
@@ -153,7 +153,7 @@ jobs:
       - name: 打包 GUI 产物
         run: npm run dist -- --config.electronDownload.mirror=https://github.com/electron/electron/releases/download/
       - name: 产物自检
-        run: node build/check-gui-dist.js
+        run: node tools/check-gui-dist.js
       # 产物启动冒烟：真的把产物起一次，确认窗口与界面能加载——静态自检看不出「删掉的组件是不是
       # 启动必需的」。判据与输出见 gui/main.js 的 --smoke-test（窗口尺寸 / 按钮数 / IPC 往返），
       # 失败或 30 秒超时都会打印 SMOKE_FAIL 并以非 0 退出。**四个 runner 都没有 GPU**，正好打在
@@ -222,7 +222,7 @@ jobs:
         working-directory: dist
         run: sha256sum github-desktop-zh-cn-* > SHA256SUMS
       - name: 生成 Release 正文（取自 CHANGELOG.md 对应段落）
-        run: node scripts/changelog.js "${GITHUB_REF_NAME#v}" > notes.md
+        run: node tools/changelog.js "${GITHUB_REF_NAME#v}" > notes.md
       - name: 检查发布令牌
         env:
           RELEASE_TOKEN: ${{ secrets.RELEASE_TOKEN }}
@@ -349,7 +349,7 @@ jobs:
           TAG="$GITHUB_REF_NAME"
 
           # 探测：Gitee 用 HTTP 200 + 字面量 null 表示「该 tag 没有发行版」，**不是 404**——
-          # 照搬 GitHub 的判据会把「不存在」当成「查询失败」。实测见 docs/dict-v2/tasks.md 6.x。
+          # 照搬 GitHub 的判据会把「不存在」当成「查询失败」。实测见 docs/design/dict-v2/tasks.md 6.x。
           existing="$(curl -sfS -m 30 -H "$AUTH" "$API/releases/tags/$TAG" || echo null)"
           rid="$(printf '%s' "$existing" | jq -r 'if type=="object" then (.id // empty) else empty end' 2>/dev/null || true)"
 

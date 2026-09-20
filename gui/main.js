@@ -9,9 +9,9 @@ const { spawn } = require('child_process');
 const { app, BrowserWindow, ipcMain, dialog, Menu, shell } = require('electron');
 
 const common = require('../scripts/common.js');
-const patch = require('../scripts/patch.js');
-const restore = require('../scripts/restore.js');
-const dictSync = require('../scripts/dict-sync.js');
+const patch = require('../scripts/cmd/patch.js');
+const restore = require('../scripts/cmd/restore.js');
+const dictSync = require('../scripts/dict/dict-sync.js');
 const update = require('../scripts/update.js');
 const net = require('../scripts/net.js');
 const PKG = require('../package.json');

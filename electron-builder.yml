@@ -1,6 +1,6 @@
 # electron-builder.yml — GUI 产物打包配置（npm run dist）
 #
-# 四处刻意的选择（理由见 docs/gui/design.md）：
+# 四处刻意的选择（理由见 docs/design/gui/design.md）：
 #   1. 字典走 extraResources（进应用的 resources/dictionaries）而不是 extraFiles（exe 同级）：
 #      数据根与 exe 未必同处一地——macOS 的数据根恒在用户数据目录（.app 包内写入会让签名失效、
 #      下次启动被 Gatekeeper 拒开），Linux 的 AppImage 又挂在只读临时目录，两者都取不到 exe 旁边那份。
@@ -52,7 +52,7 @@ directories:
 compression: maximum
 
 # 产物命名与单文件产物（SEA）同一套词序：<name>-<通道>-v<版本>-<平台>-<架构>[...-setup].<扩展名>
-# 通道词 gui 紧跟项目名（单文件产物是 cli，见 scripts/build.js）——附件列表里同类相邻、一眼分得出
+# 通道词 gui 紧跟项目名（单文件产物是 cli，见 tools/build.js）——附件列表里同类相邻、一眼分得出
 # 用 ${platform}（darwin / win32 / linux）而不是 ${os}（mac / win / linux），与 SEA 产物的平台词一致
 artifactName: ${name}-gui-v${version}-${platform}-${arch}.${ext}
 

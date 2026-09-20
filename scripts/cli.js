@@ -12,14 +12,14 @@ const {
 
 // 静态映射（不是模板字符串）：bundle.js 靠字面量扫描收集依赖，动态 require 不会被收集
 const RUNNERS = {
-  locate: () => require('./locate.js'),
-  patch: () => require('./patch.js'),
-  restore: () => require('./restore.js'),
-  verify: () => require('./verify.js'),
-  scan: () => require('./scan.js'),
-  dict: () => require('./dict-edit.js'),
-  groups: () => require('./dict-groups.js'),
-  auto: () => require('./dict-auto.js'),
+  locate: () => require('./cmd/locate.js'),
+  patch: () => require('./cmd/patch.js'),
+  restore: () => require('./cmd/restore.js'),
+  verify: () => require('./cmd/verify.js'),
+  scan: () => require('./cmd/scan.js'),
+  dict: () => require('./dict/dict-edit.js'),
+  groups: () => require('./dict/dict-groups.js'),
+  auto: () => require('./dict/dict-auto.js'),
 };
 
 const SUBCOMMANDS = Object.keys(RUNNERS);
@@ -157,7 +157,7 @@ async function doPatch(rl, state) {
   }
   try {
     // quiet：中间过程不出现在菜单里，只留最终结果（命令行入口仍输出明细）
-    const r = await require('./patch.js').run({ explicitPath: state.explicitPath, version, quiet: true });
+    const r = await require('./cmd/patch.js').run({ explicitPath: state.explicitPath, version, quiet: true });
     console.log(`\n 汉化完成：命中 ${r.total} 处。`);
     console.log(restartLine(r.restarted));
   } catch (e) {
@@ -179,7 +179,7 @@ async function doRestore(rl, state) {
     return;
   }
   try {
-    const r = await require('./restore.js').run({ explicitPath: state.explicitPath, version, quiet: true });
+    const r = await require('./cmd/restore.js').run({ explicitPath: state.explicitPath, version, quiet: true });
     const how = r.source === 'backup' ? '已从备份精确还原' : `已按字典还原 ${r.total} 处`;
     console.log(`\n 还原完成：${how}。`);
     if (r.source === 'reverse' && (r.ambiguous > 0 || r.skipped > 0)) {
@@ -215,7 +215,7 @@ async function doUpdateControl(rl, state) {
 
   try {
     if (c === '3') {
-      const r = await require('./restore.js').run({
+      const r = await require('./cmd/restore.js').run({
         explicitPath: state.explicitPath, version, groups: ['updateControl'], quiet: true,
       });
       const kept = r.kept.includes('i18n') ? '，汉化保留' : '（已回到官方原版）';
@@ -228,7 +228,7 @@ async function doUpdateControl(rl, state) {
       return;
     }
     const mode = c === '1' ? 'guard' : 'off';
-    const r = await require('./patch.js').run({
+    const r = await require('./cmd/patch.js').run({
       explicitPath: state.explicitPath, version, quiet: true, updateControl: mode,
     });
     console.log(`\n 已开启更新管控（${mode === 'off' ? '完全禁止自动更新' : '没有对应字典就不更新'}）。`);
@@ -246,7 +246,7 @@ async function doUpdate(rl, state) {
   if (!state.error) {
     const version = state.app.version;
     try {
-      const r = await require('./dict-sync.js').syncLatest(version);
+      const r = await require('./dict/dict-sync.js').syncLatest(version);
       console.log(r.changed ? ` 字典已更新：${version}` : ` 字典已是最新（${version}）。`);
     } catch (e) {
       console.log(` 更新字典失败：${e.message}`);

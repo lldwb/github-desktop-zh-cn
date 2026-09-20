@@ -37,7 +37,7 @@
 # 各失败一遍、最后以「未译 100%」收场，症状离原因很远——所以预检拦一次、脚本发请求前再拦一次，
 # 两处都只判形态、不回显值（该值是 Secret）。失败原因（地址错 / 鉴权失败 / 超时……）随结论一起
 # 写进注解、step summary 与提交信息，不必翻日志才对得上号。
-# 需要离线排查时用本地 `node scripts/dict-auto.js --no-ai`。
+# 需要离线排查时用本地 `node scripts/dict/dict-auto.js --no-ai`。
 
 name: 字典自动更新
 
@@ -93,7 +93,7 @@ jobs:
           # 三项都得配，且分处两页：AI_BASE_URL / AI_API_KEY 在 Secrets，AI_MODEL 在 Variables。
           # 只差 AI_MODEL 时症状是跑到翻译那步才报「需要翻译但没有 AI 配置」，不如在这里就说清
           if [ -z "$AI_API_KEY" ] || [ -z "$AI_BASE_URL" ] || [ -z "$AI_MODEL" ]; then
-            echo "::error::翻译服务配置不全——自动产出必须能翻译官方新增文案，不能降级成只继承。三项必配：AI_BASE_URL、AI_API_KEY 在 Secrets 页，AI_MODEL 在 Variables 页（两处不在同一个地方，容易漏）。配置方法见 docs/dict-v2/design.md「CI 定时字典」一节"
+            echo "::error::翻译服务配置不全——自动产出必须能翻译官方新增文案，不能降级成只继承。三项必配：AI_BASE_URL、AI_API_KEY 在 Secrets 页，AI_MODEL 在 Variables 页（两处不在同一个地方，容易漏）。配置方法见 docs/design/dict-v2/design.md「CI 定时字典」一节"
             exit 1
           fi
           # 地址不是绝对 URL 时，脚本会对每条文案各失败一次，最后以「未译 100% 超过上限」收场——
@@ -140,7 +140,7 @@ jobs:
           if [ -n "$IN_VERSIONS" ]; then args+=(--version "$IN_VERSIONS"); fi
           if [ "$IN_DRY_RUN" = "true" ]; then args+=(--dry-run); fi
           if [ -n "$IN_ON_EXIST" ]; then args+=(--on-exist "$IN_ON_EXIST"); fi
-          node scripts/dict-auto.js "${args[@]}" --report tmp/dict-auto-report.json
+          node scripts/dict/dict-auto.js "${args[@]}" --report tmp/dict-auto-report.json
 
       # 产出的字典要先过一遍仓库自身的测试，再允许进版本库
       - name: 跑测试

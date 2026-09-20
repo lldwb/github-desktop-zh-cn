@@ -7,17 +7,17 @@
   "type": "commonjs",
   "main": "gui/main.js",
   "scripts": {
-    "locate": "node scripts/locate.js",
-    "patch": "node scripts/patch.js",
-    "restore": "node scripts/restore.js",
-    "verify": "node scripts/verify.js",
+    "locate": "node scripts/cmd/locate.js",
+    "patch": "node scripts/cmd/patch.js",
+    "restore": "node scripts/cmd/restore.js",
+    "verify": "node scripts/cmd/verify.js",
     "test": "node --test",
-    "scan": "node scripts/scan.js",
+    "scan": "node scripts/cmd/scan.js",
     "tool": "node scripts/cli.js",
     "gui": "electron .",
     "dist": "electron-builder --publish never",
-    "bundle": "node scripts/bundle.js --out tmp/build/bundle.js",
-    "build": "node scripts/build.js"
+    "bundle": "node tools/bundle.js --out tmp/build/bundle.js",
+    "build": "node tools/build.js"
   },
   "engines": {
     "node": ">=18"

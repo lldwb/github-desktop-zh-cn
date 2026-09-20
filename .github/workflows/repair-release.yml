@@ -161,7 +161,7 @@ jobs:
           # 只是它发布时的快照；而且「现网没有 Release」那条重建路一直就是用 CHANGELOG 现生成的，
           # 同一个流程的两条路不该对正文从哪来有两种说法。条目找不到（老版本、条目被删）才退回快照。
           : > notes.md
-          if [ -f scripts/changelog.js ] && node scripts/changelog.js "${TAG#v}" > notes-changelog.md 2> changelog-error.txt; then
+          if [ -f tools/changelog.js ] && node tools/changelog.js "${TAG#v}" > notes-changelog.md 2> changelog-error.txt; then
             cp notes-changelog.md notes.md
             echo "正文取自 CHANGELOG.md 的 ${TAG#v} 条目（$(wc -l < notes.md) 行）"
             if [ -s notes-release.md ] && [ "$(sha256sum < notes.md)" != "$(sha256sum < notes-release.md)" ]; then
@@ -504,7 +504,7 @@ jobs:
               *) continue ;;                                # 不含本版本号——不动
             esac
             # 后缀：末段已经带扩展名的不动（win32-x64.exe、linux-x86_64.AppImage）；
-            # 其余按平台补——Windows 是 .exe、macOS / Linux 是 .bin，与 scripts/build.js 一致。
+            # 其余按平台补——Windows 是 .exe、macOS / Linux 是 .bin，与 tools/build.js 一致。
             # 判据取末段而不是「名字里有没有点」：版本号 v0.1.0 自己就带点。
             case "${new##*-}" in
               *.*) ;;

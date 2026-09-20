@@ -4,13 +4,45 @@
 
 - **[打包与分发.md](打包与分发.md)**：把工具分发给普通用户——单文件产物（中文菜单）与 GUI 产物（Electron 操作面板）的构建流程、跨平台构建、发布前检查清单、常见问题。
 
-## gui/
+## design/
 
-GUI 形态的过程文档（方案 / 设计 / 任务清单），实现完成后保留备查：
+设计过程文档（方案 / 设计 / 任务清单），实现完成后保留备查。
 
-- **[proposal.md](gui/proposal.md)**：需求与方案选型——为什么是 Electron、界面做到什么程度、怎么打包；
-- **[design.md](gui/design.md)**：详细设计——运行形态判据的改动、窗口与 IPC 结构、打包配置与实测口径；
-- **[tasks.md](gui/tasks.md)**：任务清单，完成项附实测证据。
+### gui/
+
+GUI 形态的过程文档：
+
+- **[proposal.md](design/gui/proposal.md)**：需求与方案选型——为什么是 Electron、界面做到什么程度、怎么打包；
+- **[design.md](design/gui/design.md)**：详细设计——运行形态判据的改动、窗口与 IPC 结构、打包配置与实测口径；
+- **[tasks.md](design/gui/tasks.md)**：任务清单，完成项附实测证据。
+
+### dict-v2/
+
+字典 2.0（结构化 / 跨平台 / 自动化）的过程文档：
+
+- **[proposal.md](design/dict-v2/proposal.md)**：需求与方案选型——字典为什么要有平台分段与组名、自动化产出怎么落地；
+- **[design.md](design/dict-v2/design.md)**：详细设计——字典结构与唯一写入口（`dict-edit`）、组名推断、方案取舍；
+- **[tasks.md](design/dict-v2/tasks.md)**：任务清单，完成项附实测证据。
+
+## 新旧路径对照
+
+`design/` 下的正文是**历史设计过程记录**——记录的是当时的路径与决策，故正文里的脚本 / 测试 / 文档路径**保持原文，不随目录调整改写**。读这些文档时按下表对照：
+
+| 正文里的路径（当时） | 现在的位置 |
+|---|---|
+| `scripts/dict-edit.js` | `scripts/dict/dict-edit.js` |
+| `scripts/dict-groups.js` | `scripts/dict/dict-groups.js` |
+| `scripts/release-assets.js` | `scripts/dict/release-assets.js` |
+| `scripts/update-control.js` | `scripts/inject/update-control.js` |
+| `scripts/bundle.js` | `tools/bundle.js` |
+| `build/check-gui-dist.js` | `tools/check-gui-dist.js` |
+| `build/tools/*.cjs`（CI / Release 运维探针） | `tools/ops/*.cjs` |
+| `test/dict-scope.test.js` | `test/common/dict-scope.test.js` |
+| `test/dict-edit.test.js` | `test/dict/dict-edit.test.js` |
+| `test/dict-groups.test.js` | `test/dict/dict-groups.test.js` |
+| `docs/gui/*.md` | `docs/design/gui/*.md` |
+| `docs/dict-v2/*.md` | `docs/design/dict-v2/*.md` |
+| `scripts/common.js` / `scripts/update.js` / `scripts/cli.js` / `build/after-pack.js` | 位置不变 |
 
 规划中：
 
