@@ -1006,7 +1006,7 @@ async function buildOne(version, args, log) {
         meta: {
           updated: new Date().toISOString().slice(0, 10),
           notes:
-            '由官方产物自动产出（scripts/dict-auto.js）：以上一版字典为锚核对每条键在新产物里的形态，' +
+            '由官方产物自动产出（scripts/dict/dict-auto.js）：以上一版字典为锚核对每条键在新产物里的形态，' +
             '官方新增的 JSX 文案由 AI 按既有风格补译，写入前经 dict-edit 事务校验与产物干跑。' +
             '键的三类形态：普通键（字符串字面量内容或模板文本段整串匹配）、整模板键（含 ${} 的' +
             '完整模板源码整段替换）、作用域键（<文件名>.js|原文，只对该文件生效）。' +
