@@ -1,5 +1,5 @@
 // 核实各 tag Release 的**当前**附件名是否符合 cli / gui 命名规范（匿名 API 只读，零依赖）
-// 用法：node tools/ops/rel-check.cjs [tag...]（缺省 v0.1.0 v0.1.1 v0.2.0）
+// 用法：node tools/ops/rel-check.cjs [tag...]（缺省取最新 Release 的 tag）
 const https = require('https');
 const { GH_OWNER, GH_REPO } = require('../../scripts/common.js');
 
@@ -14,7 +14,15 @@ function get(path) {
 }
 
 (async () => {
-  const tags = process.argv.slice(2).length ? process.argv.slice(2) : ['v0.1.0', 'v0.1.1', 'v0.2.0'];
+  let tags = process.argv.slice(2);
+  if (!tags.length) {
+    const latest = await get(`/repos/${GH_OWNER}/${GH_REPO}/releases/latest`).catch(() => null);
+    if (!latest || latest.message || !latest.tag_name) {
+      console.error('取不到最新 Release（网络 / 404），请显式传 tag');
+      process.exit(1);
+    }
+    tags = [latest.tag_name];
+  }
   for (const tag of tags) {
     const j = await get(`/repos/${GH_OWNER}/${GH_REPO}/releases/tags/${tag}`).catch(() => null);
     if (!j || j.message) { console.log(`
