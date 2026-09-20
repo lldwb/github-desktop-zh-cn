@@ -167,8 +167,60 @@ function candidateRoots() {
   return roots;
 }
 
+// 本机已安装的 GitHub Desktop，按版本**升序**返回 [{ version, resourcesDir, appDir }]。
+// 这是安装目录枚举的 SSOT——locateApp 取最新那个，GUI 的版本切换列出全部，两边不各写一份。
+//   Windows：<LOCALAPPDATA>/GitHubDesktop/app-<版本>/resources；官方升级后旧版本目录会留着，
+//            所以同一台机器上可能同时有多个（实测 app-3.6.5 与 app-3.6.6 并存）。
+//   macOS / Linux：安装根本身即 Resources，没有版本子目录，最多一项。
+// 目录名不合 app-<X.Y.Z> 形态的残留、以及读不出 app/package.json version 的目录一律不算，
+// 免得把解包残留当成一个可用版本。
+function listInstalledVersions() {
+  const found = [];
+  for (const root of candidateRoots()) {
+    if (!fs.existsSync(root)) continue;
+    // 平台分支在这里定死：Windows 有版本子目录，另两个平台没有
+    const candidates =
+      process.platform === 'win32'
+        ? fs
+            .readdirSync(root)
+            .filter((entry) => parseVersion(entry))
+            .map((entry) => path.join(root, entry, ...RESOURCES_REL))
+        : [root];
+    for (const resourcesDir of candidates) {
+      const appDir = path.join(resourcesDir, APP_SUBDIR);
+      if (!fs.existsSync(path.join(appDir, 'package.json'))) continue;
+      try {
+        found.push({ version: readVersion(appDir), resourcesDir, appDir });
+      } catch {
+        /* package.json 残缺 / 缺 version：不算一个可用版本，跳过而不是让整次枚举失败 */
+      }
+    }
+  }
+  return found.sort((a, b) => compareVersions(a.version, b.version));
+}
+
+// 项目主页地址（「关于」窗口与菜单里展示的两条链接）。仓库地址的 SSOT 就是上面的
+// GH_OWNER / GH_REPO，这里只把它拼成链接——GUI 与 CLI 都从这里取，不各拼一份。
+function repoUrls() {
+  return {
+    repo: `https://github.com/${GH_OWNER}/${GH_REPO}`,
+    mirror: `https://gitee.com/${GH_OWNER}/${GH_REPO}`,
+  };
+}
+
+// 切换「当前要处理的版本」：把命中版本的 resources 目录写进 config 的 resourcesPath——
+// 与「手动指定安装位置」是同一个字段，所以此后汉化 / 还原 / 更新管控 / 字典查找全都跟着它走，
+// 不需要另立一套目标解析。GUI 的版本下拉与 CLI 的菜单共用本函数（两处不各写一份）。
+// 版本号必须在本机已安装列表里才认，避免把任意字符串写进配置。返回命中的那条；没有则返回 null。
+function setTargetVersion(version) {
+  const hit = listInstalledVersions().find((x) => x.version === version);
+  if (!hit) return null;
+  writeConfig({ resourcesPath: hit.resourcesDir });
+  return hit;
+}
+
 // 定位安装目录。返回 { resourcesDir, appDir, version } 或抛错。
-// 优先 --path 显式指定（指向 resources 目录），否则自动探测最新版本。
+// 优先 --path 显式指定（指向 resources 目录），否则自动探测**最新**版本（本机装了多个时）。
 function locateApp({ explicitPath } = {}) {
   if (explicitPath) {
     const resourcesDir = path.resolve(explicitPath);
@@ -181,36 +233,15 @@ function locateApp({ explicitPath } = {}) {
     return { resourcesDir, appDir, version: readVersion(appDir) };
   }
 
-  const found = [];
-  for (const root of candidateRoots()) {
-    if (!fs.existsSync(root)) continue;
-    if (process.platform === 'win32') {
-      // Windows：GitHubDesktop/app-<版本>/
-      for (const entry of fs.readdirSync(root)) {
-        const ver = parseVersion(entry);
-        if (ver) {
-          const resourcesDir = path.join(root, entry, ...RESOURCES_REL);
-          if (fs.existsSync(resourcesDir)) {
-            found.push({ ver, resourcesDir });
-          }
-        }
-      }
-    } else {
-      // macOS/Linux：安装根本身即 Resources，无版本子目录
-      if (fs.existsSync(path.join(root, APP_SUBDIR, 'package.json'))) {
-        found.push({ ver: { raw: root, major: 0, minor: 0, patch: 0 }, resourcesDir: root });
-      }
-    }
-  }
+  const found = listInstalledVersions();
   if (found.length === 0) {
     throw new Error(
       '未找到 GitHub Desktop 安装目录。请用 --path 指定 resources 目录（例如 …/GitHubDesktop/app-3.6.5/resources）'
     );
   }
-  found.sort((a, b) => b.ver.major - a.ver.major || b.ver.minor - a.ver.minor || b.ver.patch - a.ver.patch);
-  const { resourcesDir } = found[0];
-  const appDir = path.join(resourcesDir, APP_SUBDIR);
-  return { resourcesDir, appDir, version: readVersion(appDir) };
+  // 升序列表的最后一个即最新版本
+  const { resourcesDir, appDir, version } = found[found.length - 1];
+  return { resourcesDir, appDir, version };
 }
 
 // 读取 app/package.json 的 version 字段
@@ -793,6 +824,9 @@ module.exports = {
   readConfig,
   writeConfig,
   locateApp,
+  listInstalledVersions,
+  setTargetVersion,
+  repoUrls,
   readVersion,
   DICT_VERSION_RE,
   listDictVersions,

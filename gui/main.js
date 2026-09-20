@@ -12,11 +12,16 @@ const common = require('../scripts/common.js');
 const patch = require('../scripts/cmd/patch.js');
 const restore = require('../scripts/cmd/restore.js');
 const dictSync = require('../scripts/dict/dict-sync.js');
+const dictPrompt = require('../scripts/dict/dict-prompt.js');
 const update = require('../scripts/update.js');
 const net = require('../scripts/net.js');
 const PKG = require('../package.json');
 
 const APP_TITLE = 'GitHub Desktop - 汉化工具';
+
+// 「关于」窗口里那两条可点击链接（渲染进程拿不到地址，只能按 openUrl 的键名来点）。
+// 地址本身取自 common.repoUrls()——与 CLI 菜单展示的是同一份。
+const URLS = common.repoUrls();
 
 // —— 冒烟自检（--smoke-test）：产物「到底能不能起来」的机器判据，CI 与本地共用同一条命令。
 // 窗口与界面就绪后，在渲染进程里走一遍**真实的 IPC 往返**（window.api.state()，即 preload →
@@ -77,8 +82,28 @@ async function runSmokeTest(win) {
       }
       if (!state || typeof state !== 'object') return { error: 'IPC 返回值不是对象' };
       if (typeof state.dataRoot !== 'string' || !state.dataRoot) return { error: 'IPC 未返回 dataRoot' };
+
+      // 两条界面链路各走一遍。都不依赖「本机装没装 GitHub Desktop」，CI 上同样成立：
+      // ① 切到「翻译提示词」标签页要能经 IPC 拿到文本（展示的就是 dict-prompt.js 那份）；
+      // ② 「关于」点了要开。
+      document.querySelector('#tab-prompt').click();
+      const pre = () => document.querySelector('#prompt-text');
+      const promptDeadline = Date.now() + 5000;
+      while (Date.now() < promptDeadline && /正在读取/.test(pre().textContent)) {
+        await new Promise((res) => setTimeout(res, 100));
+      }
+      const promptOk = pre().textContent.includes('GitHub Desktop 中文汉化字典的译者');
+      document.querySelector('#btn-about').click();
+      const aboutOk = !document.querySelector('#about').hidden;
+
       return {
-        buttons: document.querySelectorAll('button').length,
+        // 只数**工具栏**的按钮：「关于」窗口里还有几个（带 hidden），数全体会把它们一并算进来，
+        // 判据就不再是「界面骨架渲染齐了」而是「HTML 里写了几个 button」。
+        buttons: document.querySelectorAll('header.toolbar button').length,
+        tabs: document.querySelectorAll('.tab').length,
+        versionOptions: document.querySelectorAll('#version-select option').length,
+        promptOk,
+        aboutOk,
         rows: document.querySelectorAll('#dict-body tr').length,
         status: bar().textContent.trim().replace(/\\s+/g, ' ').slice(0, 60),
         toolVersion: state.toolVersion,
@@ -92,11 +117,15 @@ async function runSmokeTest(win) {
     // 限制到屏幕内（实测 mac arm64 1024×642、Windows 1008×681），按请求尺寸判会随环境误报。
     const [w, h] = win.getContentSize();
     if (w < 640 || h < 480) throw new Error(`窗口内容区异常 ${w}x${h}`);
-    if (r.buttons !== 6) throw new Error(`按钮数 ${r.buttons}（期望 6）`);
+    if (r.buttons !== 6) throw new Error(`工具栏按钮数 ${r.buttons}（期望 6）`);
+    if (r.tabs !== 2) throw new Error(`标签页数 ${r.tabs}（期望 2）`);
+    if (!r.promptOk) throw new Error('「翻译提示词」标签页没有取到提示词');
+    if (!r.aboutOk) throw new Error('「关于」窗口没能打开');
 
     const gpu = app.getGPUFeatureStatus() || {};
     smokeOut(
-      `SMOKE_OK platform=${process.platform} arch=${process.arch} window=${w}x${h} buttons=${r.buttons}` +
+      `SMOKE_OK platform=${process.platform} arch=${process.arch} window=${w}x${h} buttons=${r.buttons} tabs=${r.tabs}` +
+        ` prompt=true about=true versionOptions=${r.versionOptions}` +
         ` rows=${r.rows} ipc=true toolVersion=${r.toolVersion}` +
         ` gpu_compositing=${gpu.gpu_compositing || '?'} webgl=${gpu.webgl || '?'} vulkan=${gpu.vulkan || '?'}` +
         ` dataRoot="${r.dataRoot}" status="${r.status}"`
@@ -130,6 +159,36 @@ function installRoot(resourcesDir) {
   return /^app-/.test(path.basename(parent)) ? path.dirname(parent) : parent;
 }
 
+// 工具栏版本下拉的数据源：本机已安装的 GitHub Desktop——Windows 上可能不止一个
+// （官方升级后旧的 app-<版本> 目录会留着）。`hasDict` 决定它出不出现在默认视图
+// （「只显示有汉化的版本」），`custom` 标记「不在自动探测范围内、由「选择」手动指定」的目录。
+// 当前目标若不在已安装列表里（用「选择」指到了别处），补一条出来——否则下拉没有能选中的项。
+function installedForPicker(target, dictVersions) {
+  const list = common.listInstalledVersions().map((x) => ({
+    version: x.version,
+    resourcesDir: x.resourcesDir,
+    hasDict: dictVersions.includes(x.version),
+    current: false,
+    custom: false,
+  }));
+  if (!target.error) {
+    const cur = target.app;
+    const hit = list.find((x) => x.resourcesDir === cur.resourcesDir);
+    if (hit) {
+      hit.current = true;
+    } else {
+      list.push({
+        version: cur.version,
+        resourcesDir: cur.resourcesDir,
+        hasDict: dictVersions.includes(cur.version),
+        current: true,
+        custom: true,
+      });
+    }
+  }
+  return list.sort((a, b) => common.compareVersions(a.version, b.version));
+}
+
 // 窗口状态：安装位置、版本、字典、是否已汉化、备份。字段全部取自既有 common API，不新增业务判定。
 function collectState() {
   const target = resolveTarget();
@@ -140,7 +199,12 @@ function collectState() {
     toolVersion: PKG.version,
     platform: process.platform,
     dataRoot: common.dataRoot(),
+    // 「关于」窗口要展示的项目信息（地址由主进程给，渲染进程不硬编码仓库地址）
+    license: PKG.license,
+    repoUrl: URLS.repo,
+    mirrorUrl: URLS.mirror,
     dictVersions: versions,
+    installed: installedForPicker(target, versions),
   };
   if (target.error) return base;
 
@@ -243,6 +307,9 @@ function handle(channel, fn) {
 function registerIpc() {
   handle('state', async () => collectState());
   handle('dictEntries', async () => collectDictEntries());
+  // 翻译提示词（只读展示）：与实际调模型用的是**同一个字符串**——dict-prompt.js 是唯一来源，
+  // 展示的就是生效的那份，不存在「界面上写的和实际跑的不一样」。
+  handle('prompt', async () => ({ ok: true, text: dictPrompt.SYSTEM_PROMPT }));
 
   handle('patch', async () => {
     const target = resolveTarget();
@@ -352,6 +419,60 @@ function registerIpc() {
     }
   });
 
+  // 切换要处理的 GitHub Desktop 版本。本机可能并存多个（官方升级后旧的 app-<版本> 目录会留着），
+  // 选中的那个写进 config 的 resourcesPath——与「选择」按钮同一个字段，所以此后汉化 / 还原 /
+  // 更新管控 / 字典表格全都跟着走，这里不另立一套目标解析。
+  // 默认连「禁止自动更新」一起做：版本是使用者自己挑的，不该被官方更新悄悄换走。
+  handle('setVersion', async (version) => {
+    const hit = common.listInstalledVersions().find((x) => x.version === version);
+    if (!hit) return { ok: false, error: `本机没有 ${version} 的安装目录，请点「选择」手动指定。` };
+
+    const cur = resolveTarget();
+    // 选中的就是当前目标（下拉本身已经高亮它）：不必弹框，直接当作取消
+    if (!cur.error && cur.app.resourcesDir === hit.resourcesDir) return { ok: false, canceled: true };
+
+    const blocked = common.getPatchGroups(version).includes('updateControl');
+    const choice = await dialog.showMessageBox(mainWindow, {
+      type: 'question',
+      buttons: ['切换', '取消'],
+      defaultId: 0,
+      cancelId: 1,
+      noLink: true,
+      title: APP_TITLE,
+      message: `切换到 GitHub Desktop ${version}`,
+      detail:
+        `之后的汉化 / 还原 / 更新管控都作用于：\n${hit.resourcesDir}\n\n`
+        + '「禁止自动更新」会把该版本钉住——版本是你选定的，就不该被官方更新悄悄换走。',
+      checkboxLabel: blocked ? '禁止自动更新（该版本已开启，不会重复注入）' : '同时禁止该版本自动更新',
+      checkboxChecked: true,
+    });
+    if (choice.response !== 0) return { ok: false, canceled: true };
+
+    common.setTargetVersion(version); // 与 CLI 菜单的「切换版本」走同一个入口（SSOT 在 common.js）
+    const notes = [`已切换到 GitHub Desktop ${version}。`];
+    let hasError = false;
+    let restarted = 'skipped';
+
+    if (choice.checkboxChecked && !blocked) {
+      notifyBusy('setVersion', `正在为 ${version} 注入更新管控 …`);
+      try {
+        // patch 会顺带跑一遍汉化（i18n 是它的主体）——对已汉化的版本是幂等的重复替换，
+        // 对没汉化的版本则正好把它汉化掉，两者都是「切过去就能用」的意思。
+        const r = await patch.run({
+          explicitPath: hit.resourcesDir, version, quiet: true, updateControl: 'off',
+        });
+        restarted = r.restarted;
+        notes.push('已禁止该版本自动更新。');
+      } catch (e) {
+        notes.push(`禁止自动更新失败：${e.message}`);
+        hasError = true;
+      } finally {
+        notifyBusy(null, null);
+      }
+    }
+    return { ok: true, version, notes, hasError, restarted };
+  });
+
   // 工具自更新：GUI 产物是**安装包**，不能像 CLI 那样替换自身（见 installGuiUpdate 的注释）。
   // 这个处理器给启动时那条自动提示用——用户点「下载并安装」时进来，不再重复问一遍。
   handle('toolUpdateInstall', async () => {
@@ -399,29 +520,32 @@ function registerIpc() {
     return collectState();
   });
 
-  handle('update', async () => {
-    const notes = [];
-    let hasError = false;
+  // 同步字典（原「检查更新」里的一半，现在独立）：拉当前版本的最新字典覆盖本地。
+  // 只在用户主动点的时候走——汉化时本地缺字典由 patch 自己联网取，那条路不受影响；
+  // 这里的语义是「强制拉最新」，与 CLI 菜单的「同步字典」同一套（都走 dict-sync.syncLatest）。
+  handle('syncDict', async () => {
     const target = resolveTarget();
     if (target.error) {
-      notes.push('未找到 GitHub Desktop：请先点「选择」指定安装位置，再同步字典。');
-      hasError = true;
-    } else {
-      const version = target.app.version;
-      notifyBusy('update', `正在同步 ${version} 字典 …`);
-      try {
-        const r = await dictSync.syncLatest(version);
-        notes.push(r.changed ? `字典已更新：${version}` : `字典已是最新（${version}）。`);
-      } catch (e) {
-        notes.push(`更新字典失败：${e.message}`);
-        hasError = true;
-      } finally {
-        notifyBusy(null, null);
-      }
+      return { ok: false, error: '未找到 GitHub Desktop：请先点「选择」指定安装位置。' };
     }
+    const version = target.app.version;
+    notifyBusy('syncDict', `正在同步 ${version} 字典 …`);
+    try {
+      const r = await dictSync.syncLatest(version);
+      return { ok: true, notes: [r.changed ? `字典已更新：${version}` : `字典已是最新（${version}）。`] };
+    } catch (e) {
+      return { ok: false, error: `更新字典失败：${e.message}` };
+    } finally {
+      notifyBusy(null, null);
+    }
+  });
 
-    // 工具自更新：GUI 产物是安装包，走「下载 + 启动安装向导」，不替换自身（见 installGuiUpdate）。
-    // 这里是**用户主动**点的检查更新，弹确认框不唐突；启动时那条自动检查只推提示、不打断。
+  // 检查工具自身有无新版本——只做这一件事（字典不走这里，见 syncDict）。
+  // GUI 产物是安装包，走「下载 + 启动安装向导」，不替换自身（见 installGuiUpdate）。
+  // 这里是**用户主动**点的检查更新，弹确认框不唐突；启动时那条自动检查只推提示、不打断。
+  handle('checkToolUpdate', async () => {
+    const notes = [];
+    let hasError = false;
     try {
       const info = await update.check();
       if (!info.hasUpdate) {
@@ -455,6 +579,15 @@ function registerIpc() {
       hasError = true;
     }
     return { ok: true, notes, hasError };
+  });
+
+  // 打开项目地址。入参是**白名单键**而不是 URL——渲染进程给不出任意链接，
+  // shell.openExternal 就不会成为「界面上点什么都会去开」的跳板。
+  handle('openUrl', async (which) => {
+    const url = { repo: URLS.repo, mirror: URLS.mirror }[which];
+    if (!url) return { ok: false, error: `未知的地址：${which}` };
+    await shell.openExternal(url);
+    return { ok: true, url };
   });
 }
 

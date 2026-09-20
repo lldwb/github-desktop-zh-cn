@@ -6,9 +6,13 @@
 const path = require('path');
 const readline = require('readline');
 const {
-  locateApp, listDictVersions, loadDict, dictLabel, backupDir, backupExists, isPatched,
-  isPackaged, dataRoot, readConfig, writeConfig, APP_NAME, getPatchGroups,
+  locateApp, listInstalledVersions, setTargetVersion, repoUrls, listDictVersions, loadDict,
+  dictLabel, backupDir, backupExists, isPatched, isPackaged, dataRoot, readConfig, writeConfig,
+  APP_NAME, getPatchGroups,
 } = require('./common');
+
+// 「关于」里展示的两条项目地址（SSOT 在 common.js，与 GUI 的「关于」窗口同源）
+const URLS = repoUrls();
 
 // 静态映射（不是模板字符串）：bundle.js 靠字面量扫描收集依赖，动态 require 不会被收集
 const RUNNERS = {
@@ -28,7 +32,8 @@ const LINE = '─'.repeat(64);
 function printHelp() {
   console.log(`用法：github-desktop-zh-cn [子命令] [选项]
 
-不带子命令时进入中文交互菜单（双击运行即此模式），菜单里可汉化 / 还原 / 指定安装位置 / 检查更新。
+不带子命令时进入中文交互菜单（双击运行即此模式），菜单里可汉化 / 还原 / 指定安装位置与切换版本 /
+更新管控 / 同步字典 / 检查更新 / 关于。
 
 子命令（等价于直接运行对应脚本）：
   locate    定位安装目录并备份原文件
@@ -239,19 +244,26 @@ async function doUpdateControl(rl, state) {
   }
 }
 
-// 检查更新：先看工具自身有无新版本，再拉当前安装版本的字典
-async function doUpdate(rl, state) {
+// 同步字典：拉当前安装版本的最新字典并覆盖本地（原「检查更新」里的一半，现在独立成项）。
+// 只有主动点才走这里——汉化时缺字典由 patch 自己联网取，那条路不受影响。
+async function doSyncDict(state) {
   console.log('');
-
-  if (!state.error) {
-    const version = state.app.version;
-    try {
-      const r = await require('./dict/dict-sync.js').syncLatest(version);
-      console.log(r.changed ? ` 字典已更新：${version}` : ` 字典已是最新（${version}）。`);
-    } catch (e) {
-      console.log(` 更新字典失败：${e.message}`);
-    }
+  if (state.error) {
+    console.log(' 未找到 GitHub Desktop，请先选择「4) 安装位置 / 切换版本」。');
+    return;
   }
+  const version = state.app.version;
+  try {
+    const r = await require('./dict/dict-sync.js').syncLatest(version);
+    console.log(r.changed ? ` 字典已更新：${version}` : ` 字典已是最新（${version}）。`);
+  } catch (e) {
+    console.log(` 更新字典失败：${e.message}`);
+  }
+}
+
+// 检查更新：只查本工具自身有无新版本（字典同步不在这里，见 doSyncDict）
+async function doUpdate(rl) {
+  console.log('');
 
   if (!isPackaged()) {
     console.log(' 源码模式不支持自更新——请用 git pull 更新本工具。');
@@ -300,8 +312,70 @@ async function showDetail(state) {
   console.log(' 命令行用法（高级）：github-desktop-zh-cn patch --dry-run');
 }
 
-async function setPath(rl) {
+// 关于：工具自身的信息，外加「要不要检查更新」——与 GUI 的「关于」窗口同一套内容，
+// 区别只是 CLI 里把检查更新做成一个提问而不是按钮。
+async function showAbout(rl, state) {
+  const pkg = require('../package.json');
   console.log('');
+  console.log(` GitHub Desktop 汉化工具 v${pkg.version}${isPackaged() ? '' : '（源码模式）'}`);
+  console.log(` 项目地址：${URLS.repo}`);
+  console.log(` 国内镜像：${URLS.mirror}`);
+  console.log(` 许可证：${pkg.license}`);
+  console.log(` 数据目录：${dataRoot()}${isPackaged() ? '（可执行文件所在目录）' : '（仓库根目录）'}`);
+  console.log(
+    state.error
+      ? ' 当前目标：（未找到 GitHub Desktop）'
+      : ` 当前目标：GitHub Desktop ${state.app.version}（${state.app.appDir}）`
+  );
+  console.log('');
+  const c = (await ask(rl, ' 检查工具更新？[y/N] ')).toLowerCase();
+  if (c === 'y' || c === 'yes' || c === '是') await doUpdate(rl);
+}
+
+// 安装位置 / 切换版本：本机装了多个 GitHub Desktop 时（官方升级后旧目录会留着）先列出来让用户挑，
+// 默认只列有汉化字典的版本；也可以照旧手动粘一个目录。两条路写的是同一个配置字段，等价。
+async function setPath(rl) {
+  const installed = listInstalledVersions();
+  const versions = listDictVersions();
+  const withDict = installed.filter((x) => versions.includes(x.version));
+  // 默认只列有汉化的；一个都没有时退回全列，免得出现「有版本可选却一个都不列」的空列表
+  const list = installed.length > 1 && withDict.length ? withDict : installed;
+
+  console.log('');
+  if (installed.length > 1) {
+    console.log(' 本机检测到多个 GitHub Desktop（默认只列有汉化字典的版本）：');
+    list.forEach((x, i) => {
+      const tag = versions.includes(x.version) ? '' : '（无字典）';
+      console.log(`  ${i + 1}) ${x.version}${tag}  ${x.resourcesDir}`);
+    });
+    console.log('  0) 手动输入路径');
+    const c = await ask(rl, ' 请选择：');
+    const idx = Number(c);
+    if (idx >= 1 && idx <= list.length) {
+      const hit = list[idx - 1];
+      setTargetVersion(hit.version);
+      console.log(`\n 已切换到 GitHub Desktop ${hit.version}（${hit.resourcesDir}）`);
+      // 与 GUI 的版本下拉同一套：版本是使用者自己挑的，默认把它钉住、别被官方更新悄悄换走
+      if (!getPatchGroups(hit.version).includes('updateControl')
+        && (await confirm(rl, ' 同时禁止该版本自动更新（会重启 GitHub Desktop）？[Y/n] '))) {
+        try {
+          const r = await require('./cmd/patch.js').run({
+            explicitPath: hit.resourcesDir, version: hit.version, quiet: true, updateControl: 'off',
+          });
+          console.log(` 已禁止该版本自动更新。${restartLine(r.restarted)}`);
+        } catch (e) {
+          console.log(` 禁止自动更新失败：${e.message}`);
+          if (e.hint) console.log(` ${e.hint}`);
+        }
+      }
+      return resolveTarget();
+    }
+    if (c !== '0' && c !== '') {
+      console.log(' 输入无效，未改动。');
+      return resolveTarget();
+    }
+  }
+
   console.log(' 请粘贴 GitHub Desktop 的 resources 目录路径（也可把文件夹拖进本窗口）：');
   console.log('   Windows 例：C:\\Users\\<用户名>\\AppData\\Local\\GitHubDesktop\\app-3.6.5\\resources');
   console.log('   macOS  例：/Applications/GitHub Desktop.app/Contents/Resources');
@@ -330,8 +404,9 @@ async function menu() {
       printStatus(state);
       console.log(LINE);
       console.log(' 1) 汉化 GitHub Desktop       2) 还原官方原版');
-      console.log(' 3) 详细信息                  4) 指定安装位置');
-      console.log(' 5) 检查更新（工具 + 字典）    6) 更新管控');
+      console.log(' 3) 详细信息                  4) 安装位置 / 切换版本');
+      console.log(' 5) 检查更新（工具）            6) 更新管控');
+      console.log(' 7) 同步字典                  8) 关于');
       console.log(' 0) 退出');
       const choice = await ask(rl, ' 请选择：');
       if (choice === '0' || choice === 'q' || choice === '') break;
@@ -339,9 +414,11 @@ async function menu() {
       if (choice === '2') { await doRestore(rl, state); state = resolveTarget(); continue; }
       if (choice === '3') { await showDetail(state); continue; }
       if (choice === '4') { state = await setPath(rl); continue; }
-      if (choice === '5') { await doUpdate(rl, state); state = resolveTarget(); continue; }
+      if (choice === '5') { await doUpdate(rl); state = resolveTarget(); continue; }
       if (choice === '6') { await doUpdateControl(rl, state); state = resolveTarget(); continue; }
-      console.log(' 输入无效，请输入 0-6 的数字。');
+      if (choice === '7') { await doSyncDict(state); continue; }
+      if (choice === '8') { await showAbout(rl, state); continue; }
+      console.log(' 输入无效，请输入 0-8 的数字。');
     }
     console.log(' 已退出。');
   } finally {

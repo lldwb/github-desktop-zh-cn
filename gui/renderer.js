@@ -7,13 +7,30 @@ const els = {
   patch: document.getElementById('btn-patch'),
   restore: document.getElementById('btn-restore'),
   pick: document.getElementById('btn-pick'),
-  update: document.getElementById('btn-update'),
   updateControl: document.getElementById('btn-update-control'),
+  versionSelect: document.getElementById('version-select'),
+  versionAll: document.getElementById('version-all'),
   refresh: document.getElementById('btn-refresh'),
-  tabLabel: document.getElementById('tab-label'),
+  about: document.getElementById('btn-about'),
+  tabs: document.querySelectorAll('.tab'),
+  panels: {
+    'panel-dict': document.getElementById('panel-dict'),
+    'panel-prompt': document.getElementById('panel-prompt'),
+  },
+  aboutModal: document.getElementById('about'),
+  aboutClose: document.getElementById('btn-about-close'),
+  aboutVersion: document.getElementById('about-version'),
+  aboutRepo: document.getElementById('about-repo'),
+  aboutMirror: document.getElementById('about-mirror'),
+  aboutLicense: document.getElementById('about-license'),
+  aboutDataRoot: document.getElementById('about-dataroot'),
+  checkUpdate: document.getElementById('btn-check-update'),
+  syncDict: document.getElementById('btn-sync-dict'),
+  tabDict: document.getElementById('tab-dict'),
   search: document.getElementById('search'),
   body: document.getElementById('dict-body'),
   empty: document.getElementById('table-empty'),
+  promptText: document.getElementById('prompt-text'),
   rootPath: document.getElementById('root-path'),
   progress: document.getElementById('progress'),
   progressText: document.getElementById('progress-text'),
@@ -21,12 +38,17 @@ const els = {
   toast: document.getElementById('toast'),
 };
 
-const BUTTONS = [els.patch, els.restore, els.pick, els.update, els.updateControl, els.refresh];
+// 有操作在跑时统一禁用的控件（「关于」的打开/关闭不在此列：看信息不该被挡）
+const BUSY_DISABLED = [
+  els.patch, els.restore, els.pick, els.updateControl, els.refresh,
+  els.versionSelect, els.versionAll, els.checkUpdate, els.syncDict,
+];
 
 let rows = []; // 全部字典条目（搜索在内存里过滤，不重新读盘）
 let emptyHint = ''; // 字典读不到时的原因，显示在表格空态里
 let pending = false; // 有操作在跑：按钮全部禁用，避免并发改同一份文件
 let toastTimer = null;
+let promptLoaded = false; // 提示词是静态内容，读一次就够
 
 // —— 界面状态 ——
 function setPhase(text) {
@@ -36,7 +58,9 @@ function setPhase(text) {
 
 function setPending(value) {
   pending = value;
-  for (const b of BUTTONS) b.disabled = value;
+  for (const el of BUSY_DISABLED) el.disabled = value;
+  // 下拉在「本机一个版本都没有」时本来就该禁用，解除 pended 时按数据重新判一次
+  if (!value && els.versionSelect.options.length === 0) els.versionSelect.disabled = true;
 }
 
 function showToast(text, isError) {
@@ -49,6 +73,25 @@ function showToast(text, isError) {
   }, isError ? 9000 : 4500);
 }
 
+// —— 标签页 ——
+async function showTab(panelId) {
+  for (const t of els.tabs) t.classList.toggle('active', t.dataset.panel === panelId);
+  for (const [id, el] of Object.entries(els.panels)) el.hidden = id !== panelId;
+  if (panelId === 'panel-prompt' && !promptLoaded) await loadPrompt();
+}
+
+async function loadPrompt() {
+  promptLoaded = true;
+  try {
+    const r = await window.api.prompt();
+    els.promptText.textContent = r.ok ? r.text : `读取失败：${r.error || '未知原因'}`;
+  } catch (e) {
+    promptLoaded = false; // 读失败允许下次切回来重试
+    els.promptText.textContent = `读取失败：${e.message || e}`;
+  }
+}
+
+// —— 渲染 ——
 function renderState(state) {
   if (!state.ok) {
     els.rootPath.textContent = '—';
@@ -68,6 +111,40 @@ function renderState(state) {
   parts.push(state.patched ? '已汉化' : '未汉化');
   parts.push(state.hasBackup ? '有备份' : '无备份');
   els.statusbar.textContent = parts.join(' · ');
+}
+
+// 版本下拉：默认只列**有汉化**（有字典）的版本，勾「全部」才连没字典的一起列。
+// 当前正在处理的那个恒在列——否则切换中或选了没字典的版本时，下拉会没有选中项。
+function renderVersions(state) {
+  const all = state.installed || [];
+  const list = els.versionAll.checked ? all : all.filter((x) => x.hasDict || x.current);
+
+  els.versionSelect.replaceChildren(
+    ...list.map((x) => {
+      const opt = document.createElement('option');
+      opt.value = x.version;
+      opt.textContent = x.custom ? `${x.version}（自定义）` : x.hasDict ? x.version : `${x.version}（无字典）`;
+      opt.selected = !!x.current;
+      return opt;
+    })
+  );
+  // 一个都列不出来（本机没装 GitHub Desktop）时给个占位项，下拉不至于空着
+  if (!list.length) {
+    const opt = document.createElement('option');
+    opt.textContent = all.length ? '（勾「全部」查看）' : '未找到 GitHub Desktop';
+    opt.disabled = true;
+    opt.selected = true;
+    els.versionSelect.appendChild(opt);
+    els.versionSelect.disabled = true;
+  }
+}
+
+function renderAbout(state) {
+  els.aboutVersion.textContent = `v${state.toolVersion}`;
+  els.aboutLicense.textContent = state.license || '—';
+  els.aboutDataRoot.textContent = state.dataRoot || '—';
+  els.aboutRepo.textContent = state.repoUrl || '—';
+  els.aboutMirror.textContent = state.mirrorUrl || '—';
 }
 
 function renderRows(list) {
@@ -105,7 +182,7 @@ function applyFilter() {
     : rows;
 
   renderRows(list);
-  els.tabLabel.textContent = rows.length
+  els.tabDict.textContent = rows.length
     ? `汉化字典 (${list.length}${needle ? ` / ${rows.length}` : ''})`
     : '汉化字典';
 
@@ -121,6 +198,8 @@ function applyFilter() {
 async function refresh() {
   const state = await window.api.state();
   renderState(state);
+  renderVersions(state);
+  renderAbout(state);
 
   const dict = await window.api.dictEntries();
   rows = dict.ok ? dict.rows : [];
@@ -160,6 +239,13 @@ function showError(r) {
   showToast(r.hint ? `${r.error}\n${r.hint}` : r.error || '操作失败', true);
 }
 
+// 多行结果 + 重启说明：notes 各占一行，重启那句接在末尾
+function notesWithRestart(r) {
+  const parts = [...(r.notes || [])];
+  if (r.restarted !== undefined && r.restarted !== null) parts.push(restartLine(r.restarted).trim());
+  return parts.join('\n');
+}
+
 async function doPatch() {
   await withPending('正在汉化', async () => {
     const r = await window.api.patch();
@@ -194,11 +280,14 @@ async function doPick() {
   });
 }
 
-async function doUpdate() {
-  await withPending('正在检查更新', async () => {
-    const r = await window.api.update();
-    if (!r.ok) return showError(r);
-    showToast(r.notes.join('\n'), !!r.hasError);
+// 切换版本：确认框在主进程弹（含「同时禁止该版本自动更新」的勾选），这里只发起与展示
+async function doSetVersion() {
+  const version = els.versionSelect.value;
+  if (!version) return;
+  await withPending('正在切换版本', async () => {
+    const r = await window.api.setVersion(version);
+    if (!r.ok) return r.canceled ? undefined : showError(r);
+    showToast(notesWithRestart(r), !!r.hasError);
   });
 }
 
@@ -207,17 +296,77 @@ async function doUpdateControl() {
   await withPending('正在设置更新管控', async () => {
     const r = await window.api.updateControl();
     if (!r.ok) return r.canceled ? undefined : showError(r);
+    showToast(notesWithRestart(r));
+  });
+}
+
+// 「关于」里的两个动作：检查更新只查工具自身，字典同步单独走
+async function doCheckUpdate() {
+  await withPending('正在检查更新', async () => {
+    const r = await window.api.checkToolUpdate();
+    if (!r.ok) return showError(r);
+    showToast(r.notes.join('\n'), !!r.hasError);
+  });
+}
+
+async function doSyncDict() {
+  await withPending('正在同步字典', async () => {
+    const r = await window.api.syncDict();
+    if (!r.ok) return showError(r);
     showToast(r.notes.join('\n'));
   });
+}
+
+// —— 关于窗口 ——
+function openAbout() {
+  els.aboutModal.hidden = false;
+}
+
+function closeAbout() {
+  els.aboutModal.hidden = true;
 }
 
 // —— 绑定 ——
 els.patch.addEventListener('click', doPatch);
 els.restore.addEventListener('click', doRestore);
 els.pick.addEventListener('click', doPick);
-els.update.addEventListener('click', doUpdate);
 els.updateControl.addEventListener('click', doUpdateControl);
 els.refresh.addEventListener('click', () => withPending('正在刷新', async () => {}));
+els.versionSelect.addEventListener('change', doSetVersion);
+// 勾「全部」只改列表范围：重新渲染一次，不动目标版本
+els.versionAll.addEventListener('change', async () => {
+  try {
+    renderVersions(await window.api.state());
+  } catch (e) {
+    showToast(`刷新版本列表失败：${e.message || e}`, true);
+  }
+});
+
+for (const t of els.tabs) t.addEventListener('click', () => showTab(t.dataset.panel));
+
+els.about.addEventListener('click', openAbout);
+els.aboutClose.addEventListener('click', closeAbout);
+// 点遮罩关闭（点对话框内部不该关）
+els.aboutModal.addEventListener('click', (ev) => {
+  if (ev.target === els.aboutModal) closeAbout();
+});
+document.addEventListener('keydown', (ev) => {
+  if (ev.key === 'Escape' && !els.aboutModal.hidden) closeAbout();
+});
+
+for (const [el, which] of [
+  [els.aboutRepo, 'repo'],
+  [els.aboutMirror, 'mirror'],
+]) {
+  el.addEventListener('click', async (ev) => {
+    ev.preventDefault();
+    const r = await window.api.openUrl(which);
+    if (!r.ok) showToast(r.error || '打开链接失败', true);
+  });
+}
+
+els.checkUpdate.addEventListener('click', doCheckUpdate);
+els.syncDict.addEventListener('click', doSyncDict);
 
 // 1862 条逐个过滤有开销，等输入停下来再算
 let filterTimer = null;
@@ -230,9 +379,9 @@ els.search.addEventListener('input', () => {
 window.api.onBusy(({ task, phase }) => setPhase(task ? phase : null));
 
 // 启动后主进程自动检查到新版本时才推（无新版不推）：提示一句就够，不打断用户手上的事——
-// 想装的时候点「检查更新」，那边会弹确认框问要不要下载。
+// 想装的时候点「关于」里的「检查更新」，那边会弹确认框问要不要下载。
 window.api.onToolUpdate((info) => {
-  showToast(`发现新版本 v${info.latest}（当前 v${info.current}）——点「检查更新」可下载安装。`);
+  showToast(`发现新版本 v${info.latest}（当前 v${info.current}）——点「关于」里的「检查更新」可下载安装。`);
 });
 
 refresh().catch((e) => showToast(`初始化失败：${e.message || e}`, true));

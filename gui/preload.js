@@ -6,19 +6,29 @@
 const { contextBridge, ipcRenderer } = require('electron');
 
 contextBridge.exposeInMainWorld('api', {
-  // 只读：当前状态与字典内容
+  // 只读：当前状态、字典内容、翻译提示词
   state: () => ipcRenderer.invoke('state'),
   dictEntries: () => ipcRenderer.invoke('dictEntries'),
+  prompt: () => ipcRenderer.invoke('prompt'),
 
   // 操作：确认框在主进程内弹（渲染进程无法伪造确认）
   patch: () => ipcRenderer.invoke('patch'),
   restore: () => ipcRenderer.invoke('restore'),
   pickPath: () => ipcRenderer.invoke('pickPath'),
-  update: () => ipcRenderer.invoke('update'),
+  // 切换要处理的 GitHub Desktop 版本：唯一入参是一个版本号字符串，
+  // 主进程会拿它去**本机已安装列表**里反查路径，渲染进程给不了任意目录。
+  setVersion: (version) => ipcRenderer.invoke('setVersion', version),
   // 更新管控：模式选择也在主进程的对话框里做，这里同样只暴露「动作」不带参数
   updateControl: () => ipcRenderer.invoke('updateControl'),
   // 工具自更新：确认框与下载都在主进程做，渲染进程只发起
   toolUpdateInstall: () => ipcRenderer.invoke('toolUpdateInstall'),
+  // 原先合在「检查更新」一个动作里的两件事，现在分开——「检查更新」只查工具自身，
+  // 字典同步单独走 syncDict（两者都在「关于」窗口里）。
+  checkToolUpdate: () => ipcRenderer.invoke('checkToolUpdate'),
+  syncDict: () => ipcRenderer.invoke('syncDict'),
+  // 打开项目地址：入参是白名单键（repo / mirror），不是任意 URL——
+  // 渲染进程给不了 URL，也就不存在「把 shell.openExternal 当任意链接跳板」这条路。
+  openUrl: (which) => ipcRenderer.invoke('openUrl', which),
 
   // 主进程推进度（「正在汉化 …」）；返回反注册函数，界面重载时不会留下重复监听
   onBusy: (fn) => {

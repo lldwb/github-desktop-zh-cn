@@ -32,6 +32,7 @@ const path = require('path');
 const common = require('../common');
 const dictEdit = require('./dict-edit');
 const dictGroups = require('./dict-groups');
+const { SYSTEM_PROMPT } = require('./dict-prompt');
 const releaseAssets = require('./release-assets');
 const scan = require('../cmd/scan');
 const net = require('../net');
@@ -405,16 +406,7 @@ function assertBaseUrl(base) {
   return u;
 }
 
-const SYSTEM_PROMPT = `你是 GitHub Desktop 中文汉化字典的译者。用户给你一批界面文案，你返回它们的简体中文译文。
-
-硬性要求：
-1. 只输出一个 JSON 对象，形如 {"1": "译文", "2": "译文"}，键是条目 id 的字符串形式。不要输出任何其它文字、不要用代码块包裹。
-2. 占位符一律原样保留：《{{count}}》《{name}}》《\${x}}》里的花括号一个都不能少、不能多，变量名也不能改。
-3. 原文里的 & 是菜单助记符，保留，并放在中文里对应的字之前（&File → &文件，Cu&t → 剪&切）。
-4. 省略号用单个 … 字符；原文末尾若有 … 或 : 等标点，译文同样收尾。
-5. GitHub、Copilot、Git、SSH、URL、Markdown、Desktop 等专有名词不翻译。
-6. 译文风格与用户给出的示例一致：贴近软件界面的习惯说法，简洁，句末不加句号。
-7. 无需翻译的条目（域名、仓库路径、纯专有名词、纯符号）原样返回。`;
+// 系统提示词在 dict-prompt.js：GUI 的「翻译提示词」标签页要原样展示它，两处同源，别内联回本文件。
 
 const PLACEHOLDER = /\{\{[^{}]*\}\}|\{[^{}]*\}|\$\{[^{}]*\}/g;
 const placeholdersOf = (s) => (s.match(PLACEHOLDER) || []).sort().join(' ');

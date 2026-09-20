@@ -16,35 +16,55 @@
       <button id="btn-restore" class="btn" type="button">还原</button>
       <button id="btn-pick" class="btn" type="button">选择</button>
       <button id="btn-update-control" class="btn" type="button">更新管控</button>
-      <button id="btn-update" class="btn" type="button">检查更新</button>
+      <span class="picker">
+        <label class="picker-label" for="version-select">版本</label>
+        <select id="version-select" title="切换要汉化的 GitHub Desktop 版本"></select>
+        <label class="picker-all" title="连没有汉化字典的版本一起列出">
+          <input id="version-all" type="checkbox" />全部
+        </label>
+      </span>
       <button id="btn-refresh" class="btn" type="button">刷新</button>
+      <button id="btn-about" class="btn" type="button">关于</button>
     </header>
 
     <div class="tabbar">
-      <span id="tab-label" class="tab active">汉化字典</span>
+      <span id="tab-dict" class="tab active" data-panel="panel-dict">汉化字典</span>
+      <span id="tab-prompt" class="tab" data-panel="panel-prompt">翻译提示词</span>
     </div>
 
     <main class="content">
-      <div class="searchbar">
-        <label for="search">搜索</label>
-        <input id="search" type="search" placeholder="按英文或中文过滤…" autocomplete="off" spellcheck="false" />
-      </div>
+      <section id="panel-dict" class="panel">
+        <div class="searchbar">
+          <label for="search">搜索</label>
+          <input id="search" type="search" placeholder="按英文或中文过滤…" autocomplete="off" spellcheck="false" />
+        </div>
 
-      <div class="table-wrap">
-        <!-- 只读展示：无输入控件、无编辑入口 -->
-        <table id="dict-table">
-          <thead>
-            <tr>
-              <th class="col-en">英文（程序文件中的英文）</th>
-              <th class="col-zh">中文</th>
-              <th class="col-group">组名</th>
-              <th class="col-type">类型</th>
-            </tr>
-          </thead>
-          <tbody id="dict-body"></tbody>
-        </table>
-        <p id="table-empty" class="empty" hidden>正在读取字典…</p>
-      </div>
+        <div class="table-wrap">
+          <!-- 只读展示：无输入控件、无编辑入口 -->
+          <table id="dict-table">
+            <thead>
+              <tr>
+                <th class="col-en">英文（程序文件中的英文）</th>
+                <th class="col-zh">中文</th>
+                <th class="col-group">组名</th>
+                <th class="col-type">类型</th>
+              </tr>
+            </thead>
+            <tbody id="dict-body"></tbody>
+          </table>
+          <p id="table-empty" class="empty" hidden>正在读取字典…</p>
+        </div>
+      </section>
+
+      <!-- 翻译提示词：与 scripts/dict/dict-prompt.js 同源，只读展示 -->
+      <section id="panel-prompt" class="panel" hidden>
+        <p class="prompt-hint">
+          下面这段是「自动产出字典」（<code>dict-auto</code>）交给翻译模型的系统提示词——字典里新增的
+          界面文案由它约束译法。改动会影响模型输出，故在此只读展示，编辑请改
+          <code>scripts/dict/dict-prompt.js</code>。
+        </p>
+        <pre id="prompt-text" class="prompt-text">正在读取…</pre>
+      </section>
     </main>
 
     <footer class="bottombar">
@@ -58,6 +78,30 @@
     </footer>
 
     <div id="statusbar" class="statusbar">正在识别 GitHub Desktop 安装位置…</div>
+
+    <!-- 关于：工具自身的信息与操作（检查更新 / 同步字典 都收在这里） -->
+    <div id="about" class="modal" hidden>
+      <div class="modal-box" role="dialog" aria-modal="true" aria-labelledby="about-title">
+        <h2 id="about-title" class="modal-title">GitHub Desktop 汉化工具</h2>
+        <dl class="about-list">
+          <dt>版本</dt>
+          <dd id="about-version">—</dd>
+          <dt>项目地址</dt>
+          <dd><a id="about-repo" class="link" href="#">—</a></dd>
+          <dt>国内镜像</dt>
+          <dd><a id="about-mirror" class="link" href="#">—</a></dd>
+          <dt>许可证</dt>
+          <dd id="about-license">—</dd>
+          <dt>数据目录</dt>
+          <dd id="about-dataroot" class="mono">—</dd>
+        </dl>
+        <div class="modal-actions">
+          <button id="btn-check-update" class="btn primary" type="button">检查更新</button>
+          <button id="btn-sync-dict" class="btn" type="button">同步字典</button>
+          <button id="btn-about-close" class="btn" type="button">关闭</button>
+        </div>
+      </div>
+    </div>
 
     <div id="toast" class="toast" hidden></div>
 

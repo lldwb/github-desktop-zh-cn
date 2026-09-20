@@ -155,7 +155,8 @@ jobs:
       - name: 产物自检
         run: node tools/check-gui-dist.js
       # 产物启动冒烟：真的把产物起一次，确认窗口与界面能加载——静态自检看不出「删掉的组件是不是
-      # 启动必需的」。判据与输出见 gui/main.js 的 --smoke-test（窗口尺寸 / 按钮数 / IPC 往返），
+      # 启动必需的」。判据与输出见 gui/main.js 的 --smoke-test（窗口尺寸 / 工具栏按钮数 /
+      # 标签页数 / 「翻译提示词」取到文本 / 「关于」能开 / IPC 往返），
       # 失败或 30 秒超时都会打印 SMOKE_FAIL 并以非 0 退出。**四个 runner 都没有 GPU**，正好打在
       # 「软渲染组件删掉后还有没有回退路径」这条风险链上（裁剪清单见 build/after-pack.js）。
       - name: 产物启动冒烟

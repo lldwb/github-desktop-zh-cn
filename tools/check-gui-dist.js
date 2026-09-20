@@ -141,6 +141,7 @@ const checkAsarContents = (asar) => {
     'scripts/cmd/patch.js',
     'scripts/cmd/restore.js',
     'scripts/dict/dict-sync.js',
+    'scripts/dict/dict-prompt.js',
     'scripts/update.js',
     'package.json',
   ];

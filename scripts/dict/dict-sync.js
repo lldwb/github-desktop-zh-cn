@@ -1,7 +1,7 @@
 // scripts/dict/dict-sync.js — 字典在线同步
 // 打包只内嵌最新版本字典，其余版本的字典运行时从仓库获取：
 //   - ensureDict：本地缺该版本字典时才联网（汉化最新版本不联网，直接吃内嵌）；
-//   - syncLatest：用户主动「检查更新」时强制拉取仓库最新版并覆盖。
+//   - syncLatest：用户主动「同步字典」时强制拉取仓库最新版并覆盖。
 // 远程源按 common.remoteDictUrls 的顺序尝试，全失败则抛出可读错误由调用方兜底。
 'use strict';
 const fs = require('fs');

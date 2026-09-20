@@ -87,6 +87,48 @@ body {
   border-color: #8cb4f0;
 }
 
+/* —— 版本切换（工具栏内：下拉列出本机已安装的 GitHub Desktop） —— */
+.picker {
+  display: flex;
+  gap: 5px;
+  align-items: center;
+  padding: 0 2px;
+}
+
+.picker-label,
+.picker-all {
+  color: var(--text-muted);
+}
+
+.picker select {
+  max-width: 132px;
+  padding: 5px 8px;
+  font: inherit;
+  color: var(--text);
+  background: #fff;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  outline: none;
+}
+
+.picker select:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px rgba(31, 111, 235, 0.15);
+}
+
+.picker select:disabled {
+  color: #8c959f;
+  background: var(--bg-toolbar);
+}
+
+.picker-all {
+  display: flex;
+  gap: 3px;
+  align-items: center;
+  cursor: pointer;
+  user-select: none;
+}
+
 /* —— 标签页 —— */
 .tabbar {
   display: flex;
@@ -102,6 +144,13 @@ body {
   color: var(--text-muted);
   border: 1px solid transparent;
   border-radius: 6px 6px 0 0;
+  cursor: pointer;
+  user-select: none;
+}
+
+.tab:hover:not(.active) {
+  color: var(--text);
+  background: var(--bg-hover);
 }
 
 .tab.active {
@@ -118,6 +167,19 @@ body {
   flex-direction: column;
   flex: 1;
   min-height: 0;
+}
+
+/* 标签页对应的面板：同一时刻只显示一个（另一个带 hidden）。
+   注意 .panel 的 display 会盖掉 hidden 的默认样式，故 [hidden] 那条必须显式写。 */
+.panel {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+}
+
+.panel[hidden] {
+  display: none;
 }
 
 .searchbar {
@@ -305,6 +367,9 @@ tbody tr:hover {
   position: fixed;
   right: 16px;
   bottom: 64px;
+  /* 高于 .modal：操作结果常在「关于」窗口开着时产生（点「检查更新」就是），
+     压在模态下面等于没提示 */
+  z-index: 20;
   max-width: 620px;
   padding: 10px 14px;
   color: #fff;
@@ -321,4 +386,103 @@ tbody tr:hover {
 
 .toast[hidden] {
   display: none;
+}
+
+/* —— 翻译提示词面板（只读展示 scripts/dict/dict-prompt.js） —— */
+.prompt-hint {
+  margin: 0 12px 8px;
+  color: var(--text-muted);
+  line-height: 1.7;
+}
+
+.prompt-hint code {
+  padding: 1px 4px;
+  font-family: "Cascadia Mono", Consolas, "Courier New", monospace;
+  font-size: 12px;
+  background: var(--bg-toolbar);
+  border-radius: 3px;
+}
+
+.prompt-text {
+  flex: 1;
+  min-height: 0;
+  margin: 0 12px 12px;
+  padding: 12px 14px;
+  overflow: auto;
+  font-family: "Cascadia Mono", Consolas, "Courier New", monospace;
+  font-size: 12.5px;
+  line-height: 1.75;
+  /* 提示词里有换行与长行：保留换行，长行折行而不是横向滚动 */
+  white-space: pre-wrap;
+  word-break: break-word;
+  background: var(--bg-toolbar);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+
+/* —— 关于（模态） —— */
+.modal {
+  position: fixed;
+  inset: 0;
+  z-index: 10;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(31, 35, 40, 0.35);
+}
+
+.modal[hidden] {
+  display: none;
+}
+
+.modal-box {
+  width: 480px;
+  max-width: calc(100vw - 48px);
+  padding: 18px 20px 16px;
+  background: #fff;
+  border-radius: 8px;
+  box-shadow: 0 12px 32px rgba(31, 35, 40, 0.28);
+}
+
+.modal-title {
+  margin: 0 0 14px;
+  font-size: 15px;
+}
+
+.about-list {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 8px 14px;
+  margin: 0 0 18px;
+}
+
+.about-list dt {
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
+.about-list dd {
+  margin: 0;
+  word-break: break-all;
+}
+
+.link {
+  color: var(--accent);
+  text-decoration: none;
+  cursor: pointer;
+}
+
+.link:hover {
+  text-decoration: underline;
+}
+
+.mono {
+  font-family: "Cascadia Mono", Consolas, "Courier New", monospace;
+  font-size: 12px;
+}
+
+.modal-actions {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
 }
