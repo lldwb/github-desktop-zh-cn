@@ -4,6 +4,14 @@
 
 - **[打包与分发.md](打包与分发.md)**：把工具分发给普通用户——单文件产物（中文菜单）与 GUI 产物（Electron 操作面板）的构建流程、跨平台构建、发布前检查清单、常见问题。
 
+## agents/
+
+`AGENTS.md` 的**按需加载分册**——从它拆出的三节各成一份，正文逐字不变；用到哪份读哪份，不必全量翻 `AGENTS.md`（它的顶部索引表给出触发条件）：
+
+- **[发版.md](agents/发版.md)**：版本号分级与三处对齐、发版顺序、产物命名表、tag 与 Release、Gitee 镜像与 repair-release、CHANGELOG 条目格式——发版、改产物命名或动 CI 发布流程前读；
+- **[已知坑.md](agents/已知坑.md)**：本仓库踩过的坑逐条留档，均为「现象 / 根因 / 处置」形式的粗体条目——排查故障、遇到似曾相识的现象时读；
+- **[翻译维护.md](agents/翻译维护.md)**：三类翻译任务、共同主干、铁律、能否收录的判定表与汇报要求——增删改译文字典条目、跑自动产出字典前读（操作手册在 `.claude/skills/translation-maintain/`，与本分册是同一套规则的两种粒度）。
+
 ## design/
 
 设计过程文档（方案 / 设计 / 任务清单），实现完成后保留备查。
@@ -26,9 +34,9 @@ GUI 形态的过程文档：
 
 ## 新旧路径对照
 
-`design/` 下的正文是**历史设计过程记录**——记录的是当时的路径与决策，故正文里的脚本 / 测试 / 文档路径**保持原文，不随目录调整改写**。读这些文档时按下表对照：
+`design/` 下的正文是**历史设计过程记录**——记录的是当时的路径与决策，故正文里的脚本 / 测试 / 文档路径**保持原文，不随目录调整改写**；同理，`CHANGELOG.md` 与 `docs/design/**` 里指向 `AGENTS.md` 章节的引用也保持原文——章节若已迁到 `docs/agents/`，按下表换算。读这些文档时按下表对照：
 
-| 正文里的路径（当时） | 现在的位置 |
+| 正文里的路径 / 章节（当时） | 现在的位置 |
 |---|---|
 | `scripts/dict-edit.js` | `scripts/dict/dict-edit.js` |
 | `scripts/dict-groups.js` | `scripts/dict/dict-groups.js` |
@@ -43,6 +51,10 @@ GUI 形态的过程文档：
 | `docs/gui/*.md` | `docs/design/gui/*.md` |
 | `docs/dict-v2/*.md` | `docs/design/dict-v2/*.md` |
 | `scripts/common.js` / `scripts/update.js` / `scripts/cli.js` / `build/after-pack.js` | 位置不变 |
+| `AGENTS.md` 的 **发版** 节 | `docs/agents/发版.md` |
+| `AGENTS.md` 的 **产物命名** 子块（发版节内） | `docs/agents/发版.md` |
+| `AGENTS.md` 的 **已知坑** 节 | `docs/agents/已知坑.md` |
+| `AGENTS.md` 的 **翻译维护（字典迭代）** 节 | `docs/agents/翻译维护.md` |
 
 规划中：
 
