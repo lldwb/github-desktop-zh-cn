@@ -20,15 +20,15 @@ const {
   loadDict,
   dictLabel,
   scopedEntries,
+  effectiveKeys,
   backupAppFiles,
   backupExists,
   backupDir,
   isPatched,
   isPackaged,
   applyDictInStrings,
+  TARGETS,
 } = common;
-
-const TARGETS = ['main.js', 'renderer.js'];
 
 function parseArgs(argv) {
   const args = { dryRun: false, explicitPath: null, version: null, updateControl: null };
@@ -61,12 +61,9 @@ function printHelp() {
   -h, --help       显示本帮助`);
 }
 
-// 执行汉化（CLI 与交互式入口共用）：args = { dryRun, explicitPath, version, quiet }
-// quiet 为真时不输出中间过程，只留最终结果（交互式菜单用）。
-// 成功返回 { version, total, app, dryRun, restarted, downloaded }；
-// 版本不一致抛 exitCode=2 的错误，其余错误按 exitCode=1 处理。
-async function run(args = {}) {
-  const log = args.quiet ? () => {} : console.log;
+// 版本与安装目录：字典版本取 --version 或 dictionaries/ 下最新版本，再定位安装目录。
+// 两者不一致直接拒绝——错配可能导致应用无法启动（见文件头）。返回 { version, app }。
+function resolveVersion(args) {
   const versions = listDictVersions();
   if (versions.length === 0) throw new Error('dictionaries/ 下没有版本目录');
   const version = args.version || versions[versions.length - 1];
@@ -78,19 +75,23 @@ async function run(args = {}) {
     e.hint = '请使用与安装版本对应的字典（--version 指定），错配可能导致应用无法启动。';
     throw e;
   }
+  return { version, app };
+}
 
-  // 字典就位：本地有外部字典或内嵌字典都不联网；两者都没有（如汉化旧版本）才下载
+// 字典就位并读出条目：本地有外部字典或内嵌字典都不联网；两者都没有（如汉化旧版本）才下载。
+// 返回 { entries, downloaded }。
+async function prepareDict(version, log) {
   const synced = await dictSync.ensureDict(version);
   if (synced.downloaded) log(`已下载字典：${synced.path}`);
 
   const entries = loadDict(version);
   log(`字典：${dictLabel(version)}（${entries.size} 条）`);
-  log(`目标版本：${app.version}（${app.appDir}）`);
+  return { entries, downloaded: synced.downloaded };
+}
 
-  // 「已汉化」判定必须在写回之前做：首次汉化时备份与当前文件相同（都是官方原版），
-  // 判定为未汉化，0 命中条目才会作为「需人工核对」报出来，而不是被当成预期
-  const alreadyPatched = isPatched(app.appDir, version);
-
+// 逐文件替换（干跑时只在内存里替换）、按需备份与写回，再报 0 命中清单。
+// 返回 { totalAll, perFile }。
+function replaceTargets(app, version, entries, alreadyPatched, args, log) {
   let totalAll = 0;
   const perFile = {};
   for (const f of TARGETS) {
@@ -135,13 +136,7 @@ async function run(args = {}) {
   // 两个文件都未命中的条目（真正缺失，可能为版本错配或条目失效）
   // 已汉化时（增量补丁）0 命中属预期：英文串已被替换
   // 统计口径按「文件生效键」（作用域键去前缀）合并去重
-  const effectiveKeys = [
-    ...new Set([
-      ...scopedEntries(entries, 'main.js').keys(),
-      ...scopedEntries(entries, 'renderer.js').keys(),
-    ]),
-  ];
-  const globalMisses = effectiveKeys.filter(
+  const globalMisses = effectiveKeys(entries).filter(
     (k) => !perFile['main.js'].has(k) && !perFile['renderer.js'].has(k)
   );
   if (globalMisses.length > 0 && !alreadyPatched) {
@@ -152,34 +147,38 @@ async function run(args = {}) {
   }
 
   log(`\n合计命中 ${totalAll} 处。`);
+  return { totalAll, perFile };
+}
 
-  // —— 更新管控补丁组 ——
-  // 与汉化同属「补丁」，但改的是逻辑不是文案：往 main.js 注入一道闸。
-  // 只动 main.js——checkForUpdates 的方法体与 IPC 入口都在那里，renderer 侧只是调用方。
-  let injected = false;
-  if (args.updateControl) {
-    if (args.dryRun) {
-      log('\n（--dry-run：更新管控未注入）');
-    } else {
-      const mainFile = path.join(app.appDir, 'main.js');
-      const r = updateControl.inject(fs.readFileSync(mainFile, 'utf8'), {
-        dictDir: path.join(common.dataRoot(), 'dictionaries'),
-        mode: args.updateControl,
-        // 「更新后自动汉化」只在打包态注入：源码态下工具就是仓库本身（npm run patch 即可），
-        // 往产物里写死一个 node 路径，换台机器就指向不存在的东西了。
-        toolPath: isPackaged() ? process.execPath : null,
-      });
-      if (r.changed) {
-        fs.writeFileSync(mainFile, r.content, 'utf8');
-        injected = true;
-        const what = args.updateControl === 'off' ? '完全禁止自动更新' : '没有字典就不更新';
-        log(`\n已注入更新管控（${what}）：main.js`);
-      } else {
-        log(`\n更新管控未注入：${r.reason}`);
-      }
-    }
+// 更新管控补丁组：与汉化同属「补丁」，但改的是逻辑不是文案：往 main.js 注入一道闸。
+// 只动 main.js——checkForUpdates 的方法体与 IPC 入口都在那里，renderer 侧只是调用方。
+// 返回本轮是否真的注入了（干跑与「已是该形态」都不算）。
+function applyUpdateControl(app, args, log) {
+  if (!args.updateControl) return false;
+  if (args.dryRun) {
+    log('\n（--dry-run：更新管控未注入）');
+    return false;
   }
+  const mainFile = path.join(app.appDir, 'main.js');
+  const r = updateControl.inject(fs.readFileSync(mainFile, 'utf8'), {
+    dictDir: path.join(common.dataRoot(), 'dictionaries'),
+    mode: args.updateControl,
+    // 「更新后自动汉化」只在打包态注入：源码态下工具就是仓库本身（npm run patch 即可），
+    // 往产物里写死一个 node 路径，换台机器就指向不存在的东西了。
+    toolPath: isPackaged() ? process.execPath : null,
+  });
+  if (!r.changed) {
+    log(`\n更新管控未注入：${r.reason}`);
+    return false;
+  }
+  fs.writeFileSync(mainFile, r.content, 'utf8');
+  const what = args.updateControl === 'off' ? '完全禁止自动更新' : '没有字典就不更新';
+  log(`\n已注入更新管控（${what}）：main.js`);
+  return true;
+}
 
+// 收尾：记账 → 重启 → 组装返回值。返回结构是对外契约（cli.js 与 GUI 的 patch 处理器按字段读）。
+function finalize(version, app, args, { totalAll, injected, downloaded }) {
   // 记账：i18n 是本轮必打的（run 的主体就是它），updateControl 按参数。
   // **并入已有记录而不是覆盖**——不带 --update-control 再跑一次，不该把上次打的更新管控
   // 从账上抹掉，那会让「按组还原」漏掉它。要撤该组得走 restore 的按组还原。
@@ -201,9 +200,28 @@ async function run(args = {}) {
     app,
     dryRun: !!args.dryRun,
     restarted,
-    downloaded: synced.downloaded,
+    downloaded,
     updateControl: injected ? args.updateControl : null,
   };
+}
+
+// 执行汉化（CLI 与交互式入口共用）：args = { dryRun, explicitPath, version, quiet, noRestart, updateControl }
+// quiet 为真时不输出中间过程，只留最终结果（交互式菜单用）。
+// 成功返回 { version, total, app, dryRun, restarted, downloaded, updateControl }；
+// 版本不一致抛 exitCode=2 的错误，其余错误按 exitCode=1 处理。
+async function run(args = {}) {
+  const log = args.quiet ? () => {} : console.log;
+  const { version, app } = resolveVersion(args);
+  const { entries, downloaded } = await prepareDict(version, log);
+  log(`目标版本：${app.version}（${app.appDir}）`);
+
+  // 「已汉化」判定必须在写回之前做：首次汉化时备份与当前文件相同（都是官方原版），
+  // 判定为未汉化，0 命中条目才会作为「需人工核对」报出来，而不是被当成预期
+  const alreadyPatched = isPatched(app.appDir, version);
+
+  const { totalAll } = replaceTargets(app, version, entries, alreadyPatched, args, log);
+  const injected = applyUpdateControl(app, args, log);
+  return finalize(version, app, args, { totalAll, injected, downloaded });
 }
 
 async function main() {

@@ -104,7 +104,7 @@ async function check() {
     sumsUrl: pickSums(release.assets || []),
     // Gitee 的 release 对象没有 html_url 字段（实测字段：id / tag_name / name / body /
     // prerelease / author / created_at / assets），按 tag 拼一个出来
-    releaseUrl: release.html_url || `https://gitee.com/${common.GH_OWNER}/${common.GH_REPO}/releases/tag/${release.tag_name}`,
+    releaseUrl: release.html_url || `${common.GITEE_WEB}/releases/tag/${release.tag_name}`,
     source,
   };
 }

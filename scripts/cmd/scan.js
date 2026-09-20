@@ -7,7 +7,9 @@
 
 const fs = require('fs');
 const path = require('path');
-const { locateApp, listDictVersions, loadDict, scopedEntries, stringLiterals } = require('../common');
+const {
+  locateApp, listDictVersions, loadDict, scopedEntries, stringLiterals, normalize, TARGETS,
+} = require('../common');
 
 function parseArgs(argv) {
   const args = { explicitPath: null, version: null, out: null, minLength: 8 };
@@ -36,9 +38,6 @@ function printHelp() {
   --path <目录>     显式指定 resources 目录
   -h, --help        显示本帮助`);
 }
-
-// 产物侧归一化：转义换行/制表符当空白，折叠连续空白，忽略大小写
-const normalize = (c) => c.replace(/\\n|\\t|\\r/g, ' ').replace(/\s+/g, ' ').trim().toLowerCase();
 
 // 明显不是界面文案的候选（代码键名、CSS 类、路径、URL、模型/SVG 数据等）
 function looksLikeNoise(c) {
@@ -77,7 +76,7 @@ function collectCandidates({ appDir, known = new Set(), minLength = 8 } = {}) {
   // 记文件是为了作用域键的继承：`renderer.js|en-US` 这类键只对单个文件生效，
   // 历史字典里的作用域键在新产物上还适不适用，取决于该文本出现在哪些文件。
   const index = new Map();
-  for (const f of ['main.js', 'renderer.js']) {
+  for (const f of TARGETS) {
     const src = fs.readFileSync(path.join(appDir, f), 'utf8');
     for (const l of stringLiterals(src)) {
       if (l.template) continue;

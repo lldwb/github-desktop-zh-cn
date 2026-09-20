@@ -98,9 +98,8 @@ const MENU_NAMES = {
   'GitHub Desktop': '应用',
 };
 
-// 产物侧归一化：与 scan.js 同一口径——产物文案经 sentenceCase 处理，与源码的 Title Case
-// 不同，JSX 多行文本在产物里还带转义换行与缩进，故折叠空白 + 忽略大小写。
-const normalize = (c) => c.replace(/\\n|\\t|\\r/g, ' ').replace(/\s+/g, ' ').trim().toLowerCase();
+// 产物侧归一化（转义换行/制表符当空白 + 折叠空白 + 忽略大小写）：SSOT 在 common，与 scan.js 同一口径
+const normalize = common.normalize;
 // 助记符 `&`：源码 label 带它（`&File`），产物里被剥掉；两侧都剥才比得上
 const stripMnemonic = (s) => s.replace(/&/g, '');
 

@@ -28,9 +28,8 @@ const {
   setPatchGroups,
   getUpdateControlMode,
   dataRoot,
+  TARGETS,
 } = common;
-
-const TARGETS = ['main.js', 'renderer.js'];
 
 function parseArgs(argv) {
   const args = { explicitPath: null, version: null, groups: [] };

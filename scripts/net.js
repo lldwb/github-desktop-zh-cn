@@ -404,4 +404,4 @@ async function download(url, destPath, opts = {}) {
   return { bytes: received, total };
 }
 
-module.exports = { get, getRaw, getJson, postJson, head, download, getProxy, proxyFallbackReason, UA };
+module.exports = { get, getRaw, getJson, postJson, head, download, UA };

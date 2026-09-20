@@ -12,6 +12,11 @@ const RESOURCES_REL = ['resources'];
 const APP_SUBDIR = 'app';
 const APP_NAME = 'github-desktop-zh-cn';
 
+// 替换对象（汉化 / 还原 / 校验 / 备份共有）：官方产物 app 目录下的这两个文件。
+// 各入口一律引用这里，不各写一份字面量。dict-edit 的 SCOPE_FILES 与 release-assets 的
+// CORE_FILES 是另外两回事（作用域键前缀域 / 官方产物核心清单），值同语义异，不并入。
+const TARGETS = ['main.js', 'renderer.js'];
+
 // 字典版本目录的形态：三段数字（3.6.6）。字典版本与 GitHub Desktop 版本强对应，
 // 正式版本号一律是 X.Y.Z——非该形态的目录（测试夹具 0.0.0-test、下载残留 3.6.6-beta、
 // 临时解包目录等）都不算「可用字典版本」，一律挡在版本列表之外。
@@ -32,6 +37,8 @@ const GH_API = `https://api.github.com/repos/${GH_OWNER}/${GH_REPO}`;
 // 放在末位兜底——它不是权威源，内容与 main 分支一致时才有同等效力。
 const GITEE_RAW = `https://gitee.com/${GH_OWNER}/${GH_REPO}/raw/${GH_BRANCH}`;
 const GITEE_API = `https://gitee.com/api/v5/repos/${GH_OWNER}/${GH_REPO}`;
+// Gitee 仓库网页地址：「关于」的国内镜像链接与自更新里的 release 页地址都从这里拼
+const GITEE_WEB = `https://gitee.com/${GH_OWNER}/${GH_REPO}`;
 
 // —— 运行形态与数据根目录（SSOT）——
 // 四种运行形态，判据只有 isPackaged()（SEA / bundle 产物）与 isElectronPackaged()（Electron 产物）两个：
@@ -218,7 +225,7 @@ function listInstalledVersions() {
 function repoUrls() {
   return {
     repo: `https://github.com/${GH_OWNER}/${GH_REPO}`,
-    mirror: `https://gitee.com/${GH_OWNER}/${GH_REPO}`,
+    mirror: GITEE_WEB,
   };
 }
 
@@ -435,6 +442,20 @@ function scopedEntries(entries, file) {
   return out;
 }
 
+// 产物侧文案归一化（scan 的候选自查与 dict-groups 的组名推断共用同一口径）：
+// 转义换行 / 制表符当空白，折叠连续空白，忽略大小写。产物文案经 sentenceCase 处理
+// （Confirm discard changes），与源码的 Title Case（Confirm Discard Changes）不同，
+// JSX 多行文本在产物里还带转义换行与缩进——两边各写一份过滤规则必然漂移。
+function normalize(c) {
+  return c.replace(/\\n|\\t|\\r/g, ' ').replace(/\s+/g, ' ').trim().toLowerCase();
+}
+
+// 「生效键」：两个文件的作用域键去掉前缀后的并集（按 TARGETS 顺序，重复键只留一次）。
+// patch 与 verify 都按它统计「两个文件均 0 命中」的条目——各写一份必然漂移。
+function effectiveKeys(entries) {
+  return [...new Set(TARGETS.flatMap((f) => [...scopedEntries(entries, f).keys()]))];
+}
+
 // 远程字典候选地址（按序尝试：权威源 → CDN 兜底 → 镜像兜底）
 function remoteDictUrls(version) {
   const rel = `dictionaries/${version}/zh-CN.json`;
@@ -588,9 +609,8 @@ function backupDir(version) {
 // 备份 main.js / renderer.js 到 tmp/backup/<version>/（已存在则跳过）
 function backupAppFiles(appDir, version) {
   const dest = backupDir(version);
-  const targets = ['main.js', 'renderer.js'];
   const backed = [];
-  for (const f of targets) {
+  for (const f of TARGETS) {
     const src = path.join(appDir, f);
     const dst = path.join(dest, f);
     if (fs.existsSync(dst)) {
@@ -613,7 +633,7 @@ function backupExists(version) {
 function isPatched(appDir, version) {
   if (!backupExists(version)) return false;
   const backup = backupDir(version);
-  return ['main.js', 'renderer.js'].some((f) => {
+  return TARGETS.some((f) => {
     const b = path.join(backup, f);
     const cur = path.join(appDir, f);
     return fs.existsSync(b) && fs.existsSync(cur) && !fs.readFileSync(b).equals(fs.readFileSync(cur));
@@ -846,10 +866,10 @@ function checkSyntax(source, file = '<string>') {
 module.exports = {
   REPO_ROOT,
   APP_NAME,
+  TARGETS,
   getTmpDir,
   dataRoot,
   isPackaged,
-  isElectron,
   isElectronPackaged,
   configPath,
   readConfig,
@@ -875,7 +895,6 @@ module.exports = {
   PATCH_GROUPS,
   PATCH_GROUP_LABELS,
   patchStatePath,
-  readPatchState,
   setPatchGroups,
   getPatchGroups,
   getUpdateControlMode,
@@ -884,6 +903,8 @@ module.exports = {
   checkSyntax,
   buildEntries,
   scopedEntries,
+  normalize,
+  effectiveKeys,
   splitScopedKey,
   reverseEntries,
   remoteDictUrls,
@@ -898,6 +919,6 @@ module.exports = {
   GH_OWNER,
   GH_REPO,
   GH_RAW,
-  GITEE_RAW,
   GITEE_API,
+  GITEE_WEB,
 };

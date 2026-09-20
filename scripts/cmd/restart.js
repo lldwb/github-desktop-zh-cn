@@ -90,4 +90,4 @@ function restartApp(resourcesDir) {
   return 'restarted';
 }
 
-module.exports = { appTarget, isRunning, launch, restartApp };
+module.exports = { launch, restartApp };
