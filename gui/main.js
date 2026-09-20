@@ -95,15 +95,22 @@ async function runSmokeTest(win) {
       const promptOk = pre().textContent.includes('GitHub Desktop 中文汉化字典的译者');
       document.querySelector('#btn-about').click();
       const aboutOk = !document.querySelector('#about').hidden;
+      // ③ 「切换版本」点了要弹出列表窗口。本机没装 GitHub Desktop 时这个按钮是禁用态、
+      //    点了不触发事件，故先解除禁用——这里验的是「点击 → 开窗」这条链路本身。
+      const switchBtn = document.querySelector('#btn-switch-version');
+      switchBtn.disabled = false;
+      switchBtn.click();
+      const switchOk = !document.querySelector('#switch-version').hidden;
 
       return {
-        // 只数**工具栏**的按钮：「关于」窗口里还有几个（带 hidden），数全体会把它们一并算进来，
+        // 只数**工具栏**的按钮：两个模态窗口里还有几个（带 hidden），数全体会把它们一并算进来，
         // 判据就不再是「界面骨架渲染齐了」而是「HTML 里写了几个 button」。
         buttons: document.querySelectorAll('header.toolbar button').length,
         tabs: document.querySelectorAll('.tab').length,
-        versionOptions: document.querySelectorAll('#version-select option').length,
+        versionItems: document.querySelectorAll('#version-list button').length,
         promptOk,
         aboutOk,
+        switchOk,
         rows: document.querySelectorAll('#dict-body tr').length,
         status: bar().textContent.trim().replace(/\\s+/g, ' ').slice(0, 60),
         toolVersion: state.toolVersion,
@@ -117,15 +124,16 @@ async function runSmokeTest(win) {
     // 限制到屏幕内（实测 mac arm64 1024×642、Windows 1008×681），按请求尺寸判会随环境误报。
     const [w, h] = win.getContentSize();
     if (w < 640 || h < 480) throw new Error(`窗口内容区异常 ${w}x${h}`);
-    if (r.buttons !== 6) throw new Error(`工具栏按钮数 ${r.buttons}（期望 6）`);
+    if (r.buttons !== 7) throw new Error(`工具栏按钮数 ${r.buttons}（期望 7）`);
     if (r.tabs !== 2) throw new Error(`标签页数 ${r.tabs}（期望 2）`);
     if (!r.promptOk) throw new Error('「翻译提示词」标签页没有取到提示词');
     if (!r.aboutOk) throw new Error('「关于」窗口没能打开');
+    if (!r.switchOk) throw new Error('「切换版本」窗口没能打开');
 
     const gpu = app.getGPUFeatureStatus() || {};
     smokeOut(
       `SMOKE_OK platform=${process.platform} arch=${process.arch} window=${w}x${h} buttons=${r.buttons} tabs=${r.tabs}` +
-        ` prompt=true about=true versionOptions=${r.versionOptions}` +
+        ` prompt=true about=true switch=true versionItems=${r.versionItems}` +
         ` rows=${r.rows} ipc=true toolVersion=${r.toolVersion}` +
         ` gpu_compositing=${gpu.gpu_compositing || '?'} webgl=${gpu.webgl || '?'} vulkan=${gpu.vulkan || '?'}` +
         ` dataRoot="${r.dataRoot}" status="${r.status}"`
@@ -159,10 +167,11 @@ function installRoot(resourcesDir) {
   return /^app-/.test(path.basename(parent)) ? path.dirname(parent) : parent;
 }
 
-// 工具栏版本下拉的数据源：本机已安装的 GitHub Desktop——Windows 上可能不止一个
+// 「切换版本」窗口的数据源：本机已安装的 GitHub Desktop——Windows 上可能不止一个
 // （官方升级后旧的 app-<版本> 目录会留着）。`hasDict` 决定它出不出现在默认视图
 // （「只显示有汉化的版本」），`custom` 标记「不在自动探测范围内、由「选择」手动指定」的目录。
-// 当前目标若不在已安装列表里（用「选择」指到了别处），补一条出来——否则下拉没有能选中的项。
+// 当前目标若不在已安装列表里（用「选择」指到了别处），补一条出来——否则列表里没有它，
+// 就看不出来「现在正在用的是哪个」。
 function installedForPicker(target, dictVersions) {
   const list = common.listInstalledVersions().map((x) => ({
     version: x.version,
@@ -428,7 +437,7 @@ function registerIpc() {
     if (!hit) return { ok: false, error: `本机没有 ${version} 的安装目录，请点「选择」手动指定。` };
 
     const cur = resolveTarget();
-    // 选中的就是当前目标（下拉本身已经高亮它）：不必弹框，直接当作取消
+    // 选中的就是当前目标（列表里那一项本来就标着「当前」且点不动）：不必弹框，直接当作取消
     if (!cur.error && cur.app.resourcesDir === hit.resourcesDir) return { ok: false, canceled: true };
 
     const blocked = common.getPatchGroups(version).includes('updateControl');

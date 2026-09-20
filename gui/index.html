@@ -16,13 +16,7 @@
       <button id="btn-restore" class="btn" type="button">还原</button>
       <button id="btn-pick" class="btn" type="button">选择</button>
       <button id="btn-update-control" class="btn" type="button">更新管控</button>
-      <span class="picker">
-        <label class="picker-label" for="version-select">版本</label>
-        <select id="version-select" title="切换要汉化的 GitHub Desktop 版本"></select>
-        <label class="picker-all" title="连没有汉化字典的版本一起列出">
-          <input id="version-all" type="checkbox" />全部
-        </label>
-      </span>
+      <button id="btn-switch-version" class="btn" type="button">切换版本</button>
       <button id="btn-refresh" class="btn" type="button">刷新</button>
       <button id="btn-about" class="btn" type="button">关于</button>
     </header>
@@ -99,6 +93,27 @@
           <button id="btn-check-update" class="btn primary" type="button">检查更新</button>
           <button id="btn-sync-dict" class="btn" type="button">同步字典</button>
           <button id="btn-about-close" class="btn" type="button">关闭</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- 切换版本：列出本机已安装的 GitHub Desktop，点一项即切换（确认框在主进程弹） -->
+    <div id="switch-version" class="modal" hidden>
+      <div class="modal-box" role="dialog" aria-modal="true" aria-labelledby="switch-title">
+        <h2 id="switch-title" class="modal-title">切换 GitHub Desktop 版本</h2>
+        <p class="modal-hint">
+          本机装了多个时（官方升级后旧目录会留着）可以在这里换一个——之后汉化 / 还原 / 更新管控
+          与字典表格都作用于选中的版本。
+        </p>
+        <!-- 列表项由 renderer.js 生成（每个是一个 button，便于键盘操作） -->
+        <div id="version-list" class="version-list"></div>
+        <p id="version-empty" class="empty" hidden></p>
+        <div class="modal-actions">
+          <label class="picker-all" title="连没有汉化字典的版本一起列出">
+            <input id="version-all" type="checkbox" />显示没汉化的版本
+          </label>
+          <span class="spacer"></span>
+          <button id="btn-switch-close" class="btn" type="button">关闭</button>
         </div>
       </div>
     </div>

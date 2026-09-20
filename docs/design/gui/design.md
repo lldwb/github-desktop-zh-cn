@@ -139,7 +139,7 @@ Electron 里 `process.execPath` 是**应用可执行文件**（改名后的 exe�
 | `toolUpdateInstall` | invoke | — | `{ ok, notes, error?, hint? }`——启动时那条自动提示里「下载并安装」的入口 |
 | `busy` | send（主 → 渲染） | `{ task, phase }` | 无（用于显示「正在汉化…」；`task` 为 `null` 表示回到空闲） |
 
-`state` 的字段全部来自现有函数：`locateApp` / `listInstalledVersions` / `listDictVersions` / `loadDict` / `dictLabel` / `isPatched` / `backupExists` / `backupDir` / `readConfig` / `dataRoot` / `repoUrls`，外加 `package.json` 的 `license`。唯一在主进程里做整理的是 `installedForPicker()`——把已安装版本列表补上 `hasDict` / `current` / `custom` 三个标记并按版本排序，供版本下拉直接用。`rootDir` 是界面上展示的「安装根」（Windows 取 `app-<版本>` 的上一级，即截图里的 `…\AppData\Local\GitHubDesktop`），仅用于展示，不参与任何写盘路径计算。
+`state` 的字段全部来自现有函数：`locateApp` / `listInstalledVersions` / `listDictVersions` / `loadDict` / `dictLabel` / `isPatched` / `backupExists` / `backupDir` / `readConfig` / `dataRoot` / `repoUrls`，外加 `package.json` 的 `license`。唯一在主进程里做整理的是 `installedForPicker()`——把已安装版本列表补上 `hasDict` / `current` / `custom` 三个标记并按版本排序，供「切换版本」窗口直接用。`rootDir` 是界面上展示的「安装根」（Windows 取 `app-<版本>` 的上一级，即截图里的 `…\AppData\Local\GitHubDesktop`），仅用于展示，不参与任何写盘路径计算。
 
 ### 界面（复刻截图，去掉编辑与平台下拉）
 
@@ -147,7 +147,7 @@ Electron 里 `process.execPath` 是**应用可执行文件**（改名后的 exe�
 ┌───────────────────────────────────────────────────────────────┐
 │ GitHub Desktop - 汉化工具                              — □ ×  │ ← 原生标题栏
 ├───────────────────────────────────────────────────────────────┤
-│  [汉化] [还原] [选择] [更新管控] [版本▼] [刷新] [关于]         │ ← 工具栏
+│  [汉化] [还原] [选择] [更新管控] [切换版本] [刷新] [关于]       │ ← 工具栏
 ├───────────────────────────────────────────────────────────────┤
 │  汉化字典 (1862)  │  翻译提示词                                │ ← 两个标签页
 │  ┌───────────────────────────────────────────────────────┐   │
@@ -170,7 +170,7 @@ Electron 里 `process.execPath` 是**应用可执行文件**（改名后的 exe�
 |---|---|---|
 | 添加 / 删除 / 保存 / 重载 | **不做** | 本次范围仅操作面板，字典编辑不在范围内 |
 | 「提交提示词」标签页 | **不做**，另做了「翻译提示词」 | 参考工具那个对应 `Temp/UserPrompt.txt`（用户填的提示词），本仓库无对应物；本仓库做的是另一件事——把 `scripts/dict/dict-prompt.js` 里**发给翻译模型的系统提示词**只读展示出来，让人看清字典里新增的条目是按什么规则译的 |
-| 底部平台下拉（Windows / Mac / Linux） | 换成**应用版本**文字 | 表格显示的是**当前平台**的合并结果（`common` ∪ 平台段），无需切换；要看跨平台全貌直接读 `dictionaries/<版本>/zh-CN.json`。工具栏的「版本▼」选的是**安装目标**（本机并存的多个 `app-<版本>`），与平台无关 |
+| 底部平台下拉（Windows / Mac / Linux） | 换成**应用版本**文字 | 表格显示的是**当前平台**的合并结果（`common` ∪ 平台段），无需切换；要看跨平台全貌直接读 `dictionaries/<版本>/zh-CN.json`。工具栏的「切换版本」选的是**安装目标**（本机并存的多个 `app-<版本>`），与平台无关 |
 | 「组名」列（菜单-分支 / 菜单-视图…） | **保留**，并在其后另加「类型」列 | 起初判定「去掉」是因为当时的字典还是扁平结构、没有组名概念；后来字典迁到 formatVersion 2 并有了 `groups` 段，组名列就补上了（见 `docs/dict-v2/tasks.md` 第 5 组）。两列并存——组名管「按界面区域定位」，类型管「这条会替换哪个文件」 |
 
 「类型」列取值规则（**只读，O(1) 从键推导，不扫描产物**）：
@@ -192,7 +192,7 @@ Electron 里 `process.execPath` 是**应用可执行文件**（改名后的 exe�
 | `gui/main.js` | 新增 | 主进程：窗口创建、IPC 处理器、调用 `scripts/`；`seedBundledDicts()` 首次运行播种内置字典（打包态才生效） |
 | `gui/preload.js` | 新增 | `contextBridge` 暴露 `window.api` |
 | `gui/index.html` | 新增 | 界面结构 |
-| `gui/renderer.js` | 新增 | 渲染逻辑：状态渲染、表格、搜索、按钮（后续加了标签页切换、版本下拉与「关于」窗口） |
+| `gui/renderer.js` | 新增 | 渲染逻辑：状态渲染、表格、搜索、按钮（后续加了标签页切换、切换版本窗口与「关于」窗口） |
 | `gui/style.css` | 新增 | 样式（贴合截图配色：浅色工具栏、斑马纹表格、灰底状态栏） |
 | `electron-builder.yml` | 新增 | 打包配置：`files`（`gui/` + `scripts/`）、`extraResources`（字典 → 应用的 `resources/`）、`electronDownload.mirror`、NSIS 选项、三平台目标、产物命名 |
 | `tools/check-gui-dist.js` | 新增 | GUI 产物静态自检（应用包结构 / 内置字典 / Windows 产物子系统），CI 与本地共用（脚本后迁到 `tools/`，路径以 workflow 与 `AGENTS.md` 为准） |

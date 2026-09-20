@@ -8,7 +8,7 @@ const els = {
   restore: document.getElementById('btn-restore'),
   pick: document.getElementById('btn-pick'),
   updateControl: document.getElementById('btn-update-control'),
-  versionSelect: document.getElementById('version-select'),
+  switchVersion: document.getElementById('btn-switch-version'),
   versionAll: document.getElementById('version-all'),
   refresh: document.getElementById('btn-refresh'),
   about: document.getElementById('btn-about'),
@@ -17,6 +17,10 @@ const els = {
     'panel-dict': document.getElementById('panel-dict'),
     'panel-prompt': document.getElementById('panel-prompt'),
   },
+  switchModal: document.getElementById('switch-version'),
+  switchClose: document.getElementById('btn-switch-close'),
+  versionList: document.getElementById('version-list'),
+  versionEmpty: document.getElementById('version-empty'),
   aboutModal: document.getElementById('about'),
   aboutClose: document.getElementById('btn-about-close'),
   aboutVersion: document.getElementById('about-version'),
@@ -40,8 +44,8 @@ const els = {
 
 // 有操作在跑时统一禁用的控件（「关于」的打开/关闭不在此列：看信息不该被挡）
 const BUSY_DISABLED = [
-  els.patch, els.restore, els.pick, els.updateControl, els.refresh,
-  els.versionSelect, els.versionAll, els.checkUpdate, els.syncDict,
+  els.patch, els.restore, els.pick, els.updateControl, els.switchVersion, els.refresh,
+  els.versionAll, els.checkUpdate, els.syncDict,
 ];
 
 let rows = []; // 全部字典条目（搜索在内存里过滤，不重新读盘）
@@ -59,8 +63,8 @@ function setPhase(text) {
 function setPending(value) {
   pending = value;
   for (const el of BUSY_DISABLED) el.disabled = value;
-  // 下拉在「本机一个版本都没有」时本来就该禁用，解除 pended 时按数据重新判一次
-  if (!value && els.versionSelect.options.length === 0) els.versionSelect.disabled = true;
+  // 「切换版本」在「本机一个版本都没有」时也该禁用——那由 renderVersions 按数据判定，
+  // 而它总在 setPending(false) 之后的 refresh 里跑，顺序上是接得上的
 }
 
 function showToast(text, isError) {
@@ -113,30 +117,53 @@ function renderState(state) {
   els.statusbar.textContent = parts.join(' · ');
 }
 
-// 版本下拉：默认只列**有汉化**（有字典）的版本，勾「全部」才连没字典的一起列。
-// 当前正在处理的那个恒在列——否则切换中或选了没字典的版本时，下拉会没有选中项。
+// 版本列表：默认只列**有汉化**（有字典）的版本，勾「显示没汉化的版本」才连没字典的一起列。
+// 当前正在处理的那个恒在列并标出来——点它没有意义（目标是它自己），直接禁用。
 function renderVersions(state) {
   const all = state.installed || [];
   const list = els.versionAll.checked ? all : all.filter((x) => x.hasDict || x.current);
 
-  els.versionSelect.replaceChildren(
+  els.versionList.replaceChildren(
     ...list.map((x) => {
-      const opt = document.createElement('option');
-      opt.value = x.version;
-      opt.textContent = x.custom ? `${x.version}（自定义）` : x.hasDict ? x.version : `${x.version}（无字典）`;
-      opt.selected = !!x.current;
-      return opt;
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'version-item';
+      btn.dataset.version = x.version;
+      btn.disabled = !!x.current;
+
+      const line = document.createElement('div');
+      line.className = 'version-line';
+      const name = document.createElement('span');
+      name.className = 'version-name';
+      name.textContent = x.version;
+      line.appendChild(name);
+      const tags = [];
+      if (x.current) tags.push(['tag current', '当前']);
+      if (!x.hasDict) tags.push(['tag', '无字典']);
+      if (x.custom) tags.push(['tag', '自定义目录']);
+      for (const [cls, text] of tags) {
+        const tag = document.createElement('span');
+        tag.className = cls;
+        tag.textContent = text;
+        line.appendChild(tag);
+      }
+      btn.appendChild(line);
+
+      const dir = document.createElement('div');
+      dir.className = 'version-path';
+      dir.textContent = x.resourcesDir;
+      btn.appendChild(dir);
+      return btn;
     })
   );
-  // 一个都列不出来（本机没装 GitHub Desktop）时给个占位项，下拉不至于空着
+
+  els.versionEmpty.hidden = !!list.length;
   if (!list.length) {
-    const opt = document.createElement('option');
-    opt.textContent = all.length ? '（勾「全部」查看）' : '未找到 GitHub Desktop';
-    opt.disabled = true;
-    opt.selected = true;
-    els.versionSelect.appendChild(opt);
-    els.versionSelect.disabled = true;
+    els.versionEmpty.textContent = all.length
+      ? '没有可切换的版本——勾上「显示没汉化的版本」看看。'
+      : '本机没有检测到 GitHub Desktop（可用「选择」手动指定安装位置）。';
   }
+  if (!pending) els.switchVersion.disabled = !all.length;
 }
 
 function renderAbout(state) {
@@ -281,12 +308,12 @@ async function doPick() {
 }
 
 // 切换版本：确认框在主进程弹（含「同时禁止该版本自动更新」的勾选），这里只发起与展示
-async function doSetVersion() {
-  const version = els.versionSelect.value;
+async function doSetVersion(version) {
   if (!version) return;
   await withPending('正在切换版本', async () => {
     const r = await window.api.setVersion(version);
     if (!r.ok) return r.canceled ? undefined : showError(r);
+    closeSwitch(); // 切成了才关窗口——失败或取消时留在列表上，方便换个版本再试
     showToast(notesWithRestart(r), !!r.hasError);
   });
 }
@@ -317,7 +344,7 @@ async function doSyncDict() {
   });
 }
 
-// —— 关于窗口 ——
+// —— 两个模态窗口：关于 / 切换版本 ——
 function openAbout() {
   els.aboutModal.hidden = false;
 }
@@ -326,14 +353,21 @@ function closeAbout() {
   els.aboutModal.hidden = true;
 }
 
+function openSwitch() {
+  els.switchModal.hidden = false;
+}
+
+function closeSwitch() {
+  els.switchModal.hidden = true;
+}
+
 // —— 绑定 ——
 els.patch.addEventListener('click', doPatch);
 els.restore.addEventListener('click', doRestore);
 els.pick.addEventListener('click', doPick);
 els.updateControl.addEventListener('click', doUpdateControl);
 els.refresh.addEventListener('click', () => withPending('正在刷新', async () => {}));
-els.versionSelect.addEventListener('change', doSetVersion);
-// 勾「全部」只改列表范围：重新渲染一次，不动目标版本
+// 勾「显示没汉化的版本」只改列表范围：重新渲染一次，不动目标版本
 els.versionAll.addEventListener('change', async () => {
   try {
     renderVersions(await window.api.state());
@@ -341,17 +375,29 @@ els.versionAll.addEventListener('change', async () => {
     showToast(`刷新版本列表失败：${e.message || e}`, true);
   }
 });
+// 版本项是动态生成的，用事件委托接点击（当前版本那一项是 disabled 的，点不动）
+els.versionList.addEventListener('click', (ev) => {
+  const item = ev.target.closest('.version-item');
+  if (item && !item.disabled) doSetVersion(item.dataset.version);
+});
 
 for (const t of els.tabs) t.addEventListener('click', () => showTab(t.dataset.panel));
 
 els.about.addEventListener('click', openAbout);
 els.aboutClose.addEventListener('click', closeAbout);
+els.switchVersion.addEventListener('click', openSwitch);
+els.switchClose.addEventListener('click', closeSwitch);
 // 点遮罩关闭（点对话框内部不该关）
 els.aboutModal.addEventListener('click', (ev) => {
   if (ev.target === els.aboutModal) closeAbout();
 });
+els.switchModal.addEventListener('click', (ev) => {
+  if (ev.target === els.switchModal) closeSwitch();
+});
 document.addEventListener('keydown', (ev) => {
-  if (ev.key === 'Escape' && !els.aboutModal.hidden) closeAbout();
+  if (ev.key !== 'Escape') return;
+  if (!els.aboutModal.hidden) closeAbout();
+  if (!els.switchModal.hidden) closeSwitch();
 });
 
 for (const [el, which] of [
