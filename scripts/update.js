@@ -219,7 +219,16 @@ async function apply(asset, opts = {}) {
   }
 
   log('已替换，正在重启新版本 …');
-  spawn(self, [], { detached: true, stdio: 'ignore' }).unref();
+  // 起不来不该把这次更新报成失败：此刻文件**已经换好了**，手动重开一次就是新版。spawn 的失败
+  // 有两条通道——ENOENT 走异步 error 事件，「文件在、内容却不是有效可执行体」在 Windows 上
+  // 则是同步抛（实测 `spawn UNKNOWN` / `EFTYPE`）。两条都吞掉，理由同上。
+  try {
+    const child = spawn(self, [], { detached: true, stdio: 'ignore' });
+    child.on('error', () => {});
+    child.unref();
+  } catch {
+    /* 文件已替换完成，重开即可 */
+  }
   process.exit(0);
 }
 

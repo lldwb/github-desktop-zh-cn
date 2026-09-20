@@ -493,15 +493,26 @@ async function installGuiUpdate(info) {
   // Windows 的 -setup.exe 与 Linux 的 .AppImage 直接 spawn。
   const direct = process.platform === 'win32' || dest.endsWith('.AppImage');
   const cmd = direct ? dest : process.platform === 'darwin' ? 'open' : 'xdg-open';
-  const child = spawn(cmd, direct ? [] : [dest], { detached: true, stdio: 'ignore' });
-  // spawn 的失败是**异步**的（ENOENT、不是有效的可执行文件都走 error 事件）：不接住会冒到进程级
-  // 把 GUI 带崩，接住却不回报就成了「提示已启动安装向导、屏幕上什么都没发生」——用户只会以为
-  // 装上了。故等这一步的结果出来再回话：起不来就说清「文件在哪、请手动打开」。
-  const spawnError = await new Promise((resolve) => {
-    child.on('error', resolve); // 常驻：起不来时如实回报，也不会冒到进程级
-    child.once('spawn', () => resolve(null));
-  });
-  child.unref();
+  // spawn 的失败有**两条**通道，得都接住：起不来（ENOENT）走**异步** error 事件；而「文件在、
+  // 内容却不是有效可执行体」在 Windows 上是**同步抛**的（实测：内容为 JSON、或 MZ 头后接垃圾时
+  // 抛 `spawn UNKNOWN`，空文件抛 `EFTYPE`）。只等 error 事件接不住后者——异常会冒出本函数，
+  // 被调用方报成「检查工具版本失败」：归因错，还丢了「文件在哪」这条唯一能照做的补救信息。
+  // 接住却不回报，则成了「提示已启动安装向导、屏幕上什么都没发生」——用户只会以为装上了。
+  // 故两条通道收进同一个 spawnError，等结果出来再回话：起不来就说清「文件在哪、请手动打开」。
+  let child = null;
+  let spawnError = null;
+  try {
+    child = spawn(cmd, direct ? [] : [dest], { detached: true, stdio: 'ignore' });
+  } catch (e) {
+    spawnError = e; // 见上：目标存在但不是有效可执行体时走这条
+  }
+  if (child) {
+    spawnError = await new Promise((resolve) => {
+      child.on('error', resolve); // 常驻：起不来时如实回报，也不会冒到进程级
+      child.once('spawn', () => resolve(null));
+    });
+    child.unref();
+  }
   if (spawnError) {
     return {
       notes: [`安装包已下载到 ${dest}，但没能启动它：${spawnError.message}`, '请手动打开上面这个文件完成安装。'],

@@ -60,12 +60,16 @@ function launch(resourcesDir) {
   const target = appTarget(resourcesDir);
   const args = process.platform === 'darwin' ? [target] : [];
   const cmd = process.platform === 'darwin' ? 'open' : target;
-  const child = spawn(cmd, args, { detached: true, stdio: 'ignore' });
-  // spawn 的失败是**异步**的（ENOENT 走 error 事件，不抛在调用处）。不接这个事件，
-  // 目标不存在时它会冒到进程级把调用方整个带崩——而调用方（patch / restore）此刻
-  // 产物早就写好了，崩在这一步纯属误伤。
-  child.on('error', () => {});
-  child.unref();
+  // spawn 的失败有**两条**通道：目标不存在（ENOENT）走**异步** error 事件；而「文件在、内容却
+  // 不是有效可执行体」在 Windows 上是**同步抛**的（实测 `spawn UNKNOWN` / `EFTYPE`），不进事件。
+  // 两条都得接——调用方（patch / restore）此刻产物早就写好了，崩在这一步纯属误伤。
+  try {
+    const child = spawn(cmd, args, { detached: true, stdio: 'ignore' });
+    child.on('error', () => {});
+    child.unref();
+  } catch {
+    /* 同上：产物已写好，起不来交给调用方提示用户手动启动 */
+  }
   return target;
 }
 
