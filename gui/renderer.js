@@ -414,7 +414,7 @@ for (const [el, which] of [
 els.checkUpdate.addEventListener('click', doCheckUpdate);
 els.syncDict.addEventListener('click', doSyncDict);
 
-// 1862 条逐个过滤有开销，等输入停下来再算
+// 上千条逐个过滤有开销，等输入停下来再算
 let filterTimer = null;
 els.search.addEventListener('input', () => {
   clearTimeout(filterTimer);
