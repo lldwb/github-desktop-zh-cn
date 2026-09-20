@@ -186,7 +186,8 @@ async function run(args = {}) {
   if (!args.dryRun) {
     const groups = new Set(['i18n', ...common.getPatchGroups(version)]);
     if (injected) groups.add('updateControl');
-    common.setPatchGroups(version, [...groups]);
+    // 模式随本次注入记账：按组还原重放 updateControl 时按账上模式来，而不是一律 guard
+    common.setPatchGroups(version, [...groups], injected ? { updateControlMode: args.updateControl } : {});
   }
 
   // 汉化后重启：Electron 已把旧代码载入内存，不重启看不到效果。

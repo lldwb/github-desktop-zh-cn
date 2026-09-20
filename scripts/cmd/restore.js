@@ -26,6 +26,7 @@ const {
   PATCH_GROUP_LABELS,
   getPatchGroups,
   setPatchGroups,
+  getUpdateControlMode,
   dataRoot,
 } = common;
 
@@ -103,13 +104,16 @@ async function restoreGroups(app, version, removeGroups, log) {
   }
   if (keep.includes('updateControl')) {
     const mainFile = path.join(app.appDir, 'main.js');
+    // 重放模式按记账来：当初打的是「完全禁止」就重放 off，而不是一律 guard；
+    // 老账没记过模式时 getUpdateControlMode 兜底 guard（与记账功能上线前的行为一致）
+    const mode = getUpdateControlMode(version);
     const r = updateControl.inject(fs.readFileSync(mainFile, 'utf8'), {
       dictDir: path.join(dataRoot(), 'dictionaries'),
-      mode: 'guard',
+      mode,
     });
     if (r.changed) {
       fs.writeFileSync(mainFile, r.content, 'utf8');
-      log('已重新注入更新管控（没有字典就不更新）');
+      log(`已重新注入更新管控（${mode === 'off' ? '完全禁止自动更新' : '没有字典就不更新'}）`);
     } else {
       log(`更新管控未重新注入：${r.reason}`);
     }

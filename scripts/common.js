@@ -643,11 +643,21 @@ function readPatchState() {
 
 // 记录某版本已应用的补丁组。groups 是**全集**（覆盖写），不是增量——调用方拼好再传。
 // 传空数组即销账（该版本已回到官方原版）。
-function setPatchGroups(version, groups) {
+// extra.updateControlMode：本次实际注入的更新管控模式（'guard' | 'off'），随组一并记账——
+// 按组还原重放 updateControl 时按账上模式来；不给则保留账上已有模式（该组本次没重打）。
+function setPatchGroups(version, groups, extra = {}) {
   const state = readPatchState();
   const clean = [...new Set(groups)].filter((g) => PATCH_GROUPS.includes(g));
   if (clean.length === 0) delete state[version];
-  else state[version] = { groups: clean, updatedAt: new Date().toISOString() };
+  else {
+    const prev = state[version] || {};
+    // 组还在才有模式可言；组被撤掉时模式一并清掉，免得留一条指向已不存在状态的账
+    const mode = clean.includes('updateControl')
+      ? extra.updateControlMode || prev.updateControlMode || null
+      : null;
+    state[version] = { groups: clean, updatedAt: new Date().toISOString() };
+    if (mode) state[version].updateControlMode = mode;
+  }
   fs.mkdirSync(path.dirname(patchStatePath()), { recursive: true });
   fs.writeFileSync(patchStatePath(), `${JSON.stringify(state, null, 2)}\n`, 'utf8');
   return clean;
@@ -656,6 +666,13 @@ function setPatchGroups(version, groups) {
 function getPatchGroups(version) {
   const entry = readPatchState()[version];
   return entry && Array.isArray(entry.groups) ? entry.groups : [];
+}
+
+// updateControl 组的注入模式。老账（mode 字段上线前打的补丁）没有记录，按 'guard' 返回——
+// 与当时的重放行为一致；只在该版本账上确有 updateControl 组时才有意义，调用方先看组。
+function getUpdateControlMode(version) {
+  const entry = readPatchState()[version];
+  return entry && entry.updateControlMode === 'off' ? 'off' : 'guard';
 }
 
 // 关键字后可直接跟正则字面量（如 return/regex/、typeof/x/），此时 '/' 前是关键字末尾字母
@@ -861,6 +878,7 @@ module.exports = {
   readPatchState,
   setPatchGroups,
   getPatchGroups,
+  getUpdateControlMode,
   stringLiterals,
   applyDictInStrings,
   checkSyntax,
