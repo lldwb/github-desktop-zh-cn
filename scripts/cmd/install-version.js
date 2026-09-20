@@ -170,6 +170,7 @@ function parseArgs(argv) {
     else if (a === '--from') args.from = argv[++i];
     else if (a === '-h' || a === '--help') args.help = true;
     else if (!a.startsWith('-')) args.version = a;
+    else throw new Error(`未知参数：${a}（--help 查看用法）`);
   }
   return args;
 }
