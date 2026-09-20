@@ -17,7 +17,7 @@ const path = require('node:path');
 const net = require('../scripts/net.js');
 const { pickAsset, pickGuiAsset, pickSums, parseSums, verifySha256 } = require('../scripts/update.js');
 
-// v0.4.0 发布页的实际命名（cli / gui 两套，见 AGENTS.md「产物命名」）
+// v0.4.0 发布页的实际命名（cli / gui 两套，见 `docs/agents/发版.md` 的「产物命名」）
 const CLI = [
   'github-desktop-zh-cn-cli-v0.4.0-darwin-arm64.bin',
   'github-desktop-zh-cn-cli-v0.4.0-darwin-x64.bin',

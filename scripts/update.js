@@ -47,7 +47,7 @@ function pickAsset(assets) {
 // GUI 产物（Electron 安装包）的匹配规则。**与 pickAsset 分开**：那个服务 CLI 自更新
 //（下载单文件可执行体替换自身），这个服务 GUI（下载安装包交给用户去装）——两者的命名
 // 与扩展名都不一样，混在一个函数里只会让两边都判不准。
-// 命名见 AGENTS.md「产物命名」：github-desktop-zh-cn-gui-v<版本>-<平台>-<架构>[-setup].<扩展名>
+// 命名见 `docs/agents/发版.md` 的「产物命名」：github-desktop-zh-cn-gui-v<版本>-<平台>-<架构>[-setup].<扩展名>
 // 实测核对过：GUI 的 Windows 产物以 `-setup.exe` 结尾，pickAsset 的 `-win32-x64.exe`
 // 匹配不到；macOS / Linux 是 .dmg / .AppImage / .deb，更是完全在它的扩展名表之外。
 // electron-builder 的 Linux 产物把 x64 写成 x86_64 / amd64、arm64 写成 aarch64——

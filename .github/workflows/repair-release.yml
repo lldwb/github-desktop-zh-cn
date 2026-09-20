@@ -9,7 +9,7 @@
 #   restore-release —— 备份（附件 + 标题 + 正文）→ 删 → 用 RELEASE_TOKEN 以同一 tag 重建
 #                      → 用内置 token 逐个回传**同样字节**的附件 → 核对署名与附件名单
 #                      用途：修署名（v0.1.0 / v0.1.1 的 Release 当年是内置 token 建的，
-#                      署名 github-actions[bot]，见 AGENTS.md「发版」）
+#                      署名 github-actions[bot]，见 `docs/agents/发版.md`）
 #                      **正文以 CHANGELOG.md 的对应条目为准**（与 build.yml 同一来源），
 #                      条目取不到才沿用现网 Release 那份快照——改了 CHANGELOG 再跑一次，
 #                      正文就跟着变（v0.1.0 / v0.1.1 开头补引用块就是这么补的）
@@ -19,7 +19,7 @@
 #   rename-assets   —— **不删 Release**，只把附件名换成当前规范：下载 → 改名 → 传新名
 #                      → 重算 SHA256SUMS → 删旧名。用途：把 v0.2.0 之前发布的版本
 #                      统一到 cli / gui 命名（v0.1.0 / v0.1.1 的附件缺通道词、
-#                      macOS / Linux 还缺后缀，见 AGENTS.md「产物命名」）。
+#                      macOS / Linux 还缺后缀，见 `docs/agents/发版.md` 的「产物命名」）。
 #                      **GitHub 没有重命名附件的接口**，只有「传新名 + 删旧名」这一条路；
 #                      顺序上先传新的（新旧短暂并存）→ 覆盖清单 → 再删旧的，于是**任何时刻
 #                      页面上都有一份完整可用的产物**，中途失败也只是多留了一组旧名字。
@@ -29,7 +29,7 @@
 #
 # `confirm` 必须与 `tag` 逐字相同——两个任务都会让该版本的下载页短暂消失，防的是手滑。
 # 控制面（建 / 改 Release）走 RELEASE_TOKEN、数据面（附件传输）走内置 GITHUB_TOKEN，
-# 与 build.yml 同一套纪律；附件传输用 PAT 会卡死，见 AGENTS.md「发版」一节。
+# 与 build.yml 同一套纪律；附件传输用 PAT 会卡死，见 `docs/agents/发版.md`。
 #
 # **控制面一律用 build.yml 里跑通过的那几条命令**（gh release create / edit / delete）：
 # 更新 Release 的接口只认**数字 id**（`PATCH /repos/{o}/{r}/releases/{release_id}`，文档里
@@ -136,7 +136,7 @@ jobs:
           BACKUP_RUN_ID: ${{ inputs.backup_run_id }}
         run: |
           # 意外失败时留一条带行号的注解：bash -e 默认闷声退出，而 job 日志要仓库权限才读得到、
-          # 注解匿名可读（见 AGENTS.md「发版」）。被 if / || 明确接住的失败不触发它。
+          # 注解匿名可读（见 `docs/agents/发版.md`）。被 if / || 明确接住的失败不触发它。
           set -E
           trap 'echo "::error::第 $LINENO 行意外失败（退出码 $?）——在上面这个步骤的日志里看这一行的上下文"' ERR
           mkdir -p backup
@@ -270,12 +270,12 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           # 意外失败时留一条带行号的注解：bash -e 默认闷声退出，而 job 日志要仓库权限才读得到、
-          # 注解匿名可读（见 AGENTS.md「发版」）。v0.1.0 / v0.1.1 两次失败只留下「exit code 1/2」
+          # 注解匿名可读（见 `docs/agents/发版.md`）。v0.1.0 / v0.1.1 两次失败只留下「exit code 1/2」
           # 一行字，就是缺了它。被 if / || 明确接住的失败不触发。
           set -E
           trap 'echo "::error::第 $LINENO 行意外失败（退出码 $?）——在上面这个步骤的日志里看这一行的上下文"' ERR
           if [ -z "$RELEASE_TOKEN" ]; then
-            echo "::error::未配置 RELEASE_TOKEN secret——署名要落到作者本人就得用它，配置方法见 AGENTS.md「发版」一节"
+            echo "::error::未配置 RELEASE_TOKEN secret——署名要落到作者本人就得用它，配置方法见 \`docs/agents/发版.md\`"
             exit 1
           fi
           if ! pat_login="$(GH_TOKEN="$RELEASE_TOKEN" gh api user --jq .login 2>&1)"; then
@@ -444,7 +444,7 @@ jobs:
           echo "即将删除：$(gh_view "$TAG" --json tagName,isDraft,name,assets --jq '"\(.tagName)｜标题「\(.name)」｜草稿=\(.isDraft)｜附件 \(.assets | length) 个"')"
           gh_view "$TAG" --json assets --jq '.assets[].name' | sed 's/^/  - /'
           GH_TOKEN="${RELEASE_TOKEN:-$GH_TOKEN}" gh release delete "$TAG" --yes     # 不带 --cleanup-tag：tag 必须留着，CI 才认得出该发哪一版
-          echo "已删除 $TAG 的 Release（tag 仍在）。要重发：把该 tag 强推一次即可触发 CI 用当前提交重建（见 AGENTS.md「发版」）"
+          echo "已删除 $TAG 的 Release（tag 仍在）。要重发：把该 tag 强推一次即可触发 CI 用当前提交重建（见 \`docs/agents/发版.md\`）"
 
       - name: 只改附件名（rename-assets）
         if: ${{ success() && inputs.task == 'rename-assets' }}
@@ -490,7 +490,7 @@ jobs:
           cut -f1 assets.tsv | sed 's/^/  - /'
 
           # ── 算「旧名 → 新名」映射 ────────────────────────────────────────────
-          # 规则就两条，与 AGENTS.md「产物命名」一一对应：
+          # 规则就两条，与 `docs/agents/发版.md` 的「产物命名」一一对应：
           #   ① 名字里没有通道词的老产物一律是 cli——v0.2.0 之前只发单文件产物，没有第二个通道；
           #   ② macOS / Linux 补 .bin 后缀（Windows 早就有 .exe），此前无后缀的附件在下载页里
           #      看不出是什么文件，浏览器也可能不给存成可执行文件。

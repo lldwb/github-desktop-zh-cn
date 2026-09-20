@@ -17,7 +17,7 @@
 # 单个版本两平台合计几 MB，跑起来很便宜。
 #
 # 提交身份取 RELEASE_TOKEN 持有者（而非 github-actions[bot]）：与仓库对「Release 须由作者
-# 身份创建」的一贯纪律一致，见 AGENTS.md「发版」一节。push 用 PAT 也避开了内置 token 在
+# 身份创建」的一贯纪律一致，见 `docs/agents/发版.md`。push 用 PAT 也避开了内置 token 在
 # 分支保护规则下的推送限制。注意提交到 main **不会**触发 build.yml——它只认 v* tag 与手动触发，
 # 所以不存在「字典更新 → 重新构建 → 再更新字典」的回环。
 #

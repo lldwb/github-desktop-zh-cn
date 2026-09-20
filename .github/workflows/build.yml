@@ -4,7 +4,7 @@
 #   - 手动（Actions 页面 → Run workflow）：只构建，产物留在该次运行的 Artifacts 里；
 #   - 推注解 tag（git tag -a v0.2.0 -m "..." && git push origin main --follow-tags）：构建 + 发 Release。
 #
-# 发版规范见 AGENTS.md「发版」一节：CHANGELOG.md 顶部条目 / package.json 的 version /
+# 发版规范见 `docs/agents/发版.md`：CHANGELOG.md 顶部条目 / package.json 的 version /
 # 注解 tag 三处对齐；Release 正文取自 CHANGELOG.md 对应段落（tools/changelog.js 提取），
 # 不是自动生成的变更列表。
 #
@@ -47,7 +47,7 @@ jobs:
           GH_TOKEN: ${{ secrets.RELEASE_TOKEN }}
         run: |
           if [ -z "$GH_TOKEN" ]; then
-            echo "::error::未配置 RELEASE_TOKEN secret——Release 须由作者身份创建，配置方法见 AGENTS.md「发版」一节"
+            echo "::error::未配置 RELEASE_TOKEN secret——Release 须由作者身份创建，配置方法见 \`docs/agents/发版.md\`"
             exit 1
           fi
           login="$(gh api user --jq .login 2>/dev/null)" || {
@@ -71,7 +71,7 @@ jobs:
           GITEE_TOKEN: ${{ secrets.GITEE_TOKEN }}
         run: |
           if [ -z "$GITEE_TOKEN" ]; then
-            echo "::warning::未配置 GITEE_TOKEN secret——本次不会向 Gitee 发版，Gitee 上将看不到发行版。配置方法见 AGENTS.md「发版」一节"
+            echo "::warning::未配置 GITEE_TOKEN secret——本次不会向 Gitee 发版，Gitee 上将看不到发行版。配置方法见 \`docs/agents/发版.md\`"
           else
             echo "Gitee 令牌已配置（${#GITEE_TOKEN} 字符），发布时会同步发行版"
           fi
@@ -232,7 +232,7 @@ jobs:
           # github-actions[bot]，观感上不像作者发布（且作者事后无法修改，只能删了重建）。
           # 没配 secret 时在这里给出可读原因，免得后面报一句看不懂的 401。
           if [ -z "$RELEASE_TOKEN" ]; then
-            echo "::error::未配置 RELEASE_TOKEN secret——Release 须由作者身份创建，配置方法见 AGENTS.md「发版」一节"
+            echo "::error::未配置 RELEASE_TOKEN secret——Release 须由作者身份创建，配置方法见 \`docs/agents/发版.md\`"
             exit 1
           fi
       - name: 创建 Release
@@ -240,7 +240,7 @@ jobs:
           # 控制面（建 / 改 Release）走作者的 PAT，署名才是作者本人；数据面（附件传输）走内置 token。
           # 拆开是因为实测 PAT 传附件一律卡死：v0.2.0 三次尝试分别跑 606s / 1657s / 939s 后失败，
           # 注解点名卡在 107 MB 的单文件产物上；而内置 token 历史上传过 5 个附件共 420 MB
-          #（v0.1.0 只用 97 秒）——附件上传者字段可查，见 AGENTS.md「发版」一节。
+          #（v0.1.0 只用 97 秒）——附件上传者字段可查，见 `docs/agents/发版.md`。
           RELEASE_TOKEN: ${{ secrets.RELEASE_TOKEN }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |

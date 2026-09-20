@@ -17,7 +17,7 @@ const common = require('../../scripts/common');
 
 // 夹具版本号：全仓唯一一处定义（test/dict/** 与 test/inject/** 都从这里取）。
 // 形态刻意不是 X.Y.Z——生产侧的 common.DICT_VERSION_RE 不会把它当真实版本，与之并行的
-// 其它测试文件按形态过滤即可完全忽略它的存在窗口（见 AGENTS.md「测试并行撞车」一条）。
+// 其它测试文件按形态过滤即可完全忽略它的存在窗口（见 `docs/agents/已知坑.md` 一条）。
 // 例外：测试用例里作为**断言载荷**出现的同名字面量不算「定义」，其值受「断言不改」保护。
 const FIXTURE_VERSION = '0.0.0-test';
 

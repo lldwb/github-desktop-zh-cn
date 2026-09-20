@@ -1,6 +1,6 @@
 // dict-edit.js — 字典的**唯一写入口**
 //
-// 约束（见 AGENTS.md 与 docs/design/dict-v2/design.md）：字典的一切修改都经由本模块暴露的函数完成，
+// 约束（见 `docs/agents/翻译维护.md` 与 docs/design/dict-v2/design.md）：字典的一切修改都经由本模块暴露的函数完成，
 // AI 与其它工具只调用这些方法，**不直接读写 dictionaries/<版本>/zh-CN.json**。理由有三：
 //   1. formatVersion 2 是分段结构，条目段与 groups 段靠键名关联，分处两地写就会漂移；
 //   2. 条目合法性（整模板键译文须是 JS 字面量、键不得跨段重复）不是 JSON 结构能表达的；

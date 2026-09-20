@@ -217,10 +217,10 @@ function checkLinux() {
 }
 
 // 产物文件：任何平台都至少要有一个能直接分发的（不能只有中间目录），且名字必须走 gui 通道命名
-//（<项目名>-gui-v<版本>-<平台>-<架构>…，规范见 AGENTS.md「发版」一节）。
+//（<项目名>-gui-v<版本>-<平台>-<架构>…，规范见 `docs/agents/发版.md`）。
 // 顺带把每个产物的体积打进日志——「跑一次 CI 看四平台体积」靠的就是这里，不必下载附件；
 // 超 100 MB 只告警不判失败（CI 上打成 ::warning:: 注解，本地是一行提示）：Gitee 附件单文件
-// 上限 100 MB（见 AGENTS.md「发版」）。各平台产物形态与压缩算法见 electron-builder.yml。
+// 上限 100 MB（见 `docs/agents/发版.md`）。各平台产物形态与压缩算法见 electron-builder.yml。
 function checkArtifacts() {
   const files = listDir(OUT).filter((f) => /\.(exe|zip|7z|dmg|AppImage|deb)$/.test(f));
   if (!files.length) {

@@ -14,7 +14,7 @@
 #   4. 本文件里**没有** publish 配置，且 package.json 的 dist 脚本固定带 `--publish never`：
 #      electron-builder 26 只要在 CI 上跑就隐式开发布（检出 tag 时按 onTag、仅检测到 CI 时按
 #      onTagOrDraft），缺 GH_TOKEN 会在构建**全部跑完之后**才报错退出——本仓库的 Release 由
-#      `gh release create` 创建，不走 electron-builder，所以这里显式关掉，见 AGENTS.md「已知坑」。
+#      `gh release create` 创建，不走 electron-builder，所以这里显式关掉，见 `docs/agents/已知坑.md`。
 
 appId: com.lldwb.github-desktop-zh-cn
 

@@ -151,7 +151,7 @@ git commit -m "fix(dictionaries): <一句话>（N → M 条）"
 - 模板：`references/copilot-behavior-test.cjs`（拷到 `tmp/` 按需改 marker 与用例开关后执行）
 - 做法：不另起炉灶，照 `copilot-store.ts` 的方式用**应用自带**的 Copilot 运行时（`GitHubDesktop.exe` 以 node 身份执行 `copilot/index.js`，SDK 在应用目录内）；系统提示词**从已打补丁的 renderer.js 里取**（测的就是装机产物里那一条）；token 从凭据管理器读（keytar，服务名 `GitHub - <endpoint>`），**全程不打印、不进仓库**；
 - 断言：提交信息回复能 `JSON.parse` 且 `title` 非空；冲突解决回复的 `resolutions` / `summary` / `action`（`keep` / `delete`）符合契约、`resolvedContent` 无残留冲突标记；
-- 代价与前置：**每条用例消耗 1 次 Copilot 请求**（模型 `auto`，约 6–7 秒）——跑之前先告知用户配额消耗；本机访问 GitHub 需走代理（`HTTPS_PROXY` / `HTTP_PROXY` 环境变量，见 AGENTS.md 已知坑）。
+- 代价与前置：**每条用例消耗 1 次 Copilot 请求**（模型 `auto`，约 6–7 秒）——跑之前先告知用户配额消耗；本机访问 GitHub 需走代理（`HTTPS_PROXY` / `HTTP_PROXY` 环境变量，见 `docs/agents/已知坑.md`）。
 
 ## 汇报模板
 
