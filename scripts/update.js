@@ -6,6 +6,7 @@
 'use strict';
 const fs = require('fs');
 const path = require('path');
+const crypto = require('crypto');
 const { spawn } = require('child_process');
 const net = require('./net.js');
 const common = require('./common.js');
@@ -99,11 +100,65 @@ async function check() {
     hasUpdate: common.compareVersions(latest, current) > 0,
     asset: pickAsset(release.assets || []),
     guiAsset: pickGuiAsset(release.assets || []),
+    // 校验和清单的直链（取不到就是 null，见 verifySha256 的跳过口径）
+    sumsUrl: pickSums(release.assets || []),
     // Gitee 的 release 对象没有 html_url 字段（实测字段：id / tag_name / name / body /
     // prerelease / author / created_at / assets），按 tag 拼一个出来
     releaseUrl: release.html_url || `https://gitee.com/${common.GH_OWNER}/${common.GH_REPO}/releases/tag/${release.tag_name}`,
     source,
   };
+}
+
+// —— SHA256SUMS：Release 里那份「附件名 → sha256」清单 ——
+// 内容是 sha256sum 的输出：一行一条 `<64 位十六进制><空白><文件名>`（CI 的 release job 里生成，
+// 实测已发布的 v0.4.0 就是这个形态）。它是**完整性**校验，不是防篡改：清单与产物同源（同一次
+// Release、同一段 TLS），能证明「下到的就是发布的那份」——半成品、错版本、被中间层改写都挡得住；
+// 能改产物的对手也能改清单，那要靠签名，不在本工具的能力范围内。
+function parseSums(text) {
+  const map = new Map();
+  for (const line of String(text).split('\n')) {
+    // 认 `sha256sum` 的两种写法：文本模式两个空格、二进制模式一个空格加 `*`
+    const m = line.trim().match(/^([0-9a-f]{64})\s+\*?(.+)$/i);
+    if (m) map.set(m[2].trim(), m[1].toLowerCase());
+  }
+  return map;
+}
+
+// 从附件列表里取 SHA256SUMS 的直链；没有就返回 null（Gitee 的发行版只发正文、不带任何附件）
+function pickSums(assets) {
+  const hit = assets.find((a) => String(a.name).toUpperCase() === 'SHA256SUMS') || null;
+  return hit ? downloadUrl(hit) : null;
+}
+
+function sha256File(file) {
+  return new Promise((resolve, reject) => {
+    const hash = crypto.createHash('sha256');
+    const s = fs.createReadStream(file);
+    s.on('data', (c) => hash.update(c));
+    s.on('end', () => resolve(hash.digest('hex')));
+    s.on('error', reject);
+  });
+}
+
+// 比对下载物的 sha256，对不上就抛错（调用方据此中止替换 / 中止安装）。
+// `sumsUrl` 缺失时**跳过并返回 false**，而不是拒绝更新：没有清单的来源（Gitee）本来就没有，
+// 不能因此把更新堵死——CLI 侧另有文件头校验兜底。清单在手却对不上、或清单里压根没有这个名字，
+// 都直接抛错：那说明「下到的东西不是这次发布的那份」，没有理由继续。
+async function verifySha256(file, name, sumsUrl, log = () => {}) {
+  if (!sumsUrl) {
+    log('（该来源没有 SHA256SUMS，跳过校验和比对）');
+    return false;
+  }
+  log(`比对 SHA256SUMS 里的 ${name} …`);
+  const want = parseSums(await net.get(sumsUrl)).get(name);
+  if (!want) throw new Error(`SHA256SUMS 里没有 ${name}，无法确认下到的是发布的那份，已中止`);
+  const got = await sha256File(file);
+  if (got !== want) {
+    throw new Error(
+      `校验和不符：发布的是 ${want.slice(0, 16)}…，下到的是 ${got.slice(0, 16)}…，已中止`
+    );
+  }
+  return true;
 }
 
 // 自身路径相关的三个文件：当前产物、升级时暂存的新产物、升级后暂存的旧产物
@@ -144,7 +199,10 @@ async function apply(asset, opts = {}) {
     onProgress: opts.onProgress,
   });
   try {
+    // 两道都是**替换自身之前**的闸：文件头管「是不是本平台的可执行文件」，校验和管「是不是发布的
+    // 那一份字节」。先做文件头——它便宜，且下到 JSON / 错误页这类东西时能立刻失败，不必再去取清单。
     verifyExecutable(newFile);
+    await verifySha256(newFile, asset.name, opts.sumsUrl, log);
     fs.chmodSync(newFile, 0o755);
 
     fs.rmSync(oldFile, { force: true });
@@ -178,4 +236,4 @@ function cleanup() {
   }
 }
 
-module.exports = { check, apply, cleanup, pickAsset, pickGuiAsset };
+module.exports = { check, apply, cleanup, pickAsset, pickGuiAsset, pickSums, parseSums, verifySha256 };

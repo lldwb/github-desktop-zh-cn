@@ -130,7 +130,7 @@ Electron 里 `process.execPath` 是**应用可执行文件**（改名后的 exe�
 | `pickPath` | invoke | — | 同 `state`（弹系统目录选择框 → `writeConfig` → 重新解析）；选中无效目录时返回 `{ ...state, ok: false, error }`，界面据此提示 |
 | `patch` | invoke | — | `{ ok, version, total, restarted, error?, hint? }`；用户在确认框点取消时返回 `{ ok: false, canceled: true }` |
 | `restore` | invoke | — | `{ ok, version, source, total, ambiguous, skipped, restarted, error?, hint? }`（取消同上） |
-| `update` | invoke | — | `{ ok, notes: string[], hasError }`（同步当前版本字典 + 查工具新版本；GUI 态不做自更新，只给「到 Releases 下载」的指引） |
+| `update` | invoke | — | `{ ok, notes: string[], hasError }`（同步当前版本字典 + 查工具新版本；有新版且拿得到本平台安装包时**下载并启动安装向导**——安装包先按 Release 的 `SHA256SUMS` 核对、起不来都算 `hasError`，见 `installGuiUpdate`；拿不到安装包才退回「到 Releases 下载」的指引） |
 | `busy` | send（主 → 渲染） | `{ task, phase }` | 无（用于显示「正在汉化…」；`task` 为 `null` 表示回到空闲） |
 
 `state` 的字段全部来自现有函数：`locateApp` / `listDictVersions` / `loadDict` / `dictLabel` / `isPatched` / `backupExists` / `backupDir` / `readConfig` / `dataRoot`，**不新增业务逻辑**。`rootDir` 是界面上展示的「安装根」（Windows 取 `app-<版本>` 的上一级，即截图里的 `…\AppData\Local\GitHubDesktop`），仅用于展示，不参与任何写盘路径计算。

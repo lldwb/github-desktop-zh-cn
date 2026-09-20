@@ -9,8 +9,13 @@
 
 const test = require('node:test');
 const assert = require('node:assert');
+const crypto = require('node:crypto');
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
 
-const { pickAsset, pickGuiAsset } = require('../scripts/update.js');
+const net = require('../scripts/net.js');
+const { pickAsset, pickGuiAsset, pickSums, parseSums, verifySha256 } = require('../scripts/update.js');
 
 // v0.4.0 发布页的实际命名（cli / gui 两套，见 AGENTS.md「产物命名」）
 const CLI = [
@@ -130,4 +135,65 @@ test('没有本平台产物时返回 null（调用方据此提示「没有本平
   assert.strictEqual(on('linux', 'arm64', () => pickAsset(assets)), null);
   assert.strictEqual(on('linux', 'arm64', () => pickGuiAsset(assets)), null);
   assert.strictEqual(on('win32', 'x64', () => pickAsset([{ name: 'SHA256SUMS', url: API('x') }])), null);
+});
+
+// —— SHA256SUMS 校验和 ——
+const H1 = '80be9b03ef8d41edfd9257a08bf3453edd12f49890e0d73763410812fe824220'; // v0.4.0 发布清单里的真值
+
+test('pickSums：取清单的下载直链，没有就 null（Gitee 的发行版不带附件）', () => {
+  const url = pickSums(githubAssets());
+  assert.strictEqual(url, DIRECT('SHA256SUMS'));
+  assert.ok(!url.includes('api.github.com'), '不该把 API 端点当下载地址');
+  // 名字要精确对上：SHA256SUMS.txt 这类同名后缀不是清单
+  assert.strictEqual(pickSums([{ name: 'SHA256SUMS.txt', browser_download_url: 'https://x/y' }]), null);
+  assert.strictEqual(pickSums(giteeAssets()), null); // 只有源码包
+  assert.strictEqual(pickSums([]), null);
+});
+
+test('parseSums：认 sha256sum 的两种写法，忽略空行与杂行', () => {
+  const map = parseSums(
+    [
+      `${H1}  github-desktop-zh-cn-cli-v0.4.0-win32-x64.exe\r`, // CRLF
+      `${'c'.repeat(64)} *binary-mode.bin`, // 二进制模式：一个空格加 *
+      '', // 空行
+      '这一行不是校验和',
+      'abcd1234  too-short.bin', // 十六进制位数不够
+      `${'A'.repeat(64)}  uppercase-hex.bin`, // 大写十六进制也要认
+    ].join('\n')
+  );
+  assert.strictEqual(map.get('github-desktop-zh-cn-cli-v0.4.0-win32-x64.exe'), H1);
+  assert.strictEqual(map.get('binary-mode.bin'), 'c'.repeat(64));
+  assert.strictEqual(map.get('uppercase-hex.bin'), 'a'.repeat(64), '大写十六进制应归一成小写');
+  assert.strictEqual(map.has('too-short.bin'), false);
+  assert.strictEqual(map.size, 3);
+});
+
+test('verifySha256：对得上放行，对不上 / 清单里没这个名字都中止，没清单则跳过', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'gd-update-'));
+  const file = path.join(dir, 'artifact.bin');
+  const body = Buffer.from('假装这是一份很大的产物');
+  fs.writeFileSync(file, body);
+  const real = crypto.createHash('sha256').update(body).digest('hex');
+
+  const realGet = net.get; // 打桩：这一步只验比对逻辑，不去碰网络
+  try {
+    net.get = async () => `${real}  artifact.bin\n${'0'.repeat(64)}  other.bin\n`;
+    assert.strictEqual(await verifySha256(file, 'artifact.bin', 'https://example.invalid/SHA256SUMS'), true);
+
+    // 清单在手，却没有这个名字 → 下到的东西不是这次发布的那份
+    await assert.rejects(
+      () => verifySha256(file, 'missing.bin', 'https://example.invalid/SHA256SUMS'),
+      /SHA256SUMS 里没有 missing\.bin/
+    );
+
+    // 清单说的是另一份字节（下载被中间层改写 / 只落了一半）
+    net.get = async () => `${'1'.repeat(64)}  artifact.bin\n`;
+    await assert.rejects(() => verifySha256(file, 'artifact.bin', 'https://example.invalid/SHA256SUMS'), /校验和不符/);
+
+    // 来源没有清单（Gitee 只发正文）→ 跳过而不是拒绝更新
+    assert.strictEqual(await verifySha256(file, 'artifact.bin', null), false);
+  } finally {
+    net.get = realGet;
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
 });

@@ -274,7 +274,7 @@ async function doUpdate(rl, state) {
       return;
     }
     // apply 成功后进程已退出、新版本已启动，不会返回
-    await require('./update.js').apply(info.asset);
+    await require('./update.js').apply(info.asset, { sumsUrl: info.sumsUrl });
   } catch (e) {
     console.log(` 检查更新失败：${e.message}`);
   }

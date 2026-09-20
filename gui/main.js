@@ -365,7 +365,8 @@ function registerIpc() {
       };
     }
     const r = await installGuiUpdate(info);
-    return { ok: true, notes: r.notes };
+    // 起不来 / 校验没过都不算装上了：如实回 error，别让界面弹一句「已启动安装向导」
+    return r.hasError ? { ok: false, error: r.notes.join(' ') } : { ok: true, notes: r.notes };
   });
 
   handle('pickPath', async () => {
@@ -439,6 +440,7 @@ function registerIpc() {
         if (choice.response === 0) {
           const r = await installGuiUpdate(info);
           notes.push(...r.notes);
+          if (r.hasError) hasError = true; // 没装成就是没装成，别混在「已完成」里
         } else if (choice.response === 2) {
           shell.openExternal(info.releaseUrl);
           notes.push(`已打开下载页：${info.releaseUrl}`);
@@ -460,6 +462,7 @@ function registerIpc() {
 // 以及启动时自动检查到新版、用户点提示里的「下载并安装」。
 // GUI 产物是**安装包**（不是 CLI 那种单文件可执行体），所以不能像 scripts/update.js 的
 // apply 那样替换自身——那是 SEA 产物的方式，在 Electron 打包态会直接抛错。
+// 返回 `{ notes, hasError }`：起不来 / 校验没过都不算成功，由调用方如实告诉用户（见下面的注释）。
 async function installGuiUpdate(info) {
   const dest = path.join(app.getPath('temp'), info.guiAsset.name);
   notifyBusy('toolUpdate', `正在下载 v${info.latest} …`);
@@ -474,6 +477,14 @@ async function installGuiUpdate(info) {
         notifyBusy('toolUpdate', `正在下载 v${info.latest} … ${pct}`);
       },
     });
+    // 校验和比对（Release 里那份 SHA256SUMS）：GUI 侧没有 CLI 那道文件头护栏——安装包形态不齐
+    //（dmg 的 koly 在文件末尾那 512 字节 trailer 里、deb 是 ar 归档、AppImage 是追加了 squashfs
+    // 的 ELF），魔数表既难写又不强。校验和正好补上这一环，而且更强：它证明的是「同一份字节」，
+    // 不止「文件头像某种格式」。没随附件发清单的来源（Gitee）自动跳过。
+    await update.verifySha256(dest, info.guiAsset.name, info.sumsUrl, (msg) => notifyBusy('toolUpdate', msg));
+  } catch (e) {
+    // 下载失败与校验失败都收敛成一句可读的说明：**没有启动任何东西**，也就不该报成功
+    return { notes: [`没能准备好安装包：${e.message}`, `（下载位置：${dest}）`], hasError: true };
   } finally {
     notifyBusy(null, null);
   }
@@ -483,12 +494,24 @@ async function installGuiUpdate(info) {
   const direct = process.platform === 'win32' || dest.endsWith('.AppImage');
   const cmd = direct ? dest : process.platform === 'darwin' ? 'open' : 'xdg-open';
   const child = spawn(cmd, direct ? [] : [dest], { detached: true, stdio: 'ignore' });
-  // spawn 的失败是异步的（ENOENT 走 error 事件）：不接住会冒到进程级把 GUI 带崩
-  child.on('error', () => {});
+  // spawn 的失败是**异步**的（ENOENT、不是有效的可执行文件都走 error 事件）：不接住会冒到进程级
+  // 把 GUI 带崩，接住却不回报就成了「提示已启动安装向导、屏幕上什么都没发生」——用户只会以为
+  // 装上了。故等这一步的结果出来再回话：起不来就说清「文件在哪、请手动打开」。
+  const spawnError = await new Promise((resolve) => {
+    child.on('error', resolve); // 常驻：起不来时如实回报，也不会冒到进程级
+    child.once('spawn', () => resolve(null));
+  });
   child.unref();
+  if (spawnError) {
+    return {
+      notes: [`安装包已下载到 ${dest}，但没能启动它：${spawnError.message}`, '请手动打开上面这个文件完成安装。'],
+      hasError: true,
+    };
+  }
 
   return {
     notes: [`已下载 v${info.latest} 的安装包并启动安装向导。`, '按向导装完后请重新打开本工具。'],
+    hasError: false,
   };
 }
 
