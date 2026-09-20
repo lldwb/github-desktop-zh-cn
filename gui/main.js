@@ -184,9 +184,13 @@ function notifyBusy(task, phase) {
 }
 
 // 统一包装：异常一律转成 { ok:false, error, hint } 回渲染进程——界面里能看到可读原因，
-// 而不会弹出 Node 的原始调用栈（e.hint 是 patch/restore 给用户的下一步建议）
+// 而不会弹出 Node 的原始调用栈（e.hint 是 patch/restore 给用户的下一步建议）。
+// ipcMain.handle 的 listener 签名是 **(event, ...args)**——第一个参数是 IpcMainInvokeEvent 而不是
+// 业务参数，必须在这里剥掉：原样透传会让带参通道的处理器把 event 对象当版本号 / 地址键用
+// （实测报成「本机没有 [object Object] 的安装目录」「未知的地址：[object Object]」）。event 目前
+// 无人使用（处理器拿不到也无需拿到来源窗口），故只丢不传。
 function handle(channel, fn) {
-  ipcMain.handle(channel, async (...args) => {
+  ipcMain.handle(channel, async (_event, ...args) => {
     try {
       return await fn(...args);
     } catch (e) {
