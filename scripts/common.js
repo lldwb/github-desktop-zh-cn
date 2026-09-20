@@ -12,6 +12,14 @@ const RESOURCES_REL = ['resources'];
 const APP_SUBDIR = 'app';
 const APP_NAME = 'github-desktop-zh-cn';
 
+// 字典版本目录的形态：三段数字（3.6.6）。字典版本与 GitHub Desktop 版本强对应，
+// 正式版本号一律是 X.Y.Z——非该形态的目录（测试夹具 0.0.0-test、下载残留 3.6.6-beta、
+// 临时解包目录等）都不算「可用字典版本」，一律挡在版本列表之外。
+// 不挡的后果：残留被菜单与打包内嵌当成真实版本。注意 compareVersions 把非数字段按 0 处理
+// （`pa[i] || 0`，NaN 也是假值），所以首段数字更高的残留（如 9.9.9-x）会排到真实版本**之后**——
+// build.js 取「最后一个」当内嵌字典，就会内嵌错版本。故 build.js 同样按本判据过滤。
+const DICT_VERSION_RE = /^\d+\.\d+\.\d+$/;
+
 // —— 远程仓库（在线字典与自更新，SSOT）——
 // 字典按候选顺序尝试：GitHub raw 为权威源，jsDelivr 兜底（部分地区可达性更好）。
 const GH_OWNER = 'lldwb';
@@ -247,7 +255,7 @@ function listDictVersions() {
   const dir = path.join(dataRoot(), 'dictionaries');
   if (fs.existsSync(dir)) {
     for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
-      if (e.isDirectory() && fs.existsSync(path.join(dir, e.name, 'zh-CN.json'))) found.add(e.name);
+      if (e.isDirectory() && DICT_VERSION_RE.test(e.name) && fs.existsSync(path.join(dir, e.name, 'zh-CN.json'))) found.add(e.name);
     }
   }
   return [...found].sort(compareVersions);
@@ -786,6 +794,7 @@ module.exports = {
   writeConfig,
   locateApp,
   readVersion,
+  DICT_VERSION_RE,
   listDictVersions,
   loadDict,
   loadGroups,

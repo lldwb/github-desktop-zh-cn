@@ -15,7 +15,7 @@ const fs = require('fs');
 const path = require('path');
 const { execFileSync } = require('child_process');
 const { bundle } = require('./bundle');
-const { compareVersions } = require('./common.js');
+const { compareVersions, DICT_VERSION_RE } = require('./common.js');
 
 const REPO_ROOT = path.resolve(__dirname, '..');
 const PKG = require('../package.json');
@@ -49,11 +49,12 @@ function printHelp() {
 
 // 只内嵌最新版本的字典：产物保持单文件、体积最小。其余版本由运行时的 dict-sync
 // 从仓库获取（见 AGENTS.md 的「在线能力」）——汉化最新版本无需联网。
+// 「最新」只认三段数字目录（DICT_VERSION_RE）：夹具、下载残留、临时解包目录都不算数。
 function collectAssets() {
   const dir = path.join(REPO_ROOT, 'dictionaries');
   const versions = fs
     .readdirSync(dir, { withFileTypes: true })
-    .filter((e) => e.isDirectory() && fs.existsSync(path.join(dir, e.name, 'zh-CN.json')))
+    .filter((e) => e.isDirectory() && DICT_VERSION_RE.test(e.name) && fs.existsSync(path.join(dir, e.name, 'zh-CN.json')))
     .map((e) => e.name)
     .sort(compareVersions);
   if (versions.length === 0) throw new Error('dictionaries/ 下没有可用字典，无法内嵌');
