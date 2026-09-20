@@ -30,28 +30,11 @@
 const fs = require('fs');
 const path = require('path');
 const common = require('../common');
+const dictAi = require('./dict-ai');
 const dictEdit = require('./dict-edit');
 const dictGroups = require('./dict-groups');
-const { SYSTEM_PROMPT } = require('./dict-prompt');
 const releaseAssets = require('./release-assets');
 const scan = require('../cmd/scan');
-const net = require('../net');
-
-// 一次请求翻译多少条。太小则请求数暴涨（AI 接口的往返延迟是大头），太大则单次失败
-// 连坐的条目多、且模型注意力分散后更容易漏占位符。
-const BATCH_SIZE = 20;
-// 默认的思考强度。批量翻译界面短句用不上深度推理，取最低档即可——实测这一档的思考量约为
-// 最高档的 1/6（1847 vs 11979 思考 tokens），档位越高耗时涨得越快。想开高思考强度用
-// AI_REASONING_EFFORT（或 --ai-effort），并同步放大下面的超时。
-const AI_EFFORT = 'low';
-// 单次请求的超时。翻译一批几十秒很正常，用 net.js 默认的 20 秒会必然超时。
-//
-// 这是**默认值**，可用 AI_TIMEOUT_SEC 环境变量（或 --ai-timeout）覆盖：推理模型的耗时随思考
-// 强度非线性增长——实测 deepseek-v4-flash 回答一个简单问题，不传思考强度时 10 秒 / 思考
-// 0.5k tokens，最高档 97 秒 / 思考 12k tokens（约 23 倍）。要开高思考强度就必须同步放大这个值。
-const AI_TIMEOUT = 120000;
-// 逐条重试之间的间隔，避免失败时把接口打爆
-const RETRY_DELAY = 500;
 
 // 生效比例下限：字典条目里至少这么多条能在产物上真正替换到。
 // 每一条键都是「确认过在新产物里存在」才写进去的，理应条条命中；低于阈值说明写入链路出了问题。
@@ -60,7 +43,8 @@ const MIN_HIT_RATE = 0.95;
 const MAX_UNTRANSLATED_RATE = 0.3;
 
 const PLATFORMS = ['windows', 'macos'];
-const TARGETS = ['main.js', 'renderer.js'];
+// 两个目标文件——SSOT 在 common.js（与 patch / restore / verify / scan 共用同一份清单）
+const TARGETS = common.TARGETS;
 // 最低候选长度，与 scan.js 的默认值一致
 const MIN_LENGTH = 8;
 
@@ -74,10 +58,6 @@ const ON_EXIST_MODES = ['skip', 'diff', 'overwrite'];
 // diff 报告里每类差异最多留多少条明细。差异通常只有几十条，上限防的是「换了继承来源」这类
 // 整体性变化——那时报告 JSON 会被几千条明细撑大，而人真正要看的是总数与分布。
 const DIFF_LIMIT = 500;
-// 汉字判据：译文里一个都没有，说明它压根没被翻译（AI 原样返回了英文、或返回了别的拉丁文）
-const CJK = /[㐀-䶿一-鿿豈-﫿]/;
-
-const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 // ============================ 参数 ============================
 
@@ -340,272 +320,6 @@ function toSegments(perPlatform, winExact) {
   return { segments: { common: commonSeg, macos: macosSeg, windows: {}, linux: {} }, skipped };
 }
 
-// ============================ AI 翻译 ============================
-
-// --ai-timeout / AI_TIMEOUT_SEC 的解析：秒 → 毫秒。给了非法值就报错，不静默退回默认——
-// 「以为设成了 1200 秒、实际还是 120 秒」的症状是每批都超时，从日志里看不出原因。
-function resolveTimeout(spec, fallback = AI_TIMEOUT) {
-  if (spec === undefined || spec === null || spec === '') return fallback;
-  const sec = Number(spec);
-  if (!Number.isFinite(sec) || sec <= 0) {
-    throw new Error(`AI 超时得是正数秒，收到 ${JSON.stringify(spec)}`);
-  }
-  return Math.round(sec * 1000);
-}
-
-// --ai-effort / AI_REASONING_EFFORT 的解析：没给就用默认档，显式给 none 表示**不带这个字段**。
-// 留这个逃生口是因为取值原样透传、不校验——有的网关对不认识的档位直接报错，那时得能退回
-// 接口自己的默认档（而不是被迫去猜一个它认的值）。
-function resolveEffort(spec) {
-  const v = String(spec ?? AI_EFFORT).trim();
-  return v === 'none' ? '' : v;
-}
-
-// 地址不合法时，每次请求都会在 net.js 的 `new URL()` 上抛 "Invalid URL"：两批 + 逐条重试
-// 会把这个同一个错误重复几十遍，日志里只留下满屏重复、看不出该去查哪个配置。在这里一次拦住，
-// 并直接说出该怎么改。**不回显地址本身**——AI_BASE_URL 是私密配置，而注解与 step summary
-// 在公开仓库上人人可见（日志里它会被 GitHub 脱敏成 ***，别指望别处也有这层）。
-function assertBaseUrl(base) {
-  // 常见错法的清单取自实测：这几种都让 `new URL()` 抛 Invalid URL（与 CI 那次一模一样），
-  // 而它们看起来都「挺像个地址」，不逐条列出来很难自己想到
-  const hint =
-    '需要形如 http://主机:端口/路径 的绝对地址。逐项核对：' +
-    '① 开头就是 http:// 或 https://，没有引号、方括号、Markdown 链接的残留；' +
-    '② 冒号是半角 : 而不是全角 ：；' +
-    '③ 地址内部没有空格、换行（首尾的半角空格 / Tab / 换行会被自动去掉，内部的不行）';
-  // 不可见字符要先查：URL 标准会把制表符与换行从整串里删掉、再去掉首尾的控制符与半角空格，而其余
-  // 不可见字符（不换行空格、零宽空格、BOM、串内空格……）不是被百分号编码进路径就是让解析直接失败
-  // ——前者请求打到 /v1%C2%A0 上静默 404，不报错、肉眼也看不出哪里不同，比 Invalid URL 更难查。
-  // 所以这里先按标准做一遍同样的删除（否则会把「换行只是粘贴时折了行」这种其实可用的值误拦），
-  // 剩下的值里再出现不可见字符就是必然打错的配置。（判据只覆盖空白与格式类字符，中文域名、路径
-  // 里的汉字是字母类，不受影响）
-  const stripped = base.replace(/[\t\n\r]/g, '').replace(/^[\u0000- ]+|[\u0000- ]+$/g, '');
-  const invisible = stripped.match(/[\p{C}\p{Z}]/u);
-  if (invisible) {
-    const cp = `U+${invisible[0].codePointAt(0).toString(16).toUpperCase().padStart(4, '0')}`;
-    throw new Error(
-      `AI_BASE_URL 里有不可见字符 ${cp}（抹掉它就能发请求）：${hint}。` +
-        '这一位多半是粘贴时带进来的，回 Secrets 页清空、重新粘一次即可。'
-    );
-  }
-  let u;
-  try {
-    u = new URL(base);
-  } catch {
-    throw new Error(`AI_BASE_URL 不是合法 URL：${hint}`);
-  }
-  if (u.protocol !== 'http:' && u.protocol !== 'https:') {
-    throw new Error(`AI_BASE_URL 的协议是 ${u.protocol.replace(':', '')}，只支持 http / https`);
-  }
-  // 地址本身合法、但它与打印出来的值对不上时，GitHub 就脱敏不了日志里的那一行（它按 secret 的
-  // 完整值做子串匹配）。这里只提示、不失败——尾随空格这类差异完全不影响请求能不能发出去，
-  // 为此拦下整轮产出不值当。去不去掉由使用者定，提示只是让「地址会不会被公开」这件事可见。
-  if (base !== base.trim()) {
-    console.warn('::warning::AI_BASE_URL 首尾有空白字符：地址本身可用（已自动按去空白后的值发请求），但 GitHub 的日志脱敏按 secret 的完整值匹配，日志里那一行可能不被打成 ***。到 Secrets 页删掉首尾空白即可。');
-  }
-  return u;
-}
-
-// 系统提示词在 dict-prompt.js：GUI 的「翻译提示词」标签页要原样展示它，两处同源，别内联回本文件。
-
-const PLACEHOLDER = /\{\{[^{}]*\}\}|\{[^{}]*\}|\$\{[^{}]*\}/g;
-const placeholdersOf = (s) => (s.match(PLACEHOLDER) || []).sort().join(' ');
-
-// 译文的横向校验。拦两类会真正改坏界面的问题：占位符缺失或多出、以及返回了内容却没有一个汉字。
-// 「AI 原样返回」不归这里判——那是合法结论，由 isEcho 分流（见下）。
-function rejectReason(src, zh) {
-  if (typeof zh !== 'string' || !zh.trim()) return '译文为空';
-  const want = placeholdersOf(src);
-  const got = placeholdersOf(zh);
-  if (want !== got) {
-    return `占位符不一致（原文 ${want || '无'}，译文 ${got || '无'}）`;
-  }
-  if (!CJK.test(zh)) return `译文里没有中文：${JSON.stringify(zh)}`;
-  return null;
-}
-
-// 「AI 原样返回」＝它判定这条无需翻译，而不是它没干活。候选里混着域名（github.com）、
-// 仓库路径（hubot/cool-repo）、品牌名（GitHub Desktop、Anthropic），SYSTEM_PROMPT 第 7 条
-// 正是要求这类原样返回。**这类条目不写进字典**：写了就是「原文 → 原文」，没有替换效果，
-// 还会让 validate 一直提示「疑似漏译」。
-//
-// 代价是它们每个版本都会作为新增候选重新问一次 AI（多花几条 tokens）。不为此另建持久清单——
-// 那要往字典里加一个新段与一套读写的迁移，收益只是省几条 tokens。
-//
-// 与「AI 偷懒把该译的也原样返回」在数据上区分不了，故：这些条目全部记进报告的 echoedRows，
-// 数量与清单在日志和 CI 汇总里可见；干跑命中率与人工抽查是它剩下的防线。
-function isEcho(src, zh) {
-  return typeof zh === 'string' && zh.trim() === src.trim();
-}
-
-// 从历史字典抽风格示例。刻意挑含 & / 占位符 / 末尾省略号的条目——AI 最容易在这三类上走样，
-// 给例子比在提示词里描述有效。
-function buildExamples(table) {
-  const entries = [...table.entries()].filter(([k, v]) => k !== v);
-  const pick = (re, n) => entries.filter(([k]) => re.test(k)).slice(0, n);
-  const chosen = [];
-  const seen = new Set();
-  for (const [k, v] of [
-    ...pick(/&/, 4),
-    ...pick(/\{\{/, 3),
-    ...pick(/…$/, 3),
-    ...entries.slice(0, 6),
-  ]) {
-    if (seen.has(k)) continue;
-    seen.add(k);
-    chosen.push([k, v]);
-  }
-  return chosen;
-}
-
-// 请求一批译文。响应体是 OpenAI 兼容的 chat/completions 结构。
-async function translateBatch(items, cfg) {
-  const body = {
-    model: cfg.model,
-    temperature: 0.2,
-    messages: [
-      { role: 'system', content: SYSTEM_PROMPT },
-      {
-        role: 'user',
-        content: [
-          '【既有译文的风格示例】',
-          ...cfg.examples.map(([en, zh]) => `${en} → ${zh}`),
-          '',
-          '【待翻译】',
-          JSON.stringify(items.map((it, i) => ({ id: String(i + 1), text: it.text, from: it.source }))),
-        ].join('\n'),
-      },
-    ],
-  };
-  // 只在明确给了档位时才带上：不传即接口默认，传空串会被部分网关判成非法取值
-  if (cfg.effort) body.reasoning_effort = cfg.effort;
-  const { status, data } = await net.postJson(`${cfg.base}/chat/completions`, body, {
-    timeout: cfg.timeout,
-    headers: { authorization: `Bearer ${cfg.key}` },
-  });
-  if (status < 200 || status >= 300) {
-    const detail =
-      (data && data.error && (data.error.message || data.error.code)) || JSON.stringify(data).slice(0, 200);
-    throw new Error(`HTTP ${status}：${detail}`);
-  }
-  const text =
-    data && data.choices && data.choices[0] && data.choices[0].message && data.choices[0].message.content;
-  if (typeof text !== 'string') throw new Error(`响应结构不认识：${JSON.stringify(data).slice(0, 200)}`);
-
-  // 有的实现会把 JSON 包在代码块里或前后带一句解释，截取最外层的花括号再解析
-  const start = text.indexOf('{');
-  const end = text.lastIndexOf('}');
-  if (start < 0 || end <= start) throw new Error(`模型未返回 JSON：${text.slice(0, 120)}`);
-  try {
-    return JSON.parse(text.slice(start, end + 1));
-  } catch (e) {
-    throw new Error(`模型返回的不是合法 JSON（${e.message}）：${text.slice(start, start + 120)}`);
-  }
-}
-
-// 翻一批，逐条校验；原样返回的收进 echoed，其余不通过的收回重试队列
-async function attempt(items, cfg) {
-  const raw = await translateBatch(items, cfg);
-  const done = new Map();
-  const echoed = [];
-  const retry = [];
-  for (const [i, item] of items.entries()) {
-    const zh = raw[String(i + 1)];
-    if (isEcho(item.text, zh)) {
-      echoed.push(item);
-      continue;
-    }
-    const bad = rejectReason(item.text, zh);
-    if (bad) retry.push({ ...item, reason: bad });
-    else done.set(item, zh);
-  }
-  return { done, retry, echoed };
-}
-
-// 批量翻译 + 失败逐条重试。返回 { done, failed, echoed }。
-// 批次整体失败（网络、鉴权、模型没按格式回）时降级为逐条——一条坏输出不该连坐同批另外十九条。
-async function translateAll(candidates, cfg, log) {
-  const done = new Map();
-  const echoed = [];
-  const failed = [];
-  for (let i = 0; i < candidates.length; i += BATCH_SIZE) {
-    const batch = candidates.slice(i, i + BATCH_SIZE);
-    let r;
-    try {
-      r = await attempt(batch, cfg);
-    } catch (e) {
-      log(`  第 ${i / BATCH_SIZE + 1} 批（${batch.length} 条）失败：${e.message}——改为逐条重试`);
-      r = { done: new Map(), retry: batch.map((it) => ({ ...it, reason: e.message })), echoed: [] };
-    }
-    for (const [item, zh] of r.done) done.set(item, zh);
-    echoed.push(...r.echoed);
-
-    let restored = 0;
-    let retryEchoed = 0;
-    for (const item of r.retry) {
-      await sleep(RETRY_DELAY);
-      try {
-        const one = await attempt([item], cfg);
-        // 单条重问时被判无需翻译——重试路径也得认这个结论，否则它会一直失败下去
-        if (one.echoed.length) {
-          echoed.push(item);
-          retryEchoed++;
-          continue;
-        }
-        const hit = [...one.done][0];
-        if (hit) {
-          done.set(item, hit[1]);
-          restored++;
-          continue;
-        }
-        item.reason = (one.retry[0] && one.retry[0].reason) || item.reason;
-      } catch (e) {
-        item.reason = e.message;
-      }
-      failed.push(item);
-    }
-    if (r.retry.length) {
-      log(
-        `  逐条重试 ${r.retry.length} 条：补回 ${restored} 条，判为无需翻译 ${retryEchoed} 条，` +
-          `仍失败 ${r.retry.length - restored - retryEchoed} 条`
-      );
-    }
-  }
-  return { done, failed, echoed };
-}
-
-// 失败原因常把接口地址原样带出来：net.js 的报错大多以「……：<URL 或主机名>」收尾
-// （HTTP 401、请求超时、连接被拒绝都如此）。这些文本要写进注解、step summary 与提交信息，
-// 公开仓库上人人可见，所以进任何对外文本之前先替换掉。太短的值不参与替换——它在正常文本里
-// 误伤的概率大于它是真凭据的概率。
-function redact(text, secrets) {
-  let out = String(text ?? '');
-  for (const s of secrets) {
-    if (s && s.length >= 8 && out.includes(s)) out = out.split(s).join('***');
-  }
-  return out;
-}
-
-// 把「为什么全都没译出来」压成一行：同因合并计数、按条数排序、只留前几条。
-// 门槛只报「未译 11/11 条（100%）」时，看的人不知道是地址错、鉴权错还是模型不听话——
-// 而这三种的处理方式完全不同，所以原因必须跟结论一起出现。
-function collapseReasons(rows, secrets, limit = 3) {
-  const merged = new Map();
-  for (const r of rows) {
-    const text = redact(r.reason || '（无原因）', secrets).replace(/\s+/g, ' ');
-    const key = text.length > 160 ? `${text.slice(0, 160)}…` : text;
-    merged.set(key, (merged.get(key) || 0) + 1);
-  }
-  return [...merged]
-    .sort((a, b) => b[1] - a[1])
-    .slice(0, limit)
-    .map(([text, n]) => (n > 1 ? `${text} ×${n}` : text))
-    .join('；');
-}
-
-// 失败条目的统一文案：结论 + 原因明细。只报「未译 11/11 条（100%）超过上限 30%」时，
-// 看的人不知道是地址错、鉴权错还是模型不听话——三种的处理方式完全不同。
-const failureText = (r) => (r.reasonDetail ? `${r.reason}——${r.reasonDetail}` : r.reason);
 
 // ============================ 干跑校验 ============================
 
@@ -663,15 +377,6 @@ function segmentIndex(doc) {
   return m;
 }
 
-// 键 → 组名。groups 段是「组名 → 键数组」，这里翻过来查。
-function groupIndex(groups) {
-  const m = new Map();
-  for (const [g, keys] of Object.entries(groups || {})) {
-    for (const k of keys || []) if (!m.has(k)) m.set(k, g);
-  }
-  return m;
-}
-
 // 对比两份字典（existing = 磁盘上那份，produced = 本次产出）。纯函数，不碰磁盘。
 // 按「键」而不是按「段 + 键」对齐：同键换段（common ↔ macos）若按段对齐会表现成一删一增，
 // 看着像两条无关的变化；单列成 moved 才看得出「这条只是换了归属」。
@@ -696,8 +401,9 @@ function diffDicts(existing, produced) {
   }
 
   // 组归属只对两边都在的键比——新增/删除的键各自的归属没有「变化」可言
-  const ga = groupIndex(existing.groups);
-  const gb = groupIndex(produced.groups);
+  // 反查走 dict-edit 的同一份实现（它的入参是整份 doc，不是 groups 段）
+  const ga = dictEdit.groupIndex(existing);
+  const gb = dictEdit.groupIndex(produced);
   const groupsChanged = [];
   for (const [key] of after) {
     if (!before.has(key)) continue;
@@ -759,6 +465,129 @@ function restoreDict(dictFile, previous) {
   return '已删除刚产出的字典';
 }
 
+// 第 1 步：两个平台的产物取齐并各建一份字面量索引。--reuse 时复用 --work 下已提取的产物。
+async function fetchAppIndexes(version, args, workRoot, log) {
+  const appDirs = {};
+  const indexes = {};
+  for (const platform of PLATFORMS) {
+    // 目录带 arch：同一版本两个架构并存时不会互相覆盖，也与 release-assets 的 CLI 用法一致
+    const out = path.join(workRoot, `${platform}-${args.arch}`);
+    const appDir = path.join(out, 'app');
+    if (args.reuse && TARGETS.every((f) => fs.existsSync(path.join(appDir, f)))) {
+      log(`  ${platform}：复用已提取的产物 ${appDir}`);
+    } else {
+      log(`  ${platform}：提取产物…`);
+      await releaseAssets.fetchApp(version, { platform, arch: args.arch, out, log });
+    }
+    appDirs[platform] = appDir;
+    indexes[platform] = literalIndex(appDir);
+    log(`  ${platform}：产物字面量索引 ${indexes[platform].exact.size} 条`);
+  }
+  return { appDirs, indexes };
+}
+
+// 第 2 步：官方新写的界面文案候选（只认 JSX 文本节点，理由见文件头）。
+function collectJsxCandidates(appDirs, log) {
+  const jsxFound = new Map();
+  for (const platform of PLATFORMS) {
+    const { found, scanned } = scan.collectCandidates({
+      appDir: appDirs[platform],
+      known: new Set(),
+      minLength: MIN_LENGTH,
+    });
+    let n = 0;
+    for (const [text, info] of found) {
+      if (!info.jsx) continue;
+      n++;
+      if (!jsxFound.has(text)) jsxFound.set(text, info);
+    }
+    log(`  ${platform}：扫描 ${scanned} 个自有源文件，JSX 文本候选 ${n} 条（字面量侧候选不计入，见文件头）`);
+  }
+  return jsxFound;
+}
+
+// AI 配置：接口地址 / 密钥 / 模型 / 思考强度 / 超时 / 风格示例。缺配置即报错、不静默跳过翻译。
+function aiConfig(args, table) {
+  const base = (args.aiBase || process.env.AI_BASE_URL || '').replace(/\/+$/, '');
+  const key = args.aiKey || process.env.AI_API_KEY || '';
+  const model = args.aiModel || process.env.AI_MODEL || '';
+  if (!base || !key || !model) {
+    throw new Error(
+      '需要翻译但没有 AI 配置：请设置 AI_BASE_URL / AI_API_KEY / AI_MODEL 环境变量，或用 --no-ai 只做继承'
+    );
+  }
+  // 发请求之前先校验地址：拼错了就是几十次同样的失败，等失败回来再说就晚了
+  const baseUrl = dictAi.assertBaseUrl(base);
+  // 对外文本里要抹掉的值。除了地址本身还要抹它的 host：net.js 的报错用的是 `new URL(…).host`
+  // （「连接被拒绝……：主机:端口」「请求超时……：主机:端口」都只带主机），拿完整地址当 needle
+  // 匹配不上——实测过，两处都会漏。
+  const secrets = [base, baseUrl.host, key];
+  const effort = dictAi.resolveEffort(args.aiEffort ?? process.env.AI_REASONING_EFFORT);
+  const timeout = dictAi.resolveTimeout(args.aiTimeout || process.env.AI_TIMEOUT_SEC);
+  return { cfg: { base, key, model, effort, timeout, examples: dictAi.buildExamples(table) }, secrets };
+}
+
+// 报告骨架。字段名与语义是 CI 契约（dict-auto.yml 消费），改动结构时不能动它。
+function baseReport(version, versions, stats) {
+  return {
+    version,
+    ok: false,
+    fetchedAt: new Date().toISOString(),
+    history: versions,
+    inherited: stats.inherited,
+    variant: stats.variant,
+    dropped: stats.dropped,
+    added: stats.added,
+    untranslated: 0,
+    echoed: 0,
+  };
+}
+
+// 翻译结果落库（perPlatform）与落报告。报告字段同上，是 CI 契约。
+function recordTranslations(report, perPlatform, { done, failed, echoed }, secrets, log) {
+  for (const [item, zh] of done) {
+    for (const t of item.targets) perPlatform[t.platform].set(t.key, { zh });
+  }
+  report.translated = done.size;
+  // 译出的条目连译文一起进报告：这是人工复核 AI 译文的唯一依据（日志只打总数），
+  // 也是排查「某条译文怎么变成这样了」时唯一能回溯到的东西
+  report.translatedRows = [...done].map(([item, zh]) => ({ text: item.text, zh }));
+  report.untranslated = failed.length;
+  report.untranslatedRows = failed.map((it) => ({ text: it.text, reason: it.reason }));
+  if (failed.length) {
+    report.reasonDetail = dictAi.collapseReasons(report.untranslatedRows, secrets);
+    log(`  未译原因：${report.reasonDetail}`);
+  }
+  // 无需翻译的条目单列：它们既不算译出也不算未译，但要留痕——AI 若成片原样返回，
+  // 这里就是唯一能看出来「它是在偷懒还是在正确地放过专有名词」的地方
+  report.echoed = echoed.length;
+  report.echoedRows = echoed.map((it) => it.text);
+  log(
+    `  译出 ${done.size} 条；无需翻译 ${echoed.length} 条${echoed.length ? `（${echoed.map((it) => it.text).join('、')}）` : ''}；` +
+      `未译 ${failed.length} 条`
+  );
+}
+
+// 干跑校验（第 6 步）：两个平台各替一遍，逐平台打日志，再把失败与生效比例不达标写进报告。
+function recordChecks(report, appDirs, version, segments, indexes, log) {
+  const checks = {};
+  for (const platform of PLATFORMS) {
+    const r = dryRunPlatform(appDirs[platform], version, segments, platform, indexes[platform]);
+    checks[platform] = r;
+    if (r.ok) {
+      log(`  ${platform}：命中 ${r.hits} 处，生效条目 ${r.hit}/${r.effective}（${(r.rate * 100).toFixed(1)}%）`);
+      if (r.missed.length) log(`    索引里有、替换时未命中：${r.missed.map((k) => JSON.stringify(k)).join('、')}`);
+    } else {
+      log(`  ${platform}：${r.error}`);
+    }
+  }
+  report.checks = checks;
+  const bad = PLATFORMS.find((p) => !checks[p].ok);
+  const low = PLATFORMS.find((p) => checks[p].rate < MIN_HIT_RATE);
+  if (bad) report.reason = `${bad} 平台干跑失败：${checks[bad].error}`;
+  else if (low) report.reason = `${low} 平台生效比例 ${(checks[low].rate * 100).toFixed(1)}% 低于阈值 ${MIN_HIT_RATE * 100}%`;
+}
+
 async function buildOne(version, args, log) {
   const dictFile = common.dictFile(version);
   const mode = args.onExist || ON_EXIST;
@@ -795,39 +624,10 @@ async function buildOne(version, args, log) {
     );
   }
   log('1/7 取产物与索引');
-  const appDirs = {};
-  const indexes = {};
-  for (const platform of PLATFORMS) {
-    // 目录带 arch：同一版本两个架构并存时不会互相覆盖，也与 release-assets 的 CLI 用法一致
-    const out = path.join(workRoot, `${platform}-${args.arch}`);
-    const appDir = path.join(out, 'app');
-    if (args.reuse && TARGETS.every((f) => fs.existsSync(path.join(appDir, f)))) {
-      log(`  ${platform}：复用已提取的产物 ${appDir}`);
-    } else {
-      log(`  ${platform}：提取产物…`);
-      await releaseAssets.fetchApp(version, { platform, arch: args.arch, out, log });
-    }
-    appDirs[platform] = appDir;
-    indexes[platform] = literalIndex(appDir);
-    log(`  ${platform}：产物字面量索引 ${indexes[platform].exact.size} 条`);
-  }
+  const { appDirs, indexes } = await fetchAppIndexes(version, args, workRoot, log);
 
   log('2/7 提取官方新增文案候选');
-  const jsxFound = new Map();
-  for (const platform of PLATFORMS) {
-    const { found, scanned } = scan.collectCandidates({
-      appDir: appDirs[platform],
-      known: new Set(),
-      minLength: MIN_LENGTH,
-    });
-    let n = 0;
-    for (const [text, info] of found) {
-      if (!info.jsx) continue;
-      n++;
-      if (!jsxFound.has(text)) jsxFound.set(text, info);
-    }
-    log(`  ${platform}：扫描 ${scanned} 个自有源文件，JSX 文本候选 ${n} 条（字面量侧候选不计入，见文件头）`);
-  }
+  const jsxFound = collectJsxCandidates(appDirs, log);
 
   log('3/7 以历史字典为锚核对新产物');
   // 重跑已有版本时把自己也算作继承来源——它的译文正是最该保住的东西。排除自己的话产出会
@@ -842,18 +642,7 @@ async function buildOne(version, args, log) {
       `官方已删除 ${stats.dropped} 条；新增待译 ${pending.length} 条`
   );
 
-  const report = {
-    version,
-    ok: false,
-    fetchedAt: new Date().toISOString(),
-    history: versions,
-    inherited: stats.inherited,
-    variant: stats.variant,
-    dropped: stats.dropped,
-    added: stats.added,
-    untranslated: 0,
-    echoed: 0,
-  };
+  const report = baseReport(version, versions, stats);
 
   log('4/7 AI 翻译新增条目');
   if (pending.length) {
@@ -862,49 +651,13 @@ async function buildOne(version, args, log) {
       report.untranslated = pending.length;
       report.untranslatedRows = pending.map((it) => ({ text: it.text, reason: '--no-ai' }));
     } else {
-      const base = (args.aiBase || process.env.AI_BASE_URL || '').replace(/\/+$/, '');
-      const key = args.aiKey || process.env.AI_API_KEY || '';
-      const model = args.aiModel || process.env.AI_MODEL || '';
-      if (!base || !key || !model) {
-        throw new Error(
-          '需要翻译但没有 AI 配置：请设置 AI_BASE_URL / AI_API_KEY / AI_MODEL 环境变量，或用 --no-ai 只做继承'
-        );
-      }
-      // 发请求之前先校验地址：拼错了就是几十次同样的失败，等失败回来再说就晚了
-      const baseUrl = assertBaseUrl(base);
-      // 对外文本里要抹掉的值。除了地址本身还要抹它的 host：net.js 的报错用的是 `new URL(…).host`
-      // （「连接被拒绝……：主机:端口」「请求超时……：主机:端口」都只带主机），拿完整地址当 needle
-      // 匹配不上——实测过，两处都会漏。
-      const secrets = [base, baseUrl.host, key];
-      const effort = resolveEffort(args.aiEffort ?? process.env.AI_REASONING_EFFORT);
-      const timeout = resolveTimeout(args.aiTimeout || process.env.AI_TIMEOUT_SEC);
-      const cfg = { base, key, model, effort, timeout, examples: buildExamples(table) };
+      const { cfg, secrets } = aiConfig(args, table);
       log(
-        `  接口 ${base}，模型 ${model}，思考强度 ${effort || '（不传，用接口默认）'}` +
-          `，超时 ${timeout / 1000}s，风格示例 ${cfg.examples.length} 条`
+        `  接口 ${cfg.base}，模型 ${cfg.model}，思考强度 ${cfg.effort || '（不传，用接口默认）'}` +
+          `，超时 ${cfg.timeout / 1000}s，风格示例 ${cfg.examples.length} 条`
       );
-      const { done, failed, echoed } = await translateAll(pending, cfg, log);
-      for (const [item, zh] of done) {
-        for (const t of item.targets) perPlatform[t.platform].set(t.key, { zh });
-      }
-      report.translated = done.size;
-      // 译出的条目连译文一起进报告：这是人工复核 AI 译文的唯一依据（日志只打总数），
-      // 也是排查「某条译文怎么变成这样了」时唯一能回溯到的东西
-      report.translatedRows = [...done].map(([item, zh]) => ({ text: item.text, zh }));
-      report.untranslated = failed.length;
-      report.untranslatedRows = failed.map((it) => ({ text: it.text, reason: it.reason }));
-      if (failed.length) {
-        report.reasonDetail = collapseReasons(report.untranslatedRows, secrets);
-        log(`  未译原因：${report.reasonDetail}`);
-      }
-      // 无需翻译的条目单列：它们既不算译出也不算未译，但要留痕——AI 若成片原样返回，
-      // 这里就是唯一能看出来「它是在偷懒还是在正确地放过专有名词」的地方
-      report.echoed = echoed.length;
-      report.echoedRows = echoed.map((it) => it.text);
-      log(
-        `  译出 ${done.size} 条；无需翻译 ${echoed.length} 条${echoed.length ? `（${echoed.map((it) => it.text).join('、')}）` : ''}；` +
-          `未译 ${failed.length} 条`
-      );
+      const result = await dictAi.translateAll(pending, cfg, log);
+      recordTranslations(report, perPlatform, result, secrets, log);
     }
     // 未译比例超过上限，说明 AI 链路整体不可用而不是个别条目译不出来。
     // --no-ai 是「明说这次不译」，不适用该门槛。
@@ -929,22 +682,7 @@ async function buildOne(version, args, log) {
   );
 
   log('6/7 干跑校验');
-  const checks = {};
-  for (const platform of PLATFORMS) {
-    const r = dryRunPlatform(appDirs[platform], version, segments, platform, indexes[platform]);
-    checks[platform] = r;
-    if (r.ok) {
-      log(`  ${platform}：命中 ${r.hits} 处，生效条目 ${r.hit}/${r.effective}（${(r.rate * 100).toFixed(1)}%）`);
-      if (r.missed.length) log(`    索引里有、替换时未命中：${r.missed.map((k) => JSON.stringify(k)).join('、')}`);
-    } else {
-      log(`  ${platform}：${r.error}`);
-    }
-  }
-  report.checks = checks;
-  const bad = PLATFORMS.find((p) => !checks[p].ok);
-  const low = PLATFORMS.find((p) => checks[p].rate < MIN_HIT_RATE);
-  if (bad) report.reason = `${bad} 平台干跑失败：${checks[bad].error}`;
-  else if (low) report.reason = `${low} 平台生效比例 ${(checks[low].rate * 100).toFixed(1)}% 低于阈值 ${MIN_HIT_RATE * 100}%`;
+  recordChecks(report, appDirs, version, segments, indexes, log);
   if (report.reason && !args.dryRun) {
     report.droppedKeys = dropped.slice(0, 100);
     return report;
@@ -1065,7 +803,7 @@ async function main() {
       }
       reports.push(r);
       if (r.skipped) console.log(`跳过：${r.reason}`);
-      else if (!r.ok) console.error(`::error::${version} 产出失败：${failureText(r)}`);
+      else if (!r.ok) console.error(`::error::${version} 产出失败：${dictAi.failureText(r)}`);
     }
   } catch (e) {
     console.error(`错误：${e.message}`);
@@ -1095,7 +833,7 @@ async function main() {
         `译文变化 ${c.changedCount} / 换段 ${c.movedCount} / 组归属变化 ${c.groupsChangedCount}`
     );
   }
-  for (const r of failed) console.log(`  ${r.version}：失败——${failureText(r)}`);
+  for (const r of failed) console.log(`  ${r.version}：失败——${dictAi.failureText(r)}`);
 
   writeReport(args.report, { ok: failed.length === 0, reports });
   if (failed.length) process.exit(1);
@@ -1110,13 +848,10 @@ function writeReport(file, data) {
 }
 
 module.exports = {
-  main, buildOne, resolveVersions, inheritTable, literalIndex, resolveIn,
-  buildCandidates, toSegments, dryRunPlatform, buildExamples, rejectReason, placeholdersOf,
-  resolveTimeout, resolveEffort, isEcho, translateBatch,
-  assertBaseUrl, redact, collapseReasons, failureText,
-  diffDicts, shapeDiff, segmentIndex, groupIndex, parseArgs,
-  BATCH_SIZE, AI_EFFORT, AI_TIMEOUT, MIN_HIT_RATE, MAX_UNTRANSLATED_RATE,
+  main, resolveIn, buildCandidates, toSegments,
+  diffDicts, shapeDiff, parseArgs,
   ON_EXIST, ON_EXIST_MODES, DIFF_LIMIT,
 };
 
 if (require.main === module) main();
+

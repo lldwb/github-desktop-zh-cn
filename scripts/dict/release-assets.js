@@ -402,9 +402,11 @@ async function main() {
   }
 }
 
+// 导出面只留外部调用方：dict-auto 用 fetchApp / latestVersion，cmd/install-version 用
+// listVersions / extractLocal / assetUrl / PLATFORM_SPECS，main 是 CLI 入口（cli.js 透传）；
+// 其余符号只在本文件内部使用，不出 exports。
 module.exports = {
-  fetchApp, listEntries, listVersions, open, openArchive, extractLocal, readRange, readEntry,
-  readEocd, parseCentralDirectory, latestVersion, assetUrl, PLATFORM_SPECS, CORE_FILES, MAP_FILES, main,
+  fetchApp, listVersions, extractLocal, latestVersion, assetUrl, PLATFORM_SPECS, main,
 };
 
 if (require.main === module) main();

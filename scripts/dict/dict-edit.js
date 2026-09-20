@@ -462,7 +462,6 @@ const setGroup = (version, o, opts) => one(version, { op: 'setGroup', ...o }, op
 const moveTo = (version, o, opts) => one(version, { op: 'moveTo', ...o }, opts);
 const mergeIn = (version, o, opts) => one(version, { op: 'mergeIn', ...o }, opts);
 const regroup = (version, o, opts) => one(version, { op: 'regroup', ...o }, opts);
-const setMeta = (version, o, opts) => one(version, { op: 'setMeta', ...o }, opts);
 
 // ============================ 迁移与互通 ============================
 
@@ -704,7 +703,6 @@ module.exports = {
   moveTo,
   mergeIn,
   regroup,
-  setMeta,
   migrate,
   exportFlat,
   dictPath,
