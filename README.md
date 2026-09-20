@@ -16,15 +16,30 @@ GitHub Desktop（Electron 应用）官方未提供简体中文界面——其界
 2. `dictionaries/<版本>/zh-CN.json` 维护「原文 → 中文」映射——**formatVersion 2 五段结构**：`common` / `windows` / `macos` / `linux` 分段放条目（跨平台共有与平台专有分开），`groups` 放组名（分类参考，不影响替换）。字典与 GitHub Desktop 版本**强对应**（错配可能导致应用无法启动）；本地没有对应版本的字典时，工具会**自动从本仓库拉取**（外部字典优先、打包内嵌兜底）；
 3. 脚本工具链完成：定位安装目录 → 备份原文件 → 按字典替换 → 校验结果 → 重启应用。
 
+## 技术栈
+
+本工具的实现选型一览：
+
+| 环节 | 选型 |
+| --- | --- |
+| 运行时 | Node.js ≥ 18；**零第三方运行时依赖**——只用 Node.js 内置模块 |
+| 图形界面 | Electron（**仅构建期依赖**，不进运行时逻辑） |
+| 单文件打包 | Node SEA（Single Executable Applications，Node.js 官方的单文件可执行方案）+ postject；另有自研的零依赖单文件打包器 |
+| GUI 打包 | electron-builder |
+| 测试 | `node --test`（Node.js 内置测试运行器，无测试框架依赖） |
+| CI/CD | GitHub Actions：四平台原生 runner 矩阵构建 |
+| 网络 | 自实现的 HTTP(S) 请求与 CONNECT 代理隧道（零依赖） |
+| 翻译资产 | JSON 字典，formatVersion 2 五段结构 |
+
 ## 目录结构
 
-```
+```text
 github-desktop-zh-cn/
 ├── README.md               # 本项目
 ├── LICENSE                 # GPL-3.0
 ├── CHANGELOG.md            # 各版本变更（发版时新增条目，Release 正文取自这里）
 ├── package.json            # 脚本入口（locate / patch / restore / verify / scan / tool / build / gui / dist）
-├── AGENTS.md / CLAUDE.md   # agent 指引（唯一权威源为 AGENTS.md）
+├── AGENTS.md / CLAUDE.md   # agent 常驻指引（AGENTS.md 为唯一权威源；发版 / 已知坑 / 翻译维护等按需分册见 docs/agents/）
 ├── .claude/skills/         # 翻译维护技能（补译与纠错的流程、判定标准与探针模板）
 ├── .github/workflows/      # CI：矩阵构建各平台产物；推 tag 自动发 Release
 ├── dictionaries/           # 语言字典（核心资产）：按版本目录组织，formatVersion 2 五段结构；
@@ -81,6 +96,7 @@ github-desktop-zh-cn/
 │   └── update.test.js      # 自更新（镜像 scripts/ 顶层）
 └── docs/                   # 文档
     ├── 打包与分发.md        # 分发给普通用户：用法、构建、跨平台、常见问题
+    ├── agents/             # agent 指引分册：发版 / 已知坑 / 翻译维护（做对应工作时按需读）
     ├── design/             # 设计过程记录：gui/ 与 dict-v2/ 的方案 / 设计 / 任务清单
     └── README.md           # 文档索引
 ```
@@ -145,7 +161,7 @@ GUI 与命令行是**同一套脚本**的两种界面——定位 / 替换 / 备
 
 双击产物，出现中文菜单：
 
-```
+```text
  GitHub Desktop 汉化工具 v1.0.0
 ────────────────────────────────────────────────────────────────
  安装位置：C:\Users\<用户名>\AppData\Local\GitHubDesktop\app-3.6.6\resources\app
@@ -198,7 +214,7 @@ macOS / Linux 或自定义安装位置：选 `4) 安装位置 / 切换版本`，
 
 产物把「数据目录」定在**可执行文件所在目录**（放在 `D:\工具\` 里，数据就在 `D:\工具\`）：
 
-```
+```text
 D:\工具\
 ├── github-desktop-zh-cn-cli-v0.2.0-win32-x64.exe  # 产物本体（自带字典）
 ├── config.json                                  # 记住的安装位置（用过「安装位置 / 切换版本」才生成）
@@ -227,8 +243,6 @@ D:\工具\
 
 选 `2) 还原官方原版` 还原，然后删掉产物与数据目录即可——不写注册表、不装服务、不改系统设置。
 
-自己构建单文件产物：`npm run build`（产物在 `dist/` 下，双击即用；跨平台构建方式见 [docs/打包与分发.md](docs/打包与分发.md)）。图形界面版见上面的「方式一」。
-
 ### 方式三：源码运行（开发者）
 
 前置要求：本机已安装 Node.js 与对应版本的 GitHub Desktop（Windows 安装目录 `%LOCALAPPDATA%\GitHubDesktop`）。
@@ -248,6 +262,8 @@ npm run scan           # 自查还有哪些界面文案没翻译（输出待补�
 - `patch` 是**原地替换**：删掉或改掉字典条目后不会自动从产物里退出，必须先 `npm run restore` 再 `npm run patch` 重打；
 - 自动探测仅支持 Windows；macOS / Linux 或其他位置用 `--path <resources目录>` 显式指定（`node scripts/cmd/locate.js --path /path/to/resources`）；
 - 官方更新覆盖汉化后，用对应新版本的字典重新执行 `locate` + `patch` 即可。
+
+自己构建单文件产物：`npm run build`（产物在 `dist/` 下，双击即用；跨平台构建方式见 [docs/打包与分发.md](docs/打包与分发.md)）。图形界面版见上面的「方式一」。
 
 ## 与上游的关系与版权
 
@@ -270,7 +286,9 @@ npm run scan           # 自查还有哪些界面文案没翻译（输出待补�
 
 ## 贡献
 
-字典条目贡献与脚本改进方式见 `docs/`（贡献指南，规划中）。
+- **字典条目**：字典格式与贡献约定见 [`dictionaries/README.md`](dictionaries/README.md)；
+- **翻译维护**：补译与纠错的流程、判定标准与探针模板见 [`.claude/skills/translation-maintain/`](.claude/skills/translation-maintain/)（翻译维护技能）；
+- **脚本与工具链**：欢迎到 [GitHub 仓库](https://github.com/lldwb/github-desktop-zh-cn) 提 Issue 或 Pull Request。
 
 ## 许可证
 
