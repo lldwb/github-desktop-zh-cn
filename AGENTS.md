@@ -47,6 +47,13 @@ node tools/ops/wf-lint.cjs [workflow]        # workflow 体检（run 块 bash -n
 node tools/ops/check-naming.cjs              # pickAsset 只挑 cli 产物（回归）
 ```
 
+界面图生成器（`tools/make-gui-fig.cjs`，等宽图按**显示宽度**对齐、幂等；改 `docs/design/gui/design.md` 里的模态窗口示意走它，别手写空格）：
+
+```bash
+node tools/make-gui-fig.cjs               # 刷新 docs/design/gui/design.md 的界面示意
+node tools/make-gui-fig.cjs --dry-run     # 只打印将写入的块，不落盘
+```
+
 各脚本支持 `--help`；`patch`/`verify` 支持 `--version <版本>` 指定字典版本、`--path <resources目录>` 显式指定安装目录（跨平台 / 自动探测失败时用）。脚本改动后至少跑一次 `node --check` 与 `--dry-run` 做验证。
 
 ## 架构
