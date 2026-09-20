@@ -8,9 +8,9 @@
 
 | 脚本 | 职责 | 状态 |
 |------|------|------|
-| `common.js` | 共享逻辑 **SSOT**：安装目录定位、版本读取、字典读取、备份与还原、字符串匹配器与逆向还原、数据根目录判定（`dataRoot()`）、补丁组记账（`setPatchGroups()` / `getPatchGroups()`，组名常量表 `PATCH_GROUPS`）。脚本取路径只走它，别自行拼 `__dirname` | 已实现 |
+| `common.js` | 共享逻辑 **SSOT**：安装目录定位与已安装版本枚举（`locateApp()` / `listInstalledVersions()` / `setTargetVersion()`）、版本读取、字典读取、备份与还原、字符串匹配器与逆向还原、数据根目录判定（`dataRoot()`）、补丁组记账（`setPatchGroups()` / `getPatchGroups()`，组名常量表 `PATCH_GROUPS`）、项目地址（`repoUrls()`）。脚本取路径只走它，别自行拼 `__dirname` | 已实现 |
 | `net.js` | 零依赖 HTTP(S) GET（文本 / JSON / 二进制）：超时、重定向、进度回调；非 2xx 抛可读错误 | 已实现 |
-| `cli.js` | 交互式中文菜单入口（SEA 产物的双击形态）：无参数进菜单（汉化 / 还原 / 详细信息 / 指定安装位置 / 检查更新），带子命令时透传给对应脚本 | 已实现 |
+| `cli.js` | 交互式中文菜单入口（SEA 产物的双击形态）：无参数进菜单（汉化 / 还原 / 详细信息 / 安装位置与切换版本 / 检查更新 / 更新管控 / 同步字典 / 关于），带子命令时透传给对应脚本 | 已实现 |
 | `update.js` | 工具自更新：查 latest release → 按平台 / 架构选资产 → 下载 → 校验文件头与 `SHA256SUMS` → 改名替换自身 → 重启；启动时清理 `.old` 残留 | 已实现 |
 
 ### `scripts/cmd/`（面向 GitHub Desktop 安装目录的操作）
@@ -31,7 +31,8 @@
 | `dict-edit.js` | 字典的**唯一写入口**——增删改、分组、迁移一律走它，子命令 `read` / `validate` / `query` / `apply` / `add` / `update` / `remove` / `set-group` / `move` / `merge` / `regroup` / `export-flat` / `migrate`；写入是事务式的（读原文 → 内存变更 → 校验 → 写 `.tmp` → 读回重校验 → 原子替换 → 写后复核），任一步失败原文件从未被改动 | 已实现 |
 | `dict-groups.js` | 组名自动推断：读安装目录里官方产物自带 sourcemap 的 `app/src/**` sourcesContent 定位每段原文的出处，按三级规则定组（主菜单构建文件 → 「菜单-<父菜单>」；其余按源文件目录查 `DIR_GROUPS`；都落不上 → 「待分组」），产出写进字典 `groups` 段，写入经 `dict-edit` 事务入口 | 已实现 |
 | `dict-auto.js` | 按官方新版本产物自动产出字典——以历史字典键为锚核对每条键在新产物里的形态（继承）→ 官方新增的界面文案走 AI 翻译（OpenAI 兼容协议）→ `dict-edit` 事务写入 → 组名推断 → 干跑校验（替换 + 语法 + 生效比例）→ 出报告；CI 定时任务与人肉回填共用同一条链路 | 已实现 |
-| `dict-sync.js` | 字典在线同步：`ensureDict()` 本地（外部 + 内嵌）都没有才下载；`syncLatest()` 强制拉最新并覆盖（菜单第 5 项用） | 已实现 |
+| `dict-prompt.js` | 发给翻译模型的系统提示词（`SYSTEM_PROMPT`）——**唯一来源**：`dict-auto.js` 调模型用它，GUI 的「翻译提示词」标签页经 IPC 原样展示同一份（展示的必须是实际生效的那段） | 已实现 |
+| `dict-sync.js` | 字典在线同步：`ensureDict()` 本地（外部 + 内嵌）都没有才下载；`syncLatest()` 强制拉最新并覆盖（菜单 `7) 同步字典` / GUI「关于」里的「同步字典」用） | 已实现 |
 | `release-assets.js` | 从官方 Release 产物里按需取文件（HTTP Range 分段取 zip 中央目录与目标条目，`node:zlib` 解压，单个 zip 250~330 MB 不下载整包），产出与真实安装目录同形（`<out>/app/…`），`scan` / `verify` / `dict-groups` 可 `--path <out>` 直接跑；CLI：`list` / `fetch` / `latest` | 已实现 |
 
 ### `scripts/inject/`（注入块：改逻辑不改文案）
@@ -62,7 +63,7 @@ node tools/build.js          [--out <目录>] [--name <文件名>]   # 打包单
 node tools/bundle.js         [--out <文件>]                    # 只生成单文件 JS（调试打包器用）
 ```
 
-`net.js` / `dict-sync.js` / `update.js` / `restart.js` 是内部模块（无独立 CLI）：`patch` / `restore` 用前两者取字典与收尾重启，`cli.js` 的菜单第 5 项调 `dict-sync` 与 `update`。
+`net.js` / `dict-sync.js` / `update.js` / `restart.js` 是内部模块（无独立 CLI）：`patch` / `restore` 用前两者取字典与收尾重启，`cli.js` 的菜单 `7) 同步字典` 调 `dict-sync`、`5) 检查更新` 调 `update`。
 
 ## 实现要点
 
@@ -76,7 +77,7 @@ node tools/bundle.js         [--out <文件>]                    # 只生成单�
 - **幂等**：对已汉化文件重复 `patch` 不会重复替换（英文原文已不存在），0 命中条目不告警。
 - **安全边界**：写回前自动备份原文件到 `tmp/backup/<版本>/`，恢复官方版用 `restore.js`（`npm run restore`）；补丁后必须 `verify`（JS 语法校验 + 残留英文清单）。
 - **没有备份时的还原（逆向还原）**：`common.reverseEntries()` 把字典翻成「译文 → 原文」再走同一套替换逻辑。三条判据：逆向键**就是译文原样**（产物里该区间的 `content` 恰等于译文本体，整模板条目含两侧反引号）；模板**整段区间**一律收集（否则含反引号的原文塞回文本段会提前闭合反引号、还原后语法错误）；译文必须**有辨识度**（`common.isReversible()`——含字母数字，或含非 ASCII 且不属于 `SHARED_PUNCT`，即英文排版同样会用的弯引号 / 破折号 / 省略号等），否则当键逆替换会误伤原版同名文本（实测 `"that " → " "` 让原版所有空格字面量变成 `"that "`）。同一译文对应多个原文时按「作用域键优先 → 更短原文优先 → 字典书写顺序」取候选，保证往返不漂移。
-- **在线能力**：远程地址只有 `common.js` 的 `GH_*` 一处定义（raw 主源 + jsDelivr 兜底）；字典**只在本地（外部 + 内嵌）都没有时**才下载，用户主动「检查更新」才强制覆盖——已有字典时完全离线可用。下载内容先校验再落盘（字典 `JSON.parse`、产物校验文件头 MZ / Mach-O / ELF 并比对 Release 里 `SHA256SUMS` 的 sha256），字典写 `.part` 再改名。**取资产的下载地址一律用 `browser_download_url`**——GitHub 的 `url` 是 API 端点，不带 `Accept: application/octet-stream` 只回元数据 JSON（见 `update.js` 的 `downloadUrl()`）。
+- **在线能力**：远程地址只有 `common.js` 的 `GH_*` 一处定义（raw 主源 + jsDelivr 兜底）；字典**只在本地（外部 + 内嵌）都没有时**才下载，用户主动「同步字典」才强制覆盖——已有字典时完全离线可用。下载内容先校验再落盘（字典 `JSON.parse`、产物校验文件头 MZ / Mach-O / ELF 并比对 Release 里 `SHA256SUMS` 的 sha256），字典写 `.part` 再改名。**取资产的下载地址一律用 `browser_download_url`**——GitHub 的 `url` 是 API 端点，不带 `Accept: application/octet-stream` 只回元数据 JSON（见 `update.js` 的 `downloadUrl()`）。
 - **自更新替换策略**：Windows 不允许删除或覆盖**正在运行**的可执行文件，但允许改名——自身改名 `.old`、新文件改名到原位，任一步失败把旧文件改回来；新进程启动时 `update.cleanup()` 清残留。源码态不支持自更新（提示用 `git pull`）。
 - **重启收尾**：汉化 / 还原后由 `restart.js` 重启 GitHub Desktop——界面文本在应用启动时载入内存，不重启看不到效果；原本未运行时只提示，不替用户多开窗口。
 - **原地追加式——删改条目必须重打**：`patch` 只替换命中的字面量，**不会**把已删条目的旧译文从产物里退出。字典条目被删除或修改后，必须 `npm run restore` 还原官方原版、再 `npm run patch` 重打，否则产物里残留的失效译文会继续生效（曾出现：HTTP 头名 `Link` 被译成中文后，请求头校验抛 `non ISO-8859-1 code point`，Issues / PR 拉取全挂）。
