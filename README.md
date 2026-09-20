@@ -66,6 +66,7 @@ github-desktop-zh-cn/
 │   │   ├── dict-edit.js    # 字典的唯一写入口（增删改 / 分组 / 迁移，先校验再原子替换）
 │   │   ├── dict-groups.js  # 组名自动推断（按条目在 sourcemap 里的出处）
 │   │   ├── dict-auto.js    # 按官方新版本产物自动产出字典（AI 翻译 + 干跑校验）
+│   │   ├── dict-ai.js      # AI 协议适配层（批处理 / 重试 / 校验与归因，只由 dict-auto 引入）
 │   │   ├── dict-prompt.js  # 发给翻译模型的系统提示词（唯一来源，GUI 的「翻译提示词」标签页展示它）
 │   │   ├── dict-sync.js    # 字典在线同步（缺失时下载、强制更新最新）
 │   │   └── release-assets.js  # 官方产物按需提取（HTTP Range，不下载整包）
@@ -73,7 +74,12 @@ github-desktop-zh-cn/
 │       ├── context-menu.js    # 右键菜单汉化（按 role 重打标签，随 patch 生效）
 │       └── update-control.js  # 更新管控（禁止自动更新 / 没有字典就拦截）
 ├── gui/                    # 图形界面（Electron 原生窗口；业务逻辑仍来自 scripts/，无第二份实现）
-│   ├── main.js             # 主进程：窗口 + IPC（直接 require ../scripts 的模块）
+│   ├── main.js             # 主进程：窗口生命周期 + IPC 注册清单与公共骨架
+│   ├── ipc/                # IPC 处理器按域分组（各自 require ../../scripts 调业务）
+│   │   ├── patching.js     # 汉化还原组（patch / restore / syncDict）
+│   │   ├── versions.js     # 版本切换组（setVersion / downloadable / installVersion）
+│   │   ├── updates.js      # 更新组（updateControl / 工具更新 / 界面更新）
+│   │   └── misc.js         # 杂项组（state / dictEntries / prompt / pickPath / openUrl）
 │   ├── preload.js          # contextBridge 暴露 window.api（渲染进程无 Node 能力）
 │   ├── index.html          # 界面结构
 │   ├── renderer.js         # 渲染逻辑：状态 / 两个标签页 / 只读字典表格 / 搜索 / 版本切换 / 关于
@@ -86,7 +92,7 @@ github-desktop-zh-cn/
 │   ├── bundle.js           # 零依赖 CJS 单文件打包器
 │   ├── changelog.js        # 从 CHANGELOG.md 提取指定版本段落（发版用）
 │   ├── check-gui-dist.js   # GUI 产物静态自检（包结构 / 内置字典 / Windows 子系统），CI 与本地共用
-│   └── ops/                # CI / Release 运维探针（匿名只读、参数化、自包含）
+│   └── ops/                # CI / Release 运维探针（匿名只读、参数化、自包含；lib.js 为本目录唯一联网处）
 ├── .npmrc                  # 构建期镜像（Electron 与 electron-builder 二进制走 npmmirror）
 ├── test/                   # 单元测试（npm test）：目录镜像 scripts/
 │   ├── common/             # 匹配引擎与逆向还原
