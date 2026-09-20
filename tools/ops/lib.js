@@ -11,11 +11,13 @@
 //   getJson(path) → 解析后的值；解析失败按 `HTTP <状态码>：<正文前 200 字符>` 抛错。
 'use strict';
 
+const common = require('../../scripts/common.js');
 const net = require('../../scripts/net.js');
 
-// GitHub API 主机：本目录只此一处。仓库前缀（/repos/<owner>/<repo>）仍由各探针用
-// `scripts/common.js` 的 GH_OWNER / GH_REPO 拼。
-const API = 'https://api.github.com';
+// GitHub API 主机取自 common.js 的 GH_API_ORIGIN（远程地址只有一处定义，见 AGENTS.md
+// 「在线能力」）。仓库前缀（/repos/<owner>/<repo>）仍由各探针用 common 的
+// GH_OWNER / GH_REPO 拼。
+const API = common.GH_API_ORIGIN;
 
 async function get(path) {
   const { status, headers, buffer } = await net.getRaw(`${API}${path}`, {

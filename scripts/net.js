@@ -201,19 +201,6 @@ function markProxyBroken(proxy, e) {
   }
 }
 
-// 本次运行是否回退过直连（供上层提示：下载慢可能就是这个原因）
-function proxyFallbackReason() {
-  return _proxyBroken;
-}
-
-// 当前生效的代理；供探针与错误提示用
-function getProxy() {
-  if (!_proxyResolved) {
-    _proxy = detectProxy();
-    _proxyResolved = true;
-  }
-  return _proxy;
-}
 
 // 发一次请求并拿到响应对象（不含重定向跟随与状态码判定——那些在 openStream 里收口）。
 // 单独抽出来是为了让「代理失败 → 摘掉 agent → 直连重试」这条回退路径能复用同一份参数。

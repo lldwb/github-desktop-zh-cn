@@ -135,6 +135,10 @@ const checkAsarContents = (asar) => {
   }
   const need = [
     'gui/main.js',
+    'gui/ipc/patching.js',
+    'gui/ipc/versions.js',
+    'gui/ipc/updates.js',
+    'gui/ipc/misc.js',
     'gui/preload.js',
     'gui/index.html',
     'gui/renderer.js',

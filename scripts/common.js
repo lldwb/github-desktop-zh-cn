@@ -32,7 +32,8 @@ const GH_REPO = 'github-desktop-zh-cn';
 const GH_BRANCH = 'main';
 const GH_RAW = `https://raw.githubusercontent.com/${GH_OWNER}/${GH_REPO}/${GH_BRANCH}`;
 const GH_CDN = `https://cdn.jsdelivr.net/gh/${GH_OWNER}/${GH_REPO}@${GH_BRANCH}`;
-const GH_API = `https://api.github.com/repos/${GH_OWNER}/${GH_REPO}`;
+const GH_API_ORIGIN = 'https://api.github.com';
+const GH_API = `${GH_API_ORIGIN}/repos/${GH_OWNER}/${GH_REPO}`;
 // Gitee 镜像：仓库由镜像自动同步（commit / 分支 / tag 同步，**发行版不同步**），raw 文件可直连。
 // 放在末位兜底——它不是权威源，内容与 main 分支一致时才有同等效力。
 const GITEE_RAW = `https://gitee.com/${GH_OWNER}/${GH_REPO}/raw/${GH_BRANCH}`;
@@ -930,6 +931,7 @@ module.exports = {
   templateValueProblem,
   checkEntry,
   GH_API,
+  GH_API_ORIGIN,
   GH_OWNER,
   GH_REPO,
   GH_RAW,
