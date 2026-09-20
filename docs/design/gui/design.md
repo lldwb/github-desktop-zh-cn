@@ -28,7 +28,7 @@
 
 对应关系（等价于直接设这两个环境变量）：
 
-```
+```bash
 ELECTRON_MIRROR=https://registry.npmmirror.com/-/binary/electron/
 ELECTRON_BUILDER_BINARIES_MIRROR=https://registry.npmmirror.com/-/binary/electron-builder-binaries/
 ```
@@ -82,7 +82,7 @@ Electron 里 `process.execPath` 是**应用可执行文件**（改名后的 exe�
 
 **打包后的目录布局**（Windows 实例，NSIS 单用户安装 → `%LOCALAPPDATA%\Programs\<productName>\`，**可写**）：
 
-```
+```text
 %LOCALAPPDATA%\Programs\<productName>\
   <name>.exe                        ← 应用 exe（Electron 里 process.execPath 即此）
   resources/app.asar                ← 应用代码（gui/ + scripts/）
@@ -99,7 +99,7 @@ Electron 里 `process.execPath` 是**应用可执行文件**（改名后的 exe�
 
 ### 进程结构（关键决策点 2）
 
-```
+```text
 ┌─ 渲染进程（gui/index.html + renderer.js）─┐
 │  纯界面：DOM 渲染、按钮、搜索框、状态显示   │
 │  只能通过 window.api.* 与主进程通信        │
@@ -145,7 +145,7 @@ Electron 里 `process.execPath` 是**应用可执行文件**（改名后的 exe�
 
 ### 界面（复刻截图，去掉编辑与平台下拉）
 
-```
+```text
 ┌───────────────────────────────────────────────────────────────┐
 │ GitHub Desktop - 汉化工具                              — □ ×  │ ← 原生标题栏
 ├───────────────────────────────────────────────────────────────┤

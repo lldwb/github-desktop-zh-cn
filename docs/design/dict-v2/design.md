@@ -59,7 +59,7 @@
 
 **事务模型**（这是"校验失败即回滚"的实现）：
 
-```
+```text
 读原文 → 内存中变更 → validate(内存) → 序列化 → 写 <file>.tmp
    → 读回 .tmp 重新 parse + validate → renameSync(.tmp, file) → 写后读回复核
 ```
@@ -177,7 +177,7 @@ macOS 平台段的来源是**官方 macOS 产物**（`GitHub.Desktop-x64.zip` / 
 
 注入点在 main 进程的更新链路，实测产物中的锚点：
 
-```
+```js
 async checkForUpdates(e){try{r.autoUpdater.setFeedURL({url:await me(e)}),r.autoUpdater.checkForUpdates()}catch(e){return e}}
 quitAndInstallUpdate(){r.autoUpdater.quitAndInstall()}
 ```
