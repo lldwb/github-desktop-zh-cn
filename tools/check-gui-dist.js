@@ -137,6 +137,7 @@ const checkAsarContents = (asar) => {
     'gui/renderer.js',
     'gui/style.css',
     'scripts/common.js',
+    'scripts/net.js',
     'scripts/cmd/patch.js',
     'scripts/cmd/restore.js',
     'scripts/dict/dict-sync.js',
