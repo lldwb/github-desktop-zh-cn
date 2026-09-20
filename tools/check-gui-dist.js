@@ -10,6 +10,9 @@
 
 const fs = require('fs');
 const path = require('path');
+// 项目名取包名，与 tools/build.js 拼 cli 产物名（`${PKG.name}-cli-v…`）同口径；
+// 产物名里的项目名不在这里另写一份字面量
+const PKG = require('../package.json');
 
 const OUT = path.join(__dirname, '..', 'dist', 'gui');
 const PE_SIGNATURE = Buffer.from('PE');
@@ -237,8 +240,8 @@ function checkArtifacts() {
       console.log(`  ·  ${line}`);
     }
   }
-  const offName = files.filter((f) => !/^github-desktop-zh-cn-gui-v\d+\.\d+\.\d+-/.test(f));
-  if (offName.length) bad(`产物名不符合命名规范（应为 github-desktop-zh-cn-gui-v<版本>-…）：${offName.join(' / ')}`);
+  const offName = files.filter((f) => !new RegExp(`^${PKG.name}-gui-v\\d+\\.\\d+\\.\\d+-`).test(f));
+  if (offName.length) bad(`产物名不符合命名规范（应为 ${PKG.name}-gui-v<版本>-…）：${offName.join(' / ')}`);
   else ok('产物名符合 gui 通道命名规范');
 }
 
