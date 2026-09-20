@@ -245,4 +245,6 @@ function cleanup() {
   }
 }
 
-module.exports = { check, apply, cleanup, pickAsset, pickGuiAsset, pickSums, parseSums, verifySha256 };
+module.exports = {
+  check, apply, cleanup, pickAsset, pickGuiAsset, pickSums, parseSums, verifySha256, sha256File,
+};

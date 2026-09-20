@@ -21,6 +21,8 @@ const els = {
   switchClose: document.getElementById('btn-switch-close'),
   versionList: document.getElementById('version-list'),
   versionEmpty: document.getElementById('version-empty'),
+  downloadList: document.getElementById('download-list'),
+  downloadEmpty: document.getElementById('download-empty'),
   aboutModal: document.getElementById('about'),
   aboutClose: document.getElementById('btn-about-close'),
   aboutVersion: document.getElementById('about-version'),
@@ -53,6 +55,7 @@ let emptyHint = ''; // 字典读不到时的原因，显示在表格空态里
 let pending = false; // 有操作在跑：按钮全部禁用，避免并发改同一份文件
 let toastTimer = null;
 let promptLoaded = false; // 提示词是静态内容，读一次就够
+let downloadableRows = null; // 官方可下载版本（null = 还没取过；取一次后在会话内复用）
 
 // —— 界面状态 ——
 function setPhase(text) {
@@ -318,6 +321,18 @@ async function doSetVersion(version) {
   });
 }
 
+// 下载并安装一个本机没有的版本（确认框在主进程弹，写明体积与后果），装完主进程会切过去
+async function doInstallVersion(version) {
+  if (!version) return;
+  await withPending('正在下载安装', async () => {
+    const r = await window.api.installVersion(version);
+    if (!r.ok) return r.canceled ? undefined : showError(r);
+    downloadableRows = null; // 装完了：这一版该进「本机已安装」那组，下次打开重取
+    closeSwitch();
+    showToast(notesWithRestart(r), !!r.hasError);
+  });
+}
+
 // 模式选择在主进程的对话框里做（渲染进程拿不到参数），这里只负责发起与展示结果
 async function doUpdateControl() {
   await withPending('正在设置更新管控', async () => {
@@ -344,6 +359,69 @@ async function doSyncDict() {
   });
 }
 
+// 官方可下载的版本：只在第一次打开窗口时联网取，之后复用（会话内它不会变）。
+// force 用于「装完一个再打开」——那时列表该少一项、本机已安装那组该多一项。
+async function loadDownloadable(force) {
+  if (downloadableRows && !force) return;
+  els.downloadEmpty.hidden = false;
+  els.downloadEmpty.textContent = '正在取官方版本列表…';
+  els.downloadList.replaceChildren();
+  try {
+    const r = await window.api.downloadable();
+    if (!r.ok) {
+      els.downloadEmpty.textContent = `取不到官方版本列表：${r.error}`;
+      return;
+    }
+    downloadableRows = { versions: r.versions || [], installable: r.installable };
+    renderDownloadable();
+  } catch (e) {
+    els.downloadEmpty.textContent = `取不到官方版本列表：${e.message || e}`;
+  }
+}
+
+// 渲染可下载列表：与「本机已安装」共用同一种行样式（version-item），只是标签换成体积。
+function renderDownloadable() {
+  if (!downloadableRows) return;
+  const { versions, installable } = downloadableRows;
+  const list = versions.filter((v) => v.hasDict || els.versionAll.checked);
+
+  const items = list.map((v) => {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'version-item';
+    btn.dataset.install = v.version;
+    btn.disabled = !installable; // 非 Windows 平台：列出来但不给点（点下载也没有本平台产物）
+
+    const line = document.createElement('div');
+    line.className = 'version-line';
+    const name = document.createElement('span');
+    name.className = 'version-name';
+    name.textContent = v.version;
+    line.appendChild(name);
+    for (const text of [
+      `${(v.size / 1048576).toFixed(0)} MB`,
+      v.hasDict ? null : '无字典',
+      installable ? null : '本平台暂不支持',
+    ]) {
+      if (!text) continue;
+      const tag = document.createElement('span');
+      tag.className = 'tag';
+      tag.textContent = text;
+      line.appendChild(tag);
+    }
+    btn.appendChild(line);
+    return btn;
+  });
+
+  els.downloadList.replaceChildren(...items);
+  els.downloadEmpty.hidden = !!list.length;
+  if (!list.length) {
+    els.downloadEmpty.textContent = installable
+      ? '没有可下载的版本——官方有产物的版本本机都装了。'
+      : '在线安装目前只支持 Windows，请到 GitHub Releases 手动下载。';
+  }
+}
+
 // —— 两个模态窗口：关于 / 切换版本 ——
 function openAbout() {
   els.aboutModal.hidden = false;
@@ -353,8 +431,9 @@ function closeAbout() {
   els.aboutModal.hidden = true;
 }
 
-function openSwitch() {
+async function openSwitch() {
   els.switchModal.hidden = false;
+  await loadDownloadable();
 }
 
 function closeSwitch() {
@@ -369,6 +448,7 @@ els.updateControl.addEventListener('click', doUpdateControl);
 els.refresh.addEventListener('click', () => withPending('正在刷新', async () => {}));
 // 勾「显示没汉化的版本」只改列表范围：重新渲染一次，不动目标版本
 els.versionAll.addEventListener('change', async () => {
+  renderDownloadable(); // 纯过滤，用已经取回来的数据，不再联网
   try {
     renderVersions(await window.api.state());
   } catch (e) {
@@ -379,6 +459,11 @@ els.versionAll.addEventListener('change', async () => {
 els.versionList.addEventListener('click', (ev) => {
   const item = ev.target.closest('.version-item');
   if (item && !item.disabled) doSetVersion(item.dataset.version);
+});
+// 可下载项同理：点一下 → 主进程弹确认框 → 下载安装 → 装完切过去
+els.downloadList.addEventListener('click', (ev) => {
+  const item = ev.target.closest('.version-item');
+  if (item && !item.disabled) doInstallVersion(item.dataset.install);
 });
 
 for (const t of els.tabs) t.addEventListener('click', () => showTab(t.dataset.panel));

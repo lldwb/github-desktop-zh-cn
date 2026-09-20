@@ -18,6 +18,10 @@ contextBridge.exposeInMainWorld('api', {
   // 切换要处理的 GitHub Desktop 版本：唯一入参是一个版本号字符串，
   // 主进程会拿它去**本机已安装列表**里反查路径，渲染进程给不了任意目录。
   setVersion: (version) => ipcRenderer.invoke('setVersion', version),
+  // 可下载的版本（官方 Release）与「下载并安装」：同样只收版本号字符串；
+  // 目标是官方安装根下的 app-<版本>，由主进程算，渲染进程给不了任何路径。
+  downloadable: () => ipcRenderer.invoke('downloadable'),
+  installVersion: (version) => ipcRenderer.invoke('installVersion', version),
   // 更新管控：模式选择也在主进程的对话框里做，这里同样只暴露「动作」不带参数
   updateControl: () => ipcRenderer.invoke('updateControl'),
   // 工具自更新：确认框与下载都在主进程做，渲染进程只发起

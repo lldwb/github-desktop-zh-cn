@@ -24,6 +24,7 @@ const RUNNERS = {
   dict: () => require('./dict/dict-edit.js'),
   groups: () => require('./dict/dict-groups.js'),
   auto: () => require('./dict/dict-auto.js'),
+  install: () => require('./cmd/install-version.js'),
 };
 
 const SUBCOMMANDS = Object.keys(RUNNERS);
@@ -44,6 +45,7 @@ function printHelp() {
   dict      字典维护与校验（字典的唯一写入口，改字典一律走它）
   groups    推断字典组名（读安装目录 sourcemap，产出 groups 段）
   auto      按官方产物自动产出字典（CI 定时任务用；本地跑需联网取产物）
+  install   下载并安装指定版本的 GitHub Desktop（Windows；--list 看有哪些可下）
 
 dict 子命令（完整用法见 github-desktop-zh-cn dict -h）：
   dict validate <版本>           一致性校验，有 error 即以非零码退出
@@ -332,8 +334,65 @@ async function showAbout(rl, state) {
   if (c === 'y' || c === 'yes' || c === '是') await doUpdate(rl);
 }
 
+// 下载并安装一个本机没有的版本，装完切过去。列表只在用户明确选 d 时才联网取——
+// 进菜单 4) 这个动作本身不该等一次网络往返。
+async function downloadAndSwitch(rl) {
+  const mod = require('./cmd/install-version.js');
+  console.log('');
+  console.log(' 正在取官方版本列表…');
+  let rows;
+  try {
+    const r = await mod.listDownloadable();
+    rows = r.versions.filter((v) => v.hasDict && !v.installed);
+  } catch (e) {
+    console.log(` 取列表失败：${e.message}`);
+    return resolveTarget();
+  }
+  if (!rows.length) {
+    console.log(' 没有可下载的版本：官方有产物的版本本机都装了，或都不在本工具有字典的范围内。');
+    return resolveTarget();
+  }
+
+  console.log(' 可下载的版本（有汉化字典、本机未装）：');
+  rows.forEach((v, i) => {
+    console.log(`  ${i + 1}) ${v.version}  ${(v.size / 1048576).toFixed(1)} MB`);
+  });
+  console.log('  0) 返回');
+  const idx = Number(await ask(rl, ' 请选择：'));
+  if (!(idx >= 1 && idx <= rows.length)) return resolveTarget();
+  const pick = rows[idx - 1];
+
+  const mb = `${(pick.size / 1048576).toFixed(1)} MB`;
+  if (!(await confirm(rl, `\n 下载并安装 GitHub Desktop ${pick.version}（${mb}）？[Y/n] `))) {
+    console.log(' 已取消。');
+    return resolveTarget();
+  }
+
+  let lastPct = -1;
+  try {
+    const r = await mod.install(pick.version, {
+      log: (m) => console.log(` ${m}`),
+      onProgress: (got, total) => {
+        const pct = total ? Math.floor((got / total) * 100) : 0;
+        if (pct >= lastPct + 5 || pct === 100) {
+          lastPct = pct;
+          process.stdout.write(`\r  ${String(pct).padStart(3)}%`);
+        }
+      },
+    });
+    console.log(`\n\n 已安装 ${r.version}：${r.appDir}`);
+    setTargetVersion(r.version);
+    console.log(' 已切到该版本——回到菜单选 1) 汉化即可。');
+  } catch (e) {
+    console.log(`\n 安装失败：${e.message}`);
+    if (e.hint) console.log(` ${e.hint}`);
+  }
+  return resolveTarget();
+}
+
 // 安装位置 / 切换版本：本机装了多个 GitHub Desktop 时（官方升级后旧目录会留着）先列出来让用户挑，
-// 默认只列有汉化字典的版本；也可以照旧手动粘一个目录。两条路写的是同一个配置字段，等价。
+// 默认只列有汉化字典的版本；本机没有的版本可以下载安装（d）；也可以照旧手动粘一个目录。
+// 三条路写的都是同一个配置字段，等价。
 async function setPath(rl) {
   const installed = listInstalledVersions();
   const versions = listDictVersions();
@@ -348,32 +407,39 @@ async function setPath(rl) {
       const tag = versions.includes(x.version) ? '' : '（无字典）';
       console.log(`  ${i + 1}) ${x.version}${tag}  ${x.resourcesDir}`);
     });
-    console.log('  0) 手动输入路径');
-    const c = await ask(rl, ' 请选择：');
-    const idx = Number(c);
-    if (idx >= 1 && idx <= list.length) {
-      const hit = list[idx - 1];
-      setTargetVersion(hit.version);
-      console.log(`\n 已切换到 GitHub Desktop ${hit.version}（${hit.resourcesDir}）`);
-      // 与 GUI 的版本下拉同一套：版本是使用者自己挑的，默认把它钉住、别被官方更新悄悄换走
-      if (!getPatchGroups(hit.version).includes('updateControl')
-        && (await confirm(rl, ' 同时禁止该版本自动更新（会重启 GitHub Desktop）？[Y/n] '))) {
-        try {
-          const r = await require('./cmd/patch.js').run({
-            explicitPath: hit.resourcesDir, version: hit.version, quiet: true, updateControl: 'off',
-          });
-          console.log(` 已禁止该版本自动更新。${restartLine(r.restarted)}`);
-        } catch (e) {
-          console.log(` 禁止自动更新失败：${e.message}`);
-          if (e.hint) console.log(` ${e.hint}`);
-        }
+  } else if (installed.length === 1) {
+    console.log(` 本机已安装：${installed[0].version}（${installed[0].resourcesDir}）`);
+  } else {
+    console.log(' 本机没有检测到 GitHub Desktop。');
+  }
+  console.log('  0) 手动输入路径');
+  console.log('  d) 下载并安装其他版本（官方 Release）');
+
+  const c = (await ask(rl, ' 请选择：')).toLowerCase();
+  if (c === 'd') return await downloadAndSwitch(rl);
+  const idx = Number(c);
+  if (installed.length > 1 && idx >= 1 && idx <= list.length) {
+    const hit = list[idx - 1];
+    setTargetVersion(hit.version);
+    console.log(`\n 已切换到 GitHub Desktop ${hit.version}（${hit.resourcesDir}）`);
+    // 与 GUI 的「切换版本」同一套：版本是使用者自己挑的，默认把它钉住、别被官方更新悄悄换走
+    if (!getPatchGroups(hit.version).includes('updateControl')
+      && (await confirm(rl, ' 同时禁止该版本自动更新（会重启 GitHub Desktop）？[Y/n] '))) {
+      try {
+        const r = await require('./cmd/patch.js').run({
+          explicitPath: hit.resourcesDir, version: hit.version, quiet: true, updateControl: 'off',
+        });
+        console.log(` 已禁止该版本自动更新。${restartLine(r.restarted)}`);
+      } catch (e) {
+        console.log(` 禁止自动更新失败：${e.message}`);
+        if (e.hint) console.log(` ${e.hint}`);
       }
-      return resolveTarget();
     }
-    if (c !== '0' && c !== '') {
-      console.log(' 输入无效，未改动。');
-      return resolveTarget();
-    }
+    return resolveTarget();
+  }
+  if (c !== '0' && c !== '') {
+    console.log(' 输入无效，未改动。');
+    return resolveTarget();
   }
 
   console.log(' 请粘贴 GitHub Desktop 的 resources 目录路径（也可把文件夹拖进本窗口）：');

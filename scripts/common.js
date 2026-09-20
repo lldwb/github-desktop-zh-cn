@@ -167,6 +167,20 @@ function candidateRoots() {
   return roots;
 }
 
+// 应用安装根目录：`app-<版本>` 目录的上一级。取第一个**已存在**的候选，都不存在时返回第一个
+// （首次安装的场景）。Windows 上是 `%LOCALAPPDATA%\GitHubDesktop`，也正是官方安装器放置
+// `app-<版本>` / `packages` / `Update.exe` 的那一层——「下载并安装某个版本」写到这里，
+// 与官方装的版本并存、被同一个 locateApp 认出来。
+// 注意 macOS 的候选根是 `.app/Contents/Resources`（不是 app-<版本> 的上一级），故该函数目前
+// 只对 Windows 有「安装根」语义——在线安装也只支持 Windows（见 cmd/install-version.js）。
+function appRootDir() {
+  const roots = candidateRoots();
+  for (const root of roots) {
+    if (fs.existsSync(root)) return root;
+  }
+  return roots[0];
+}
+
 // 本机已安装的 GitHub Desktop，按版本**升序**返回 [{ version, resourcesDir, appDir }]。
 // 这是安装目录枚举的 SSOT——locateApp 取最新那个，GUI 的版本切换列出全部，两边不各写一份。
 //   Windows：<LOCALAPPDATA>/GitHubDesktop/app-<版本>/resources；官方升级后旧版本目录会留着，
@@ -825,6 +839,7 @@ module.exports = {
   writeConfig,
   locateApp,
   listInstalledVersions,
+  appRootDir,
   setTargetVersion,
   repoUrls,
   readVersion,

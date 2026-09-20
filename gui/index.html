@@ -103,11 +103,15 @@
         <h2 id="switch-title" class="modal-title">切换 GitHub Desktop 版本</h2>
         <p class="modal-hint">
           本机装了多个时（官方升级后旧目录会留着）可以在这里换一个——之后汉化 / 还原 / 更新管控
-          与字典表格都作用于选中的版本。
+          与字典表格都作用于选中的版本。本机没有的版本可以下载安装。
         </p>
+        <div class="version-group">本机已安装</div>
         <!-- 列表项由 renderer.js 生成（每个是一个 button，便于键盘操作） -->
         <div id="version-list" class="version-list"></div>
         <p id="version-empty" class="empty" hidden></p>
+        <div class="version-group">可下载（官方 Release）</div>
+        <div id="download-list" class="version-list"></div>
+        <p id="download-empty" class="empty" hidden>正在取官方版本列表…</p>
         <div class="modal-actions">
           <label class="picker-all" title="连没有汉化字典的版本一起列出">
             <input id="version-all" type="checkbox" />显示没汉化的版本

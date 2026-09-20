@@ -11,6 +11,7 @@ const { app, BrowserWindow, ipcMain, dialog, Menu, shell } = require('electron')
 const common = require('../scripts/common.js');
 const patch = require('../scripts/cmd/patch.js');
 const restore = require('../scripts/cmd/restore.js');
+const installer = require('../scripts/cmd/install-version.js');
 const dictSync = require('../scripts/dict/dict-sync.js');
 const dictPrompt = require('../scripts/dict/dict-prompt.js');
 const update = require('../scripts/update.js');
@@ -101,6 +102,17 @@ async function runSmokeTest(win) {
       switchBtn.disabled = false;
       switchBtn.click();
       const switchOk = !document.querySelector('#switch-version').hidden;
+      // ④ 「可下载」那组是异步联网取的：官方 Release 列表在代理下实测约 6 秒，故给 12 秒窗口。
+      //    取不到**不判失败**——CI 不保证出网，那是环境差异不是产物缺陷（与 rows 同一条纪律）；
+      //    取不到时把空态文字打出来，本地排查用得上。
+      const dl = () => document.querySelector('#download-list');
+      const dlDeadline = Date.now() + 12000;
+      while (Date.now() < dlDeadline && !dl().children.length) {
+        await new Promise((res) => setTimeout(res, 200));
+      }
+      const dlHint = dl().children.length
+        ? ''
+        : document.querySelector('#download-empty').textContent.trim().slice(0, 90);
 
       return {
         // 只数**工具栏**的按钮：两个模态窗口里还有几个（带 hidden），数全体会把它们一并算进来，
@@ -108,6 +120,8 @@ async function runSmokeTest(win) {
         buttons: document.querySelectorAll('header.toolbar button').length,
         tabs: document.querySelectorAll('.tab').length,
         versionItems: document.querySelectorAll('#version-list button').length,
+        downloadItems: dl().children.length,
+        downloadHint: dlHint,
         promptOk,
         aboutOk,
         switchOk,
@@ -133,7 +147,8 @@ async function runSmokeTest(win) {
     const gpu = app.getGPUFeatureStatus() || {};
     smokeOut(
       `SMOKE_OK platform=${process.platform} arch=${process.arch} window=${w}x${h} buttons=${r.buttons} tabs=${r.tabs}` +
-        ` prompt=true about=true switch=true versionItems=${r.versionItems}` +
+        ` prompt=true about=true switch=true versionItems=${r.versionItems} downloadItems=${r.downloadItems}` +
+        (r.downloadHint ? ` downloadHint="${r.downloadHint}"` : '') +
         ` rows=${r.rows} ipc=true toolVersion=${r.toolVersion}` +
         ` gpu_compositing=${gpu.gpu_compositing || '?'} webgl=${gpu.webgl || '?'} vulkan=${gpu.vulkan || '?'}` +
         ` dataRoot="${r.dataRoot}" status="${r.status}"`
@@ -480,6 +495,66 @@ function registerIpc() {
       }
     }
     return { ok: true, version, notes, hasError, restarted };
+  });
+
+  // 可下载的版本（官方 Release）。只在「切换版本」窗口打开时取一次——进工具就联网会拖慢启动。
+  // 本机已装的不列在这里（它们在「本机已安装」那一组）。
+  handle('downloadable', async () => {
+    try {
+      const r = await installer.listDownloadable();
+      return {
+        ok: true,
+        platform: r.platform,
+        installable: r.installable,
+        versions: r.versions.filter((v) => !v.installed),
+      };
+    } catch (e) {
+      return { ok: false, error: e.message };
+    }
+  });
+
+  // 下载并安装一个本机没有的版本，装完切过去——与 CLI 菜单 4) 里的 d) 同一套（都走 installer）。
+  // 会往官方安装根写一个新目录（与现有版本并存），故确认框里把体积与后果说清楚。
+  handle('installVersion', async (version) => {
+    if (process.platform !== 'win32') {
+      return { ok: false, error: '在线安装目前只支持 Windows，请到 GitHub Releases 手动下载本平台安装包。' };
+    }
+    const choice = await dialog.showMessageBox(mainWindow, {
+      type: 'question',
+      buttons: ['下载并安装', '取消'],
+      defaultId: 0,
+      cancelId: 1,
+      noLink: true,
+      title: APP_TITLE,
+      message: `下载并安装 GitHub Desktop ${version}`,
+      detail:
+        '安装包约 300 MB，装到与官方安装相同的位置——与现有版本**并存**，不会替换它们。\n'
+        + '国内直连较慢，下载会自动走系统代理（若已配置）。',
+    });
+    if (choice.response !== 0) return { ok: false, canceled: true };
+
+    const mb = (n) => `${(n / 1048576).toFixed(0)} MB`;
+    notifyBusy('installVersion', `正在准备 ${version} …`);
+    try {
+      await installer.install(version, {
+        log: () => notifyBusy('installVersion', `正在解压 ${version} …`),
+        onProgress: (got, total) => {
+          const pct = total ? Math.round((got / total) * 100) : 0;
+          const of = total ? ` / ${mb(total)}` : '';
+          notifyBusy('installVersion', `正在下载 ${version} … ${pct}%（${mb(got)}${of}）`);
+        },
+      });
+      notifyBusy('installVersion', `正在切换到 ${version} …`);
+      common.setTargetVersion(version);
+      return {
+        ok: true,
+        version,
+        notes: [`已安装 GitHub Desktop ${version} 并切换过去。`],
+        restarted: 'skipped',
+      };
+    } finally {
+      notifyBusy(null, null);
+    }
   });
 
   // 工具自更新：GUI 产物是**安装包**，不能像 CLI 那样替换自身（见 installGuiUpdate 的注释）。

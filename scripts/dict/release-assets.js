@@ -30,6 +30,10 @@ const PLATFORM_SPECS = {
   windows: {
     asset: (version, arch) => `GitHubDesktop-${version}-${arch}-full.nupkg`,
     appDir: 'lib/net45/resources/app',
+    // 铺开成安装目录时要剥掉的前缀（包内 app 目录上面那两层）。只有 Windows 有：
+    // 「下载并安装某个版本」本次只支持 Windows——macOS 的安装是把 .app 覆盖到
+    // /Applications（覆盖语义、要权限、运行中还会占用），另一套东西，见 design.md。
+    prefix: 'lib/net45/',
   },
   macos: {
     asset: (version, arch) => `GitHub.Desktop-${arch}.zip`,
@@ -141,6 +145,59 @@ async function readEntry(archive, entry) {
   return zlib.inflateRawSync(raw);
 }
 
+// 把**已下载到本地**的产物按前缀铺开到一个目录。
+//
+// 与 fetchApp 的区别：那个只取几个文件（每次一个 HTTP Range），正适合字典产出；这里要铺出
+// **完整的一份安装**（Windows 的 nupkg 剥掉前缀后是上千个文件），本地文件上再走"一条一往返"
+// 就没有意义了，所以直接顺序读。zip 解析仍是同一套（EOCD → 中央目录 → 本地头 → inflate），
+// 不另写一份。
+//
+// 只铺 prefix 下的条目：包里的 NuGet 元数据（`[Content_Types].xml` / `_rels/` / `*.nuspec` /
+// `package/services/`）不属于应用，铺出去只会污染安装目录。
+function extractLocal(archivePath, { prefix = '', outDir, onEntry } = {}) {
+  if (!outDir) throw new Error('extractLocal 需要 outDir');
+  const fd = fs.openSync(archivePath, 'r');
+  try {
+    const size = fs.fstatSync(fd).size;
+    const read = (start, end) => {
+      const len = end - start + 1;
+      const buf = Buffer.alloc(len);
+      fs.readSync(fd, buf, 0, len, start);
+      return buf;
+    };
+    const eocd = readEocd(read(Math.max(0, size - TAIL_WINDOW), size - 1));
+    if (!eocd) throw new Error(`不是有效的 zip（未找到中央目录）：${archivePath}`);
+    const entries = parseCentralDirectory(read(eocd.cdOffset, eocd.cdOffset + eocd.cdSize - 1));
+    if (entries.length !== eocd.entries) {
+      throw new Error(`中央目录不完整：解析到 ${entries.length} 条，EOCD 记录 ${eocd.entries} 条`);
+    }
+
+    let written = 0;
+    let skipped = 0;
+    for (const entry of entries) {
+      if (prefix && !entry.name.startsWith(prefix)) {
+        skipped++;
+        continue;
+      }
+      const rel = prefix ? entry.name.slice(prefix.length) : entry.name;
+      if (!rel || rel.endsWith('/')) continue; // 目录条目：由下面的 mkdir 隐式建出
+      const lh = read(entry.lho, entry.lho + 29);
+      if (lh.readUInt32LE(0) !== SIG_LH) throw new Error(`本地头签名不符：${entry.name}`);
+      const dataStart = entry.lho + 30 + lh.readUInt16LE(26) + lh.readUInt16LE(28);
+      const raw = read(dataStart, dataStart + entry.csize - 1);
+      const content = entry.method === 0 ? raw : zlib.inflateRawSync(raw);
+      const target = path.join(outDir, rel);
+      fs.mkdirSync(path.dirname(target), { recursive: true });
+      fs.writeFileSync(target, content);
+      written++;
+      if (onEntry) onEntry(written, rel);
+    }
+    return { written, skipped, total: entries.length };
+  } finally {
+    fs.closeSync(fd);
+  }
+}
+
 // ============================ 对外 ============================
 
 // 版本 → 官方下载地址。tag 就是 release-<版本>，正式版与 beta 同形（实测 release-3.6.5、
@@ -168,6 +225,39 @@ async function latestVersion(opts = {}) {
     url: release.html_url,
     publishedAt: release.published_at,
   };
+}
+
+// 列出官方**可供下载**的版本：正式版（跳过 draft / prerelease）且有本平台产物的那些。
+// 只取第一页（默认 100 条）——使用场景是"最近几个版本"（字典也只对最近几个版本），翻到
+// 几年前的没有意义；真要翻再加分页。与 latestVersion 同一条纪律：**有产物才算数**——
+// 官方会先建 tag、后传产物，中间那几个版本在列表里存在却取不到包，列出来只会让人点了报错。
+async function listVersions(opts = {}) {
+  const plat = opts.platform || common.currentPlatform();
+  const spec = PLATFORM_SPECS[plat];
+  if (!spec) return { platform: plat, arch: null, versions: [] };
+  const arch = opts.arch || process.arch;
+  const headers = opts.token ? { authorization: `Bearer ${opts.token}` } : {};
+  const list = await net.getJson(`${UPSTREAM_API}/releases?per_page=${opts.limit || 100}`, { headers });
+  if (!Array.isArray(list)) throw new Error('官方 release 列表的结构变了（返回的不是数组）');
+
+  const versions = [];
+  for (const rel of list) {
+    if (rel.draft || rel.prerelease) continue;
+    const tag = String(rel.tag_name || '');
+    if (!tag.startsWith('release-')) continue;
+    const version = tag.slice('release-'.length);
+    const assetName = spec.asset(version, arch);
+    const asset = (rel.assets || []).find((a) => a.name === assetName);
+    if (!asset) continue; // 该版本没发本平台产物，或还没传完
+    versions.push({
+      version,
+      assetName,
+      size: asset.size,
+      publishedAt: rel.published_at,
+      url: asset.browser_download_url || null,
+    });
+  }
+  return { platform: plat, arch, versions };
 }
 
 // 打开某版本的某平台产物，返回归档句柄（供 listEntries / fetchApp 复用同一次解析）
@@ -313,7 +403,7 @@ async function main() {
 }
 
 module.exports = {
-  fetchApp, listEntries, open, openArchive, readRange, readEntry,
+  fetchApp, listEntries, listVersions, open, openArchive, extractLocal, readRange, readEntry,
   readEocd, parseCentralDirectory, latestVersion, assetUrl, PLATFORM_SPECS, CORE_FILES, MAP_FILES, main,
 };
 
