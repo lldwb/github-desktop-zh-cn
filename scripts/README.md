@@ -9,7 +9,7 @@
 | 脚本 | 职责 | 状态 |
 |------|------|------|
 | `common.js` | 共享逻辑 **SSOT**：安装目录定位与已安装版本枚举（`locateApp()` / `listInstalledVersions()` / `setTargetVersion()`）、版本读取、字典读取、备份与还原、字符串匹配器与逆向还原、数据根目录判定（`dataRoot()`）、补丁组记账（`setPatchGroups()` / `getPatchGroups()`，组名常量表 `PATCH_GROUPS`）、项目地址（`repoUrls()`）。脚本取路径只走它，别自行拼 `__dirname` | 已实现 |
-| `net.js` | 零依赖 HTTP(S) GET（文本 / JSON / 二进制）：超时、重定向、进度回调；非 2xx 抛可读错误 | 已实现 |
+| `net.js` | 零依赖 HTTP(S) GET（文本 / JSON / 二进制）：超时、重定向、进度回调；非 2xx 抛可读错误。**自动读系统代理**（环境变量 → Windows 注册表 → macOS `scutil`，自实现 CONNECT 隧道），代理不可用时回退直连并记住 | 已实现 |
 | `cli.js` | 交互式中文菜单入口（SEA 产物的双击形态）：无参数进菜单（汉化 / 还原 / 详细信息 / 安装位置与切换版本 / 检查更新 / 更新管控 / 同步字典 / 关于），带子命令时透传给对应脚本 | 已实现 |
 | `update.js` | 工具自更新：查 latest release → 按平台 / 架构选资产 → 下载 → 校验文件头与 `SHA256SUMS` → 改名替换自身 → 重启；启动时清理 `.old` 残留 | 已实现 |
 
@@ -23,6 +23,7 @@
 | `verify.js` | 校验版本一致性、字典条目命中率（两个文件均 0 命中才算缺失）、补丁后 JS 语法校验（`vm.Script` 只解析不执行） | 已实现 |
 | `scan.js` | 未翻译文案自查：读安装目录 `renderer.js.map` 里的官方自有源码（`app/src/**`），提取界面文案候选并与产物、字典对照，输出待补清单 | 已实现 |
 | `restart.js` | 关闭并重启 GitHub Desktop（原本未运行则不动）；汉化 / 还原后由它收尾 | 已实现 |
+| `install-version.js` | 下载官方产物铺成一份可用的安装：取 nupkg → 校验 sha256 → 解压 `lib/net45/*` 到 `<安装根>/app-<版本>/`（**不跑官方 Setup.exe**——那是升级语义、会替换现有版本）。只支持 Windows；`--from <本地包>` 是下载不通时的降级路径 | 已实现 |
 
 ### `scripts/dict/`（字典资产工具链）
 

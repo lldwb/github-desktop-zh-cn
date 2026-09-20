@@ -130,6 +130,8 @@ Electron 里 `process.execPath` 是**应用可执行文件**（改名后的 exe�
 | `prompt` | invoke | — | `{ ok, text }`——`scripts/dict/dict-prompt.js` 里那份系统提示词，原样展示 |
 | `pickPath` | invoke | — | 同 `state`（弹系统目录选择框 → `writeConfig` → 重新解析）；选中无效目录时返回 `{ ...state, ok: false, error }`，界面据此提示 |
 | `setVersion` | invoke | `version` | `{ ok, version, notes, hasError, restarted, error? }`；版本不在本机已安装列表里 → `{ ok: false, error }`；选中的就是当前目标、或确认框被取消 → `{ ok: false, canceled: true }`。确认框里带「同时禁止该版本自动更新」勾选（默认勾上） |
+| `downloadable` | invoke | — | `{ ok, platform, installable, versions: [{ version, assetName, size, hasDict }] }`——官方 Release 里**有产物、本机未装**的版本（已装的在 `state.installed` 里）。只在窗口打开时取一次 |
+| `installVersion` | invoke | `version` | `{ ok, version, notes, restarted, error? }`——下载官方产物并铺到 `<安装根>/app-<版本>/`（约 300 MB，与现有版本并存），装完自动切过去；确认框在主进程弹，取消 → `{ ok: false, canceled: true }` |
 | `patch` | invoke | — | `{ ok, version, total, restarted, error?, hint? }`；用户在确认框点取消时返回 `{ ok: false, canceled: true }` |
 | `restore` | invoke | — | `{ ok, version, source, total, ambiguous, skipped, restarted, error?, hint? }`（取消同上） |
 | `updateControl` | invoke | — | `{ ok, notes: string[], restarted, error? }`——三选一的确认框在主进程弹（没有字典就不更新 / 完全禁止更新 / 恢复自动更新）；取消 → `{ ok: false, canceled: true }` |
@@ -163,6 +165,7 @@ Electron 里 `process.execPath` 是**应用可执行文件**（改名后的 exe�
 │ 已识别：C:\Users\Administrator\AppData\Local\GitHubDesktop     │ ← 状态栏
 └───────────────────────────────────────────────────────────────┘
 
+
 两个模态窗口（点工具栏按钮弹出；点遮罩、按 Esc 或点「关闭」关掉）——参考截图里没有，是本仓库新增的：
 
 ┌── 切换版本 ───────────────────────────────────────────────────┐
@@ -171,11 +174,14 @@ Electron 里 `process.execPath` 是**应用可执行文件**（改名后的 exe�
 │ 本机装了多个时（官方升级后旧目录会留着）在这里换一个；        │
 │ 之后汉化 / 还原 / 更新管控与字典表格都作用于选中的版本。      │
 │                                                               │
+│ 本机已安装                                                    │
 │   3.6.6  [当前]                                               │
 │     C:\Users\…\GitHubDesktop\app-3.6.6\resources              │
-│   ───────────────────────────────────────────────────         │
 │   3.6.5                                                       │
 │     C:\Users\…\GitHubDesktop\app-3.6.5\resources              │
+│ 可下载（官方 Release）                                        │
+│   3.6.4  293 MB                                               │
+│   3.6.0  218 MB                                               │
 │                                                               │
 │ [ ] 显示没汉化的版本                                    [关闭]│
 └───────────────────────────────────────────────────────────────┘
