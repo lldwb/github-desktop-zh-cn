@@ -7,8 +7,8 @@ const path = require('path');
 const readline = require('readline');
 const {
   locateApp, listInstalledVersions, setTargetVersion, repoUrls, listDictVersions, loadDict,
-  dictLabel, backupDir, backupExists, isPatched, isPackaged, dataRoot, readConfig, writeConfig,
-  APP_NAME, getPatchGroups,
+  dictLabel, backupDir, backupExists, isPatched, isPackaged, dataRoot, writeConfig,
+  getPatchGroups, resolveTarget,
 } = require('./common');
 
 // 「关于」里展示的两条项目地址（SSOT 在 common.js，与 GUI 的「关于」窗口同源）
@@ -101,17 +101,6 @@ function ask(rl, question) {
 async function confirm(rl, question) {
   const a = (await ask(rl, question)).toLowerCase();
   return a === '' || a === 'y' || a === 'yes' || a === '是';
-}
-
-// 解析目标安装目录：手动指定的路径优先，否则自动探测
-function resolveTarget() {
-  const cfg = readConfig();
-  const explicitPath = cfg.resourcesPath || null;
-  try {
-    return { app: locateApp({ explicitPath }), explicitPath };
-  } catch (e) {
-    return { error: e.message, explicitPath };
-  }
 }
 
 function printStatus(state) {

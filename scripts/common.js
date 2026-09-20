@@ -265,6 +265,19 @@ function locateApp({ explicitPath } = {}) {
   return { resourcesDir, appDir, version };
 }
 
+// 解析「当前要处理的安装目录」：手动指定的路径优先（config 的 resourcesPath），否则自动探测最新版本。
+// 返回 { app, explicitPath }，未找到时返回 { error, explicitPath }——不抛错，调用方（CLI 菜单与
+// GUI 的状态查询）都直接把 message 展示给用户，两边不各自再包一层。
+function resolveTarget() {
+  const cfg = readConfig();
+  const explicitPath = cfg.resourcesPath || null;
+  try {
+    return { app: locateApp({ explicitPath }), explicitPath };
+  } catch (e) {
+    return { error: e.message, explicitPath };
+  }
+}
+
 // 读取 app/package.json 的 version 字段
 function readVersion(appDir) {
   const pkg = JSON.parse(fs.readFileSync(path.join(appDir, 'package.json'), 'utf8'));
@@ -875,6 +888,7 @@ module.exports = {
   readConfig,
   writeConfig,
   locateApp,
+  resolveTarget,
   listInstalledVersions,
   appRootDir,
   setTargetVersion,
