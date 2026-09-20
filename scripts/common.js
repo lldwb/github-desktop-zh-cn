@@ -36,7 +36,7 @@ const GITEE_API = `https://gitee.com/api/v5/repos/${GH_OWNER}/${GH_REPO}`;
 // —— 运行形态与数据根目录（SSOT）——
 // 四种运行形态，判据只有 isPackaged()（SEA / bundle 产物）与 isElectronPackaged()（Electron 产物）两个：
 //   源码态（node scripts/xxx.js）与 Electron 开发态（electron .）：数据根 = 仓库根，字典与备份位置与既有版本一致；
-//   打包态（scripts/build.js 的 SEA 单文件产物 / electron-builder 的 GUI 产物）：数据根 = 可执行文件所在目录——
+//   打包态（tools/build.js 的 SEA 单文件产物 / electron-builder 的 GUI 产物）：数据根 = 可执行文件所在目录——
 //   解压即用、字典可直接替换；该目录不可写（如放在 Program Files）时回退用户数据目录。
 //   一个例外：macOS 的 Electron 产物（.app）数据根恒为用户数据目录——exe 在 .app 包内，包内写入会让签名失效。
 // 字典一律「外部优先、内嵌兜底」：<数据根>/dictionaries/<版本>/zh-CN.json 存在则用它，
@@ -54,7 +54,7 @@ function seaApi() {
 }
 
 function isPackaged() {
-  if (globalThis.__BUNDLED__) return true; // bundle 产物（scripts/build.js 打出的单文件）
+  if (globalThis.__BUNDLED__) return true; // bundle 产物（tools/build.js 打出的单文件）
   const sea = seaApi();
   return !!(sea && sea.isSea());
 }
