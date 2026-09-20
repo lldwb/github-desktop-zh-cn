@@ -8,7 +8,7 @@
 
 | 脚本 | 职责 | 状态 |
 |------|------|------|
-| `common.js` | 共享逻辑 **SSOT**：安装目录定位与已安装版本枚举（`locateApp()` / `listInstalledVersions()` / `setTargetVersion()`）、版本读取、字典读取、备份与还原、字符串匹配器与逆向还原、数据根目录判定（`dataRoot()`）、补丁组记账（`setPatchGroups()` / `getPatchGroups()`，组名常量表 `PATCH_GROUPS`）、项目地址（`repoUrls()`）。脚本取路径只走它，别自行拼 `__dirname` | 已实现 |
+| `common.js` | 共享逻辑 **SSOT**：安装目录定位与已安装版本枚举（`locateApp()` / `listInstalledVersions()` / `setTargetVersion()`）、「当前目标」解析（`resolveTarget()`：config 里指定的目录优先，否则自动探测）、版本读取、字典读取、备份与还原、字符串匹配器与逆向还原、替换对象清单（`TARGETS`，patch / restore / verify / scan / dict-auto 共用一份）、文案归一（`normalize()`）与生效键并集（`effectiveKeys()`）、数据根目录判定（`dataRoot()`）、补丁组记账（`setPatchGroups()` / `getPatchGroups()`，组名常量表 `PATCH_GROUPS`）、项目地址（`repoUrls()`，Gitee 网页地址 `GITEE_WEB`）。脚本取路径只走它，别自行拼 `__dirname` | 已实现 |
 | `net.js` | 零依赖 HTTP(S) GET（文本 / JSON / 二进制）：超时、重定向、进度回调；非 2xx 抛可读错误。**自动读系统代理**（环境变量 → Windows 注册表 → macOS `scutil`，自实现 CONNECT 隧道），代理不可用时回退直连并记住 | 已实现 |
 | `cli.js` | 交互式中文菜单入口（SEA 产物的双击形态）：无参数进菜单（汉化 / 还原 / 详细信息 / 安装位置与切换版本 / 检查更新 / 更新管控 / 同步字典 / 关于），带子命令时透传给对应脚本 | 已实现 |
 | `update.js` | 工具自更新：查 latest release → 按平台 / 架构选资产 → 下载 → 校验文件头与 `SHA256SUMS` → 改名替换自身 → 重启；启动时清理 `.old` 残留 | 已实现 |
@@ -32,6 +32,7 @@
 | `dict-edit.js` | 字典的**唯一写入口**——增删改、分组、迁移一律走它，子命令 `read` / `validate` / `query` / `apply` / `add` / `update` / `remove` / `set-group` / `move` / `merge` / `regroup` / `export-flat` / `migrate`；写入是事务式的（读原文 → 内存变更 → 校验 → 写 `.tmp` → 读回重校验 → 原子替换 → 写后复核），任一步失败原文件从未被改动 | 已实现 |
 | `dict-groups.js` | 组名自动推断：读安装目录里官方产物自带 sourcemap 的 `app/src/**` sourcesContent 定位每段原文的出处，按三级规则定组（主菜单构建文件 → 「菜单-<父菜单>」；其余按源文件目录查 `DIR_GROUPS`；都落不上 → 「待分组」），产出写进字典 `groups` 段，写入经 `dict-edit` 事务入口 | 已实现 |
 | `dict-auto.js` | 按官方新版本产物自动产出字典——以历史字典键为锚核对每条键在新产物里的形态（继承）→ 官方新增的界面文案走 AI 翻译（OpenAI 兼容协议）→ `dict-edit` 事务写入 → 组名推断 → 干跑校验（替换 + 语法 + 生效比例）→ 出报告；CI 定时任务与人肉回填共用同一条链路 | 已实现 |
+| `dict-ai.js` | **AI 协议适配层**（OpenAI 兼容的 `chat/completions`）：待译条目分批交给模型 → 逐条校验（占位符一致 / 非空 / 含汉字）→ 「原样返回」判为无需翻译 → 批次整体失败时降级逐条重试并归并失败原因。与字典领域零耦合，**只由 `dict-auto.js` 以字面量 require 引入** | 已实现 |
 | `dict-prompt.js` | 发给翻译模型的系统提示词（`SYSTEM_PROMPT`）——**唯一来源**：`dict-auto.js` 调模型用它，GUI 的「翻译提示词」标签页经 IPC 原样展示同一份（展示的必须是实际生效的那段） | 已实现 |
 | `dict-sync.js` | 字典在线同步：`ensureDict()` 本地（外部 + 内嵌）都没有才下载；`syncLatest()` 强制拉最新并覆盖（菜单 `7) 同步字典` / GUI「关于」里的「同步字典」用） | 已实现 |
 | `release-assets.js` | 从官方 Release 产物里按需取文件（HTTP Range 分段取 zip 中央目录与目标条目，`node:zlib` 解压，单个 zip 250~330 MB 不下载整包），产出与真实安装目录同形（`<out>/app/…`），`scan` / `verify` / `dict-groups` 可 `--path <out>` 直接跑；CLI：`list` / `fetch` / `latest` | 已实现 |

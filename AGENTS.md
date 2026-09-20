@@ -32,7 +32,7 @@ npm run tool           # 交互式中文菜单（SEA 产物双击即此模式；
 npm run gui            # 图形界面操作面板（Electron 开发态；首次需 npm install）
 npm run dist           # 打包图形界面产物（electron-builder → dist/gui/，按当前平台：Windows NSIS+7z / macOS dmg / Linux AppImage+deb；产物自检见 node tools/check-gui-dist.js）
 npm run build          # 打包成单文件可执行（dist/ 下，双击即用，无需 Node）
-npm test               # 匹配器单元测试（node --test）
+npm test               # 匹配器单元测试 + 产物命名回归（node --test）
 ```
 
 CI / Release 运维探针（`tools/ops/`，匿名只读、零依赖、仓库地址取 `common.js` 的 `GH_OWNER/GH_REPO`，详见该目录 README）：
@@ -44,7 +44,6 @@ node tools/ops/wait-run.cjs <runId>          # 轮询运行直到结束
 node tools/ops/release-detail.cjs <tag>      # Release 署名 / 附件上传者 / 时间戳
 node tools/ops/rel-check.cjs [tag...]        # 核对附件名是否符合 cli / gui 规范
 node tools/ops/wf-lint.cjs [workflow]        # workflow 体检（run 块 bash -n + YAML 禁忌）
-node tools/ops/check-naming.cjs              # pickAsset 只挑 cli 产物（回归）
 ```
 
 界面图生成器（`tools/make-gui-fig.cjs`，等宽图按**显示宽度**对齐、幂等；改 `docs/design/gui/design.md` 里的模态窗口示意走它，别手写空格）：
@@ -61,7 +60,7 @@ node tools/make-gui-fig.cjs --dry-run     # 只打印将写入的块，不落盘
 - **替换对象**：官方 Windows 3.6.x 安装目录 `%LOCALAPPDATA%\GitHubDesktop\app-<版本>\resources\app\` 下的 `main.js` 与 `renderer.js`——官方产物为**免打包裸目录**（无 `app.asar`，3.6.4 / 3.6.5 已实测；robotze/GithubDesktopZhTool 的 Mac/Linux 方案同样直接替换 `Resources/app` 下文件）。
 - **工具链**（`scripts/`，Node.js 零依赖，仅内置模块）：
   - **顶层**（共享模块与入口）：
-    - `common.js`：全部共享逻辑的 **SSOT**——安装目录定位与已安装版本枚举（`locateApp()` / `listInstalledVersions()` / `setTargetVersion()`）、版本读取、字典读取、备份与还原、字符串匹配器与逆向还原、数据根目录判定（`dataRoot()`）、补丁组记账（`setPatchGroups()` / `getPatchGroups()`，组名常量表 `PATCH_GROUPS`）、项目地址（`repoUrls()`）。**位置固定、不可下移**：`REPO_ROOT = path.resolve(__dirname,'..')` 决定源码态的数据根，下沉一层会让字典与备份全部找错。
+    - `common.js`：全部共享逻辑的 **SSOT**——安装目录定位与已安装版本枚举（`locateApp()` / `listInstalledVersions()` / `setTargetVersion()`）、「当前目标」解析（`resolveTarget()`：config 里指定的目录优先，否则自动探测；GUI 与 CLI 共用同一份，不各写一套）、版本读取、字典读取、备份与还原、字符串匹配器与逆向还原、替换对象清单（`TARGETS`：`main.js` / `renderer.js`，patch / restore / verify / scan / dict-auto 共用同一份，不各写一份字面量）、文案归一（`normalize()`：产物侧折叠转义与空白 + 忽略大小写，`scan` 与 `dict-groups` 同一口径）与生效键并集（`effectiveKeys()`）、数据根目录判定（`dataRoot()`）、补丁组记账（`setPatchGroups()` / `getPatchGroups()`，组名常量表 `PATCH_GROUPS`）、项目地址（`repoUrls()`，Gitee 网页地址 `GITEE_WEB`）。**位置固定、不可下移**：`REPO_ROOT = path.resolve(__dirname,'..')` 决定源码态的数据根，下沉一层会让字典与备份全部找错。
     - `net.js`：零依赖 HTTP(S) GET（文本 / JSON / 二进制），带超时、重定向与进度回调；非 2xx 抛可读错误。**自动走代理**（环境变量 → Windows 注册表 → macOS `scutil`；CONNECT 隧道自己实现，不引依赖），代理不可用时**回退直连**并记住。在线能力都走它，不引三方库。
     - `cli.js`：交互式中文菜单入口（`npm run tool`），职责与实现见下方「打包与分发」。
     - `update.js`：工具自更新——查 latest release → 按 `<平台>-<架构>` 后缀选资产 → 下载 → 校验文件头（MZ / Mach-O / ELF）与 `SHA256SUMS` 里的 sha256 → 改名替换自身 → 重启新版本；启动时 `cleanup()` 清理上次的 `.old` 残留。CLI 侧是替换自身；**GUI 侧是下载安装包交给用户装**（`pickGuiAsset()` 只认 `-gui-` 名字，Windows `-setup.exe` 直接 spawn、macOS `.dmg` 与 Linux `.deb` 交 `open` / `xdg-open`），两者命名与行为都不同、别混。
@@ -77,11 +76,12 @@ node tools/make-gui-fig.cjs --dry-run     # 只打印将写入的块，不落盘
     - `dict-sync.js`：字典在线同步——`ensureDict()` 仅在本地（外部 + 内嵌）都没有该版本字典时下载，`syncLatest()` 供菜单 `7) 同步字典` / GUI「关于」里的「同步字典」强制拉最新并覆盖；远程源按 `common.remoteDictUrls()` 顺序（raw → jsDelivr → Gitee raw）尝试，落盘前先 `JSON.parse` 校验、写 `.part` 再改名。
     - `release-assets.js`：官方产物按需提取——从 GitHub Release 资产用 HTTP Range 分段取 zip 中央目录与目标条目（`node:zlib` 解压，不下载整包，单个 zip 250~330 MB 只取需要的 app 目录），产出与真实安装目录同形（`<out>/app/…`），`scan` / `verify` / `dict-groups` 可 `--path <out>` 直接跑；CI 定时字典与人肉回填都靠它取官方原文。CLI：`list|fetch|latest`。它同时是「下载并安装某个版本」的底座：`listVersions()` 列官方**有产物的**正式版，`extractLocal()` 把下到本地的整包按前缀铺开（zip 解析仍是同一套，不另写一份）。
     - `dict-auto.js`：按官方新版本产物自动产出字典（CI 定时任务 `dict-auto.yml` 与人肉回填共用同一条链路）——以历史字典键为锚核对新产物形态（继承，零风险）→ JSX 侧新增候选走 AI 翻译（OpenAI 兼容协议）→ `dict-edit` 事务写入 → 组名推断 → 干跑校验（语法 + 命中率阈值）→ 出报告。候选口径（字面量侧噪声多、只收 JSX）、AI 翻译三点约定（思考强度与超时联动 / 原样返回不算未译 / 不覆盖已有译文）、`--on-exist=skip|diff|overwrite` 的取舍见 `docs/design/dict-v2/design.md` 第 5 节与 `docs/design/dict-v2/tasks.md` 第 6 组——**改动它之前先读**。
+    - `dict-ai.js`：**AI 协议适配层**（OpenAI 兼容的 `chat/completions`）——把待译条目分批交给模型 → 逐条校验（占位符一致 / 非空 / 含汉字）→ 「原样返回」分流为无需翻译 → 批次整体失败时降级逐条重试，并把失败原因归并成可读文案。与字典领域零耦合（不认识字典、产物与分组），**只由 `dict-auto.js` 以字面量 require 引入**（`bundle.js` 靠静态扫描收集依赖）。
     - `dict-prompt.js`：发给翻译模型的**系统提示词**（`SYSTEM_PROMPT`）。它是**唯一来源**——`dict-auto.js` 调模型用它，GUI 的「翻译提示词」标签页经 IPC 原样展示同一份，两边不得各写一份副本（展示的必须是实际生效的那段）。内容是行为约束（输出契约 / 占位符规则 / 助记符位置），改一个字都可能让模型不再返回合法 JSON，**改动前先读 `docs/design/dict-v2/design.md` 第 5 节**。
   - **`inject/`**（注入块：改逻辑不改文案）：
     - `update-control.js`：更新管控补丁组——往 GitHub Desktop 的 main.js 注入两件事：禁止自动更新（`checkForUpdates` 直接返回）与没有对应字典就拦截更新（工具支持的上限低于当前版本不放行），可选注入「更新后自动汉化」（只有打包态有意义）。`mode=guard|off` 两种模式共用同一套注入块、切换等价于重新注入；注入点选在产物 IIFE 之外（那里 `require` 是原生的）。cli / GUI 两处开关，机制与取证见 `docs/design/dict-v2/tasks.md` 第 8 组。
     - `context-menu.js`：右键菜单汉化——文本输入框右键菜单的标签由 **Electron 运行时按 role 生成**（`build-context-menu.ts` 的 `getEditMenuItems()` 用 `Menu.buildFromTemplate([{ role: 'editMenu' }])` 取展开项），产物里只有 role 名、没有标签字面量，字典按字面量整串匹配、够不着。做法是往 main.js 注入一段**包装 `Menu.buildFromTemplate`** 的代码（锚点与 `update-control.js` 同一处，模板里出现 `role: 'editMenu'` 就按 role 把展开项 label 重打成英文标签），再由 `patch` 的**同一次字典替换**译成中文。本模块**只带英文原文、不带中文**——翻译资产仍只有字典一份；标签取 `build-default-menu.ts` 菜单栏 Edit 子菜单那一批（非 darwin 带 `&` 助记符、darwin 不带），字典未覆盖的（如 3.6.5 的 macos 段）保持英文原文，与原生标签同形。属 i18n 组、随 `patch` 自动生效，无独立开关。
-- **界面层**（`gui/`，Electron 原生窗口，可选形态）：`main.js` 主进程（窗口生命周期 + IPC 处理器，直接 `require('../scripts/…')` 调业务）、`preload.js`（`contextBridge` 暴露 `window.api`）、`index.html` / `renderer.js` / `style.css` 渲染层。**GUI 只做表现层**——替换 / 备份 / 还原规则没有第二份实现；渲染进程无 Node 能力（`contextIsolation` + `sandbox`），字典表格只读，**不存在字典写盘通道**。界面分四块：**工具栏**（汉化 / 还原 / 选择 / 更新管控 / 切换版本 / 刷新 / 关于）、**两个标签页**（「汉化字典」只读表格；「翻译提示词」原样展示 `dict-prompt.js` 那份）、**关于窗口**（工具版本 / 项目地址 / 国内镜像 / 许可证 / 数据目录 + 「检查更新」「同步字典」两个动作）、**切换版本窗口**（本机已安装版本列表，点一项即切换）。与 CLI 的分工与共用点：**检查更新只管工具自身**，字典同步独立成 `syncDict`（两处语义一致）；「切换版本」窗口与 CLI 的 `4) 安装位置 / 切换版本` 共用 `common.setTargetVersion()`，切换后默认注入「完全禁止自动更新」；`openUrl` 只收白名单键（`repo` / `mirror`），渲染进程给不出任意 URL。打包配置见 `electron-builder.yml`（`npm run dist`），构建期下载走 `.npmrc` 与 yml 里固化的镜像；产物体积有两道裁剪——`electronLanguages`（语言包只留中英）与 `afterPack` 钩子 `build/after-pack.js`（打包后删运行时组件），改动取舍见 docs/打包与分发.md。
+- **界面层**（`gui/`，Electron 原生窗口，可选形态）：`main.js` 主进程（窗口生命周期 + IPC **注册清单**与各处理器共用的骨架——确认框 / 忙碌推送 / 当前目标解析 / 四处理器共用的「确认框 + notifyBusy + run」）、`ipc/<域>.js`（IPC 处理器按域分组：汉化还原 `patching.js` / 版本切换 `versions.js` / 更新 `updates.js` / 杂项 `misc.js`，各域直接 `require('../../scripts/…')` 调业务）、`preload.js`（`contextBridge` 暴露 `window.api`）、`index.html` / `renderer.js` / `style.css` 渲染层。**GUI 只做表现层**——替换 / 备份 / 还原规则没有第二份实现；渲染进程无 Node 能力（`contextIsolation` + `sandbox`），字典表格只读，**不存在字典写盘通道**。界面分四块：**工具栏**（汉化 / 还原 / 选择 / 更新管控 / 切换版本 / 刷新 / 关于）、**两个标签页**（「汉化字典」只读表格；「翻译提示词」原样展示 `dict-prompt.js` 那份）、**关于窗口**（工具版本 / 项目地址 / 国内镜像 / 许可证 / 数据目录 + 「检查更新」「同步字典」两个动作）、**切换版本窗口**（本机已安装版本列表，点一项即切换）。与 CLI 的分工与共用点：**检查更新只管工具自身**，字典同步独立成 `syncDict`（两处语义一致）；「切换版本」窗口与 CLI 的 `4) 安装位置 / 切换版本` 共用 `common.setTargetVersion()`，切换后默认注入「完全禁止自动更新」；`openUrl` 只收白名单键（`repo` / `mirror`），渲染进程给不出任意 URL。打包配置见 `electron-builder.yml`（`npm run dist`），构建期下载走 `.npmrc` 与 yml 里固化的镜像；产物体积有两道裁剪——`electronLanguages`（语言包只留中英）与 `afterPack` 钩子 `build/after-pack.js`（打包后删运行时组件），改动取舍见 docs/打包与分发.md。
 - **字典组织**：`dictionaries/<版本>/zh-CN.json`，**formatVersion 2 的五段结构**——`common` / `windows` / `macos` / `linux` 四段放条目，`groups` 段放组归属，`_meta` 放元信息（`version` / `updated` / `notes` / `formatVersion`）。条目按「跨平台共有」与「平台专有」分段：`common` 对所有平台生效，平台段只对该平台生效（`linux` 段保持为空，官方无 Linux 产物；判定与理由见 `docs/design/dict-v2/design.md` 第 4 节）。**字典的唯一写入口是 `scripts/dict/dict-edit.js`**——增删改、分组、迁移一律走它（先校验再原子替换，校验不过原文件不动），别手工编辑 JSON、也别在别的脚本里直接 `writeFileSync`；组名由 `scripts/dict/dict-groups.js` 从 sourcemap 推断。三种键形态（普通键 / 整模板键 / 作用域键）与替换规则见 `dictionaries/README.md`。**条数有三个口径**：`loadDict(版本)` 只并 `common + 本平台段`（Windows 实测 1885），macOS 再加 `macos` 段的 233 条 = 2118，字典文件总条目同样是 2118——引用条数前先说清是哪个口径。
 - **打包与分发**（`cli.js` / `tools/bundle.js` / `tools/build.js`，面向使用者的说明见 `docs/打包与分发.md`）：
   - `cli.js`：交互式中文菜单入口（无参数进菜单；带子命令则透传给对应脚本），`package.json` 的 `tool` 入口。菜单八项：汉化 / 还原 / 详细信息 / **安装位置与切换版本** / 检查更新（工具）/ 更新管控 / 同步字典 / 关于；**只输出结果**（命中多少处、是否重启），中间过程不出现在菜单里——子命令走 `quiet` 参数控制（命令行入口仍输出明细）。
@@ -110,7 +110,7 @@ node tools/make-gui-fig.cjs --dry-run     # 只打印将写入的块，不落盘
 
 - 版本号概念在 `dictionaries/` 目录名、`scripts/` 版本一致性校验、`docs/` 版本对应表三处出现，改版本组织方式时三处同步。
 - 字典文件仅含「原文 → 中文」映射数据，不含任何脚本逻辑；脚本不得在字典外硬编码翻译。
-- 「运行形态」判据只有 `common.js` 的两处：`isPackaged()`（bundle / SEA 产物）与 `isElectronPackaged()`（Electron 打包产物）——别在调用方另立一套判断。数据根目录只有 `common.dataRoot()` 一个来源——脚本不得自行拼 `__dirname` 或假定当前工作目录。面向用户的提示文案在打包态与源码态不同（打包态用户没有 npm），用 `isPackaged()` 分支——这类分支只出现在各脚本的 `main()`（命令行入口）里，GUI 走的是 `run()`（结果文案由 `gui/main.js` 自备），所以 Electron 打包态下 `isPackaged()` 为假也不会让 GUI 用户看到 npm 提示。
+- 「运行形态」判据只有 `common.js` 的两处：`isPackaged()`（bundle / SEA 产物）与 `isElectronPackaged()`（Electron 打包产物）——别在调用方另立一套判断。数据根目录只有 `common.dataRoot()` 一个来源——脚本不得自行拼 `__dirname` 或假定当前工作目录。面向用户的提示文案在打包态与源码态不同（打包态用户没有 npm），用 `isPackaged()` 分支——这类分支只出现在各脚本的 `main()`（命令行入口）里，GUI 走的是 `run()`（结果文案由 GUI 侧自备——`gui/ipc/<域>.js` 给 `notes`，`gui/renderer.js` 拼成文），所以 Electron 打包态下 `isPackaged()` 为假也不会让 GUI 用户看到 npm 提示。
 - 远程仓库地址只有 `common.js` 的 `GH_*` 一处定义，联网统一走 `net.js`（见「在线能力」一节）；逆向还原的判据只有 `common.isReversible()` 一处定义，别在调用方各写一份。
 
 ## 提交规范
