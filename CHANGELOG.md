@@ -1,5 +1,34 @@
 # Changelog
 
+## [1.0.0] - 2026-09-20
+
+> 把整个仓库的文件结构按职责重排了一遍：`scripts/` 分 `cmd` / `dict` / `inject` 三层，构建与发布工具收进新的 `tools/`，`test/` 按被测模块归目录——**对外行为一处未变**（npm 命令、CLI 参数、模块导出面、GUI 的 IPC 契约逐项冻结后核对无意外）。字典侧清掉 36 条「不是界面文案」的条目（2154 → 2118）：被当成文案收进来的 CSS 类名会打掉 `renderer.css` 的规则、机器标识译掉会改行为，另清了 29 条早被整模板键接管的死键、恢复 `patch` 告警的信号价值。还修好一个**从 v0.1.1 起就没装成过**的缺陷——自更新下的是 GitHub 的 API 元数据 JSON 而不是产物（CLI 侧被文件头护栏拦下，GUI 侧会把 JSON 当安装包启动），并给下载物补了一道 `SHA256SUMS` 校验。
+
+### 新增
+
+- **自更新加 SHA256SUMS 校验**（`scripts/update.js` 的 `verifySha256()`）：CLI 替换自身与 GUI 启动安装包**共用同一条口径**，下载物按 Release 里的 `SHA256SUMS` 核对 sha256。它是**完整性**校验而非防篡改——清单与产物同源，能证明「下到的就是发布的那份」（半成品、错版本、被中间层改写都挡得住）；能改产物的对手也能改清单，那要靠签名，不在本工具的能力范围内。清单**取不到时跳过而不是拒绝更新**（Gitee 的发行版只发正文、不带附件），文件头校验仍在；清单在手却没有这个名字、或对不上，都中止。GUI 侧尤其需要它：CLI 有文件头护栏（MZ / Mach-O / ELF），而安装包形态不齐——dmg 的 `koly` 在文件末尾那 512 字节 trailer 里、deb 是 ar 归档、AppImage 是追加了 squashfs 的 ELF——魔数表既难写又不强，而校验和证明的是「同一份字节」，强一个量级。
+- **GUI 不再假报更新成功**（`gui/main.js` 的 `installGuiUpdate`）：`child.on('error', () => {})` 把 spawn 失败吞掉后，紧接着无条件返回「已下载安装包并启动安装向导」——JSON 被当安装包启动时，用户看到的是「已启动安装向导」而屏幕上什么都没发生。现在**等 spawn 的结果出来再回话**：起不来就说清「文件在哪、请手动打开」，下载 / 校验失败同样如实说明（返回 `{ notes, hasError }`，两个调用点都按 `hasError` 走错误通道）。
+- **测试夹具模块与约定**（`test/fixtures/scratch.js`）：收敛临时字典目录的隔离与清理。清理走 `disposableDir()` 门禁——算出的删除目标必须是 `dictionaries/` 的直接子目录、且名字**不是真实版本形态**（判据复用生产侧 `common.DICT_VERSION_RE`，不另写正则），挡住误传即毁数据的杀伤半径：`cleanup('3.6.6')`（指向真实字典）、`cleanup('')`（指向整个 `dictionaries/`）、`cleanup('..')`（指向仓库根）三者都被拒。本模块无顶层副作用。
+
+### 变更
+
+- **全项目文件结构按职责重排**（57 个文件）：`scripts/` 分三层——`cmd/`（6 个入口：locate / patch / restore / verify / scan / restart）、`dict/`（5 个：dict-edit / dict-groups / dict-auto / dict-sync / release-assets）、`inject/`（2 个补丁组）；新增 `tools/` 收拢构建与发布工具（`build.js` / `bundle.js` / `changelog.js` / `check-gui-dist.js`），CI 探针归 `tools/ops/`，`build/` 只留 electron-builder 钩子；`test/` 按被测模块归 `common/` / `dict/` / `inject/`；历史设计文档归 `docs/design/`。**对外行为一处未变**——npm 命令与 CLI 参数全部保留，13 个入口的 `--help` 归一化后逐字节一致；模块导出面、GUI 的 IPC 契约（handle 8 / push 2 / preload 10 / invoke 8 / on 2）、四版字典、`electron-builder.yml` 的 10 个配置键、零依赖，逐项冻结后核对**无意外差异**。路径引用残留检查**意外 0**（终版 65 处命中全部是已登记的白名单项，如历史设计文档正文里的说明性引用）。验收：`npm test` 112 / 0、`node --check` 46 文件 0 失败、相对 require 87 条零悬空、移动配对「旧文件消失 0」。
+
+### 修复
+
+- **字典删掉 36 条「不是界面文案」的条目**（2154 → 2118，`dictionaries/3.6.6/zh-CN.json`）：这批条目是分批查出来的，每批都先做命中上下文分类，再用「大写版是否已在字典里承担可见文案」交叉验证。① **CSS 类名**——`"description"` 在 renderer.js 的 22 处里 21 处是 `className:"description"`（含历史列表条目里承载头像与作者行的那层），替换后类名成 `className:"描述"`，`renderer.css` 的 `.description` 规则不再命中、flex 布局与行距全部失效，**这就是「历史的样式被修改」的来源**；`"archived"` 同理（可见文案另有 `"Archived"` → 「已归档」，这条属重复且译法不一致）。查法是把 `renderer.css` 的 1028 个类名与字典键求交，只有这两条命中。② **属性值与库内部 token**——`"difference"`（仅 1 处，`mixBlendMode:"difference"`，替换后取值非法、混合模式失效）、`"formatting"`（30 处里 29 处是 date-fns / CLDR 的 `context:"formatting"` 选项，只在库内部流转）。③ **操作名插值的空格与硬译**——整模板键 `Begin ${…}` / `Confirm abort ${…}` / `Resolving conflicts for ${…}` 的译文保留了插值两侧的空格，而操作名已是中文，于是标题渲染成「开始 变基」；分支下拉的状态行 `'Rebasing branch'` 硬译成「正在变基分支」；变基文案的两处尾随空格（`"Rebasing "`）与冲突横幅前缀（`"rebasing"` → 「变基到」）一并修正，让变基与同族的压缩 / 重排 / 摘取四条流程的文案一致。④ **死键**——清掉 29 条**被整模板键接管的片段键**（早期按片段收词如 `"Fetch the latest changes from "`，后来改用整模板键覆盖外层模板；匹配是逐字面量整串相等、同起点长的优先，片段键从此不再参与替换），它们让 `npm run patch` 每次都报「0 命中的条目」且逐批累积，**真正失效的条目就被淹没**；清理前后 `main.js` / `renderer.js` 的 md5 完全一致，证明这 29 条确实从未参与替换。另回退 `"renderer.js|Abort"`——它命中 Dexie 的 errnames 数组（经 `t+"Error"` 拼接后既当错误类名又当查表键 `$M[e.name]`，译掉会让错误对象的 `name` 变中文），代价是 `cancelButtonText:"Abort"` 那个取消按钮回到英文，遵循仓库既有规则「机器标识不译，宁可留英文」。
+- **自更新下的是 API 元数据 JSON——从 v0.1.1 起就没装成过**（`scripts/update.js`）：`pickAsset` / `pickGuiAsset` 挑中附件后，`url` 字段一直是 GitHub 的 **API 端点**（`api.github.com/repos/<owner>/<repo>/releases/assets/<id>`），那个端点少了 `Accept: application/octet-stream` 只回一份**资产元数据 JSON**（实测 HTTP 200 + `application/json`）。于是自更新把几十 KB 的 JSON 当产物下了下来——CLI 侧被 `verifyExecutable` 的文件头校验拦下（护栏有效、工具没被写坏，但更新**从来没装成过**），GUI 侧没有那道校验，会把 JSON 当安装包启动。现在两个 pick 函数统一把 `url` 归一成 **`browser_download_url`**（发布页上那条直链；Gitee 的资产对象只有它、本来就走的这条路），取不到直链的极端形态仍退回 API 端点并补上那个 accept 头兜底。真机取证：伪装成 v0.3.0 使用者整条跑通「检查更新 → 下载 → 文件头校验 → 改名替换自身 → 重启」，替换后的文件与官方 v0.4.0 的 win32-x64 附件**逐字节相同**，新进程启动时把 `.old` 残留清掉了。
+- **字典版本目录按三段数字形态过滤**（`scripts/common.js` 的 `DICT_VERSION_RE`）：`listDictVersions()` 与 `build.js` 的 `collectAssets()` 原先只判「是目录且有 `zh-CN.json`」，测试夹具 `0.0.0-test`、下载残留 `3.6.6-beta`、临时解包目录都会被当成真实字典版本。后果不是理论的——`compareVersions` 把非数字段按 0 处理，首段数字更高的残留（如 `9.9.9-x`）会排到真实版本之后，而 `build.js` 取排序后**最后一个**当内嵌字典，就会把错版本打进产物。现在由生产侧导出 `/^\d+\.\d+\.\d+$/` 作为 SSOT，两处复用同一判据（测试侧引用而非另写）。
+- **产物自检清单漏了 `scripts/net.js`**（`tools/check-gui-dist.js`）：`net.js` 与同级的 `common.js` 一样是被多个脚本依赖的共享模块（`patch` 联网取字典、`update` 下载自更新都经过它），原先未列进 `need` 数组，asar 内容检查漏了这一条。该缺口在重构前即存在、非某次改动引入，作为独立修复单列以便单独回滚。
+- **字典与新生成器文案里的旧路径**（`scripts/dict/dict-auto.js` + 3 版字典的 `_meta.notes`）：目录重排后 `scripts/dict-auto.js` 已不存在，而生成器会把这句来源标注写进**此后每一版新字典**——不改则每新增一版就多一处陈旧路径引用。既有 3.6.0 / 3.6.4 / 3.6.6 三版一并回写（3.6.5 的 notes 是手写的「首个版本字典：…」、本就不含路径，不动），走**唯一写入口** `dict-edit apply <版本> --ops <文件>`（ops 为 `[{"op":"setMeta","notes":…}]`）而非手工编辑 JSON；`_meta.updated` 有意不动把 diff 压到最小，改前改后 `validate` 逐条一致、条目数与组数不变。
+
+### 说明
+
+- 本次是**结构性改造**（57 个文件按职责重排，文档与 CI 里的脚本引用整体改写），按语义化分级规则取**大版本** 1.0.0。
+- 目录重排后**仓库里所有脚本路径都变了**（如 `scripts/patch.js` → `scripts/cmd/patch.js`、`scripts/build.js` → `tools/build.js`）。npm 命令与 CLI 参数不受影响、照旧可用；仓库外的引用请按新路径更新，新旧对照表见 `docs/README.md`。
+- 一次踩到的坑记在这里：`dict-edit` 的 `serialize()` **一律写 LF**，而 `dictionaries/3.6.0`、`3.6.4` 的工作区检出形态是 CRLF。写入后已手工转回 CRLF 恢复原形态，**转回前后两次 `git diff --stat` 完全相同**——行尾形态不参与 blob 比对（`core.autocrlf=true` 且无 `.gitattributes`，blob 层面全部为 LF）。
+- `package.json` 版本号 0.4.0 → 1.0.0
+
 ## [0.4.0] - 2026-09-20
 
 > 把界面最后一处常年英文的地方——**文本框的右键菜单**——也汉化了：那批标签由 Electron 按 `role` 在运行时生成，字典的字面量匹配够不着，于是往产物里**注入**一段代码先把英文原文造进产物，再由**同一次字典替换**译掉。GUI 产物这边接着瘦身（运行时裁剪 + 压缩拉满 + 免安装包改 7z + mac 只发 dmg），**六个产物里五个已进 Gitee 的 100 MB 附件上限**，并给产物加了启动冒烟护栏；自动更新挑错产物（挑中 zip / 7z 这类非可执行文件）的毛病修掉。
