@@ -1,7 +1,16 @@
 // 核实各 tag Release 的**当前**附件名是否符合 cli / gui 命名规范（匿名 API 只读，零依赖）
 // 用法：node tools/ops/rel-check.cjs [tag...]（缺省取最新 Release 的 tag）
+// 后缀口径（docs/agents/发版.md「产物命名」）：cli——win32 用 .exe、其余平台 .bin；
+// gui——win32 用 .exe（NSIS 安装包）/.7z（便携）、darwin 用 .dmg、linux 用 .AppImage/.deb（架构词 x86_64/amd64 不参与判定）。
 const { getJson } = require('./lib.js');
 const { GH_OWNER, GH_REPO } = require('../../scripts/common.js');
+
+function nameOk(name) {
+  const gui = /-gui-/.test(name);
+  if (/-win32-/.test(name)) return gui ? /\.(exe|7z)$/.test(name) : /\.exe$/.test(name);
+  if (/-darwin-/.test(name)) return gui ? /\.dmg$/.test(name) : /\.bin$/.test(name);
+  return gui ? /\.(AppImage|deb)$/.test(name) : /\.bin$/.test(name);
+}
 
 (async () => {
   let tags = process.argv.slice(2);
@@ -21,8 +30,7 @@ ${tag}: ${j && j.message || '取不到（404 / 网络）'}`); continue; }
 ${tag}  draft=${j.draft}  published=${j.published_at}  附件 ${j.assets.length} 个`);
     for (const a of j.assets) {
       if (!/-cli-|-gui-/.test(a.name)) { console.log(`   - ${a.name}（非产物附件，不核对）`); continue; }
-      const ok = /-win32-/.test(a.name) ? /\.exe$/.test(a.name) : /\.bin$/.test(a.name);
-      console.log(`   ${ok ? '✓' : '✗'} ${a.name}`);
+      console.log(`   ${nameOk(a.name) ? '✓' : '✗'} ${a.name}`);
     }
   }
 })().catch((e) => { console.error(e.message); process.exit(1); });
