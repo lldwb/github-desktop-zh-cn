@@ -12,7 +12,7 @@ CI / Release 运维探针：**匿名 API 只读、零依赖、自包含**，仓�
 | `job-timing.cjs` | 只看名字含某字串的 job 的步骤耗时（定位失败步） | `node tools/ops/job-timing.cjs <runId> [名字字串]` |
 | `wait-run.cjs` | 轮询某次运行直到结束（默认最长 55 分钟） | `node tools/ops/wait-run.cjs <runId> [最长分钟数]` |
 | `release-detail.cjs` | 已发布 Release 的正文摘要、附件上传者与时间戳 | `node tools/ops/release-detail.cjs <tag>` |
-| `rel-check.cjs` | 核对各 tag Release 附件名是否符合 cli / gui 命名规范 | `node tools/ops/rel-check.cjs [tag...]`（缺省 v0.1.0 v0.1.1 v0.2.0） |
+| `rel-check.cjs` | 核对各 tag Release 附件名是否符合 cli / gui 命名规范 | `node tools/ops/rel-check.cjs [tag...]`（缺省取最新 Release 的 tag） |
 | `wf-lint.cjs` | workflow 体检：`run:` 块逐个 `bash -n` + YAML 禁忌（制表符 / 缩进非 2 的倍数）+ 步骤结构 | `node tools/ops/wf-lint.cjs [workflow 文件名]`（缺省 repair-release.yml） |
 | `check-replaceable.cjs` | 判定某处文案可否替换：打出每处出现的上下文（前 80 / 后 40 字符），并标出查表 / 比较 / 模块导出名 / switch 分支等高危上下文 | `node tools/ops/check-replaceable.cjs <文案> [--path tmp/backup/<版本>]` |
 

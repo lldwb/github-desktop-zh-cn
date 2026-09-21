@@ -110,7 +110,7 @@ node tools/make-gui-fig.cjs --dry-run     # 只打印将写入的块，不落盘
 
 - 版本号概念在 `dictionaries/` 目录名、`scripts/` 版本一致性校验、`docs/` 版本对应表三处出现，改版本组织方式时三处同步。
 - 字典文件仅含「原文 → 中文」映射数据，不含任何脚本逻辑；脚本不得在字典外硬编码翻译。
-- 「运行形态」判据只有 `common.js` 的两处：`isPackaged()`（bundle / SEA 产物）与 `isElectronPackaged()`（Electron 打包产物）——别在调用方另立一套判断。数据根目录只有 `common.dataRoot()` 一个来源——脚本不得自行拼 `__dirname` 或假定当前工作目录。面向用户的提示文案在打包态与源码态不同（打包态用户没有 npm），用 `isPackaged()` 分支——这类分支只出现在各脚本的 `main()`（命令行入口）里，GUI 走的是 `run()`（结果文案由 GUI 侧自备——`gui/ipc/<域>.js` 给 `notes`，`gui/renderer.js` 拼成文），所以 Electron 打包态下 `isPackaged()` 为假也不会让 GUI 用户看到 npm 提示。
+- 「运行形态」判据只有 `common.js` 的两处：`isPackaged()`（bundle / SEA 产物）与 `isElectronPackaged()`（Electron 打包产物）——别在调用方另立一套判断。数据根目录只有 `common.dataRoot()` 一个来源——脚本不得自行拼 `__dirname` 或假定当前工作目录。面向用户的提示文案在打包态与源码态不同（打包态用户没有 npm），用 `isPackaged()` 分支——这类**文案**分支只出现在 CLI 侧（各脚本的 `main()`，以及 `update.apply()` 那条「源码态不支持自更新」；`cleanup()` / `applyUpdateControl()` 等处的 `isPackaged()` 只用于取值、不产出文案），GUI 走的是 `run()`（结果文案由 GUI 侧自备——`gui/ipc/<域>.js` 给 `notes`，`gui/renderer.js` 拼成文），所以 Electron 打包态下 `isPackaged()` 为假也不会让 GUI 用户看到 npm 提示。
 - 远程仓库地址只有 `common.js` 的 `GH_*` 一处定义，联网统一走 `net.js`（见「在线能力」一节）；逆向还原的判据只有 `common.isReversible()` 一处定义，别在调用方各写一份。
 
 ## 提交规范
