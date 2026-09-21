@@ -1,5 +1,18 @@
 # Changelog
 
+## [1.1.2] - 2026-09-21
+
+> 接着 v1.1.1 把 macOS 安装目录识别修到底：GitHub Desktop.app 放在任意位置（桌面 / 下载 / 自定义目录）也能自动识别，不再要求先挪进「应用程序」。
+
+### 修复
+
+- **macOS 任意位置的 GitHub Desktop 自动识别**：`candidateRoots()` 的 darwin 分支此前只认 `/Applications` 与 `~/Applications` 两个标准位置——app 放在别处就没有候选根，自动探测枚举为空，只能手动 `--path`。现在 darwin 分支经 Spotlight（`mdfind` 按官方 bundle id `com.github.GitHubClient`）动态发现任意位置的 GitHub Desktop.app，拼 `Contents/Resources` 并入候选根，与标准位置去重（标准位置排前，多份并存时优先用「应用程序」里的正式安装）。`mdfind` 缺失、Spotlight 被禁用或超时（5 秒）一律静默跳过，退回标准位置候选与现有引导文案兜底；不缓存结果，GUI 每次刷新都能发现新装的应用。零依赖实现（`execFileSync`），按 bundle id 过滤不会把本工具自己误认成 GitHub Desktop。文档口径同步（AGENTS.md 与 README 旧表述仍是「macOS/Linux 走 `--path`」）。
+
+### 说明
+
+- 缺陷修复，按语义化分级规则取**小版本** 1.1.2。
+- `package.json` 版本号 1.1.1 → 1.1.2
+
 ## [1.1.1] - 2026-09-21
 
 > 修好 macOS 上识别不到安装目录的一类问题：未识别时的引导文案此前三个平台都给 Windows 形态的例子，GUI「选择」对话框里选中 GitHub Desktop.app 本体也报无效目录——mac 用户照着提示找不到、也选不中正确位置（使用者实测：把 GitHub Desktop 放入「应用程序」即可自动识别）。另把发版运维的两件工具固化进仓库并同步文档口径。

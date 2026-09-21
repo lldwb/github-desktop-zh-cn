@@ -89,7 +89,7 @@ const URLS = common.repoUrls();
 const aboutLines = [
   'GitHub Desktop 汉化工具',
   '',
-  '版本      v1.1.1',
+  '版本      v1.1.2',
   `项目地址  ${URLS.repo}`,
   `国内镜像  ${URLS.mirror}`,
   '许可证    GPL-3.0',
