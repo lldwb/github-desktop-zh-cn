@@ -257,9 +257,15 @@ function locateApp({ explicitPath } = {}) {
 
   const found = listInstalledVersions();
   if (found.length === 0) {
-    throw new Error(
-      '未找到 GitHub Desktop 安装目录。请用 --path 指定 resources 目录（例如 …/GitHubDesktop/app-3.6.5/resources）'
-    );
+    // 引导按平台给：macOS 的 Resources 藏在 .app 包内（访达把它当一个文件），且自动探测只认
+    // 「应用程序」里的 GitHub Desktop——app 放在桌面 / 下载目录里识别不到，是实测踩过的坑
+    const guide =
+      process.platform === 'darwin'
+        ? 'macOS 请先把 GitHub Desktop 放入「应用程序」文件夹（会自动识别），或用 --path 指定 resources 目录（例如 /Applications/GitHub Desktop.app/Contents/Resources）'
+        : process.platform === 'win32'
+          ? '请用 --path 指定 resources 目录（例如 …/GitHubDesktop/app-3.6.5/resources）'
+          : '请用 --path 指定 resources 目录（例如 /usr/lib/github-desktop/resources）';
+    throw new Error(`未找到 GitHub Desktop 安装目录。${guide}`);
   }
   // 升序列表的最后一个即最新版本
   const { resourcesDir, appDir, version } = found[found.length - 1];

@@ -156,11 +156,16 @@ module.exports = function createMiscHandlers(ctx) {
       });
       if (r.canceled || !r.filePaths.length) return collectState();
 
-      // 多选到上一层是常事（选中 app-<版本> 或安装根），再往下试一层 resources 即可命中
+      // 多选到上一层是常事，往下试一层即可命中：Windows 选中 app-<版本> 或安装根 → resources；
+      // macOS 选中 .app 包本身（访达里它就是一个图标）→ Contents/Resources
       const picked = r.filePaths[0];
       let found = null;
       let lastError = null;
-      for (const candidate of [picked, path.join(picked, 'resources')]) {
+      for (const candidate of [
+        picked,
+        path.join(picked, 'resources'),
+        path.join(picked, 'Contents', 'Resources'),
+      ]) {
         try {
           found = common.locateApp({ explicitPath: candidate });
           break;

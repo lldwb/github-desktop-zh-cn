@@ -269,7 +269,7 @@ npm run scan           # 自查还有哪些界面文案没翻译（输出待补�
 - `patch` 前建议先 `patch --dry-run` 预览命中统计（不写盘）；
 - 替换前已自动备份：恢复官方版 = `npm run restore`（等价于把 `tmp/backup/<版本>/` 下的 `main.js` / `renderer.js` 复制回 `resources/app/`）；
 - `patch` 是**原地替换**：删掉或改掉字典条目后不会自动从产物里退出，必须先 `npm run restore` 再 `npm run patch` 重打；
-- 自动探测仅支持 Windows；macOS / Linux 或其他位置用 `--path <resources目录>` 显式指定（`node scripts/cmd/locate.js --path /path/to/resources`）；
+- 自动探测覆盖三平台的标准安装位置（Windows `%LOCALAPPDATA%\GitHubDesktop`、macOS `/Applications/GitHub Desktop.app`——访达里右键 → 显示包内容 → `Contents/Resources`、Linux `/usr/lib/github-desktop` 等）；非标准位置用 `--path <resources目录>` 显式指定（`node scripts/cmd/locate.js --path /path/to/resources`）；
 - 官方更新覆盖汉化后，用对应新版本的字典重新执行 `locate` + `patch` 即可。
 
 自己构建单文件产物：`npm run build`（产物在 `dist/` 下，双击即用；跨平台构建方式见 [docs/打包与分发.md](docs/打包与分发.md)）。图形界面版见上面的「方式一」。
