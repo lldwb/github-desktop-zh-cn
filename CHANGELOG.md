@@ -1,5 +1,27 @@
 # Changelog
 
+## [1.1.1] - 2026-09-21
+
+> 修好 macOS 上识别不到安装目录的一类问题：未识别时的引导文案此前三个平台都给 Windows 形态的例子，GUI「选择」对话框里选中 GitHub Desktop.app 本体也报无效目录——mac 用户照着提示找不到、也选不中正确位置（使用者实测：把 GitHub Desktop 放入「应用程序」即可自动识别）。另把发版运维的两件工具固化进仓库并同步文档口径。
+
+### 修复
+
+- **macOS 识别不到安装目录的引导与选择下探按 .app 形态补齐**：官方 macOS 产物是免打包裸目录（`Contents/Resources/app/main.js`），校验逻辑本身没错——错在两处引导。其一，`locateApp` 的「未找到安装目录」文案不分平台，现在按平台给对应引导：macOS 提示「先放入『应用程序』文件夹（会自动识别）」并给 `/Applications/GitHub Desktop.app/Contents/Resources` 例子，Windows / Linux 维持原例；macOS 的自动探测只认「应用程序」与「~/应用程序」里的 GitHub Desktop，app 放在桌面等位置识别不到属预期。其二，GUI「选择」对话框的候选下探只有 `<选中>/resources`（Windows 形态），mac 用户最自然的「选中 GitHub Desktop.app 本体」必然落空——补上 `<选中>/Contents/Resources` 一层，选中 .app 即命中。文档口径同步修正：自动探测三平台标准位置都覆盖（AGENTS.md 与 README 原写的「仅支持 Windows」与实现不符——macOS / Linux 候选根自首个提交就实现了）。
+- **`rel-check` 补 gui 产物后缀口径**：非 `.exe` 的 gui 附件（dmg / AppImage / deb）不再被误标 ✗。
+
+### 新增
+
+- **固化发版第 7 步驱动器 `tools/ops/update-e2e.cjs`**：spawn 产物实跑「检查更新 → 下载 → 替换 → 重启」，轮询 stdout 按输出喂 stdin（解决 printf 喂输入撞「readline was closed」的问题），退出码判成败；发版分册同步指向它。
+
+### 变更
+
+- 发版分册补呈现层版本号扫描与伪装旧版验证的步骤说明；README 与 AGENTS 的跨平台口径按实证修正。
+
+### 说明
+
+- 缺陷修复与文档 / 运维工具同步，按语义化分级规则取**小版本** 1.1.1。
+- `package.json` 版本号 1.1.0 → 1.1.1
+
 ## [1.1.0] - 2026-09-21
 
 > 这一版给工具加了「下载并安装本机没有的 GitHub Desktop 版本」的能力（CLI 菜单与 GUI「切换版本」窗口共用入口），网络层改为自动读系统代理（环境变量 → Windows 注册表 → macOS scutil，代理不可用回退直连），GUI 新增「关于」窗口、把「切换版本」改成按钮 + 弹窗列表，并让「检查更新」只管工具自身、字典同步独立成项。另修好按组还原时更新管控模式被静默降级、GUI IPC 三个带参通道把事件对象当业务参数用（K1）两个问题。内部做了几处收敛（cmd 公共逻辑上收 common、拆出 `dict-ai.js`、GUI IPC 处理器按域拆出、CI 探针联网收敛到 `lib.js`），测试补了 verify / patch / restore 编排层契约测试与冒烟带参通道判据。

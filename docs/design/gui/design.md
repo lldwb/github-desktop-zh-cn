@@ -188,7 +188,7 @@ Electron 里 `process.execPath` 是**应用可执行文件**（改名后的 exe�
 ┌── 关于 ───────────────────────────────────────────────────────┐
 │ GitHub Desktop 汉化工具                                       │
 │                                                               │
-│ 版本      v1.1.0                                              │
+│ 版本      v1.1.1                                              │
 │ 项目地址  https://github.com/lldwb/github-desktop-zh-cn       │
 │ 国内镜像  https://gitee.com/lldwb/github-desktop-zh-cn        │
 │ 许可证    GPL-3.0                                             │
