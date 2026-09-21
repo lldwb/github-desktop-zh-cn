@@ -35,14 +35,15 @@ npm run build          # 打包成单文件可执行（dist/ 下，双击即用�
 npm test               # 匹配器单元测试 + 产物命名回归（node --test）
 ```
 
-CI / Release 运维探针（`tools/ops/`，匿名只读、零依赖、仓库地址取 `common.js` 的 `GH_OWNER/GH_REPO`，详见该目录 README）：
+CI / Release 运维探针（`tools/ops/`，匿名只读、零依赖、仓库地址取 `common.js` 的 `GH_OWNER/GH_REPO`，详见该目录 README；`update-e2e.cjs` 例外——不发 API，本地 spawn 产物驱动真更新）：
 
 ```bash
 node tools/ops/ci-status.cjs                 # 最近 CI 运行概览
 node tools/ops/job-timing.cjs <runId> [名字] # 某 job 步骤耗时（定位失败步）
 node tools/ops/wait-run.cjs <runId>          # 轮询运行直到结束
 node tools/ops/release-detail.cjs <tag>      # Release 署名 / 附件上传者 / 时间戳
-node tools/ops/rel-check.cjs [tag...]        # 核对 cli 产物附件名（只认 cli 后缀口径，GUI 非 .exe 产物会误标 ✗；GUI 命名以 CI 的 check-gui-dist 为准）
+node tools/ops/rel-check.cjs [tag...]        # 核对附件名是否符合 cli / gui 命名规范（两套后缀口径，见发版.md「产物命名」）
+node tools/ops/update-e2e.cjs <产物exe> <bundle.cjs> [分钟] # 发版第 7 步驱动器：spawn 产物实跑「检查更新→下载→替换→重启」，按输出喂 stdin
 node tools/ops/wf-lint.cjs [workflow]        # workflow 体检（run 块 bash -n + YAML 禁忌）
 ```
 
