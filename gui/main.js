@@ -25,6 +25,9 @@ const APP_TITLE = 'GitHub Desktop - 汉化工具';
 // ipcMain → scripts 的完整链路）并核对界面骨架，结果打成一行 SMOKE_OK 输出后 exit 0；任一步
 // 失败或超时打 SMOKE_FAIL 并 exit 1。判据刻意不含「字典表格有多少行」——CI 上没有 GitHub
 // Desktop，行数必为 0，那是环境差异不是产物缺陷（行数照打，供本地对照）。
+// 判据里另有一条**带参通道的实参形态**（`openUrl`）：ipcMain.handle 的 listener 签名是
+// (event, ...args)，包装层漏剥 event 时，带参处理器收到的第一个业务参数就是那个事件对象——
+// 这是那次缺陷（K1）的回归护栏，机制见下面 handle() 的注释。
 // CI 的四个 runner 都没有 GPU，正好打在「删掉软渲染组件后还有没有回退路径」这条风险链上，
 // 所以输出里带上 GPU 合成 / WebGL / Vulkan 状态，供裁剪前后对照（见 .github/workflows/build.yml
 // 的冒烟步骤与 build/after-pack.js 的裁剪清单）。
@@ -80,6 +83,20 @@ async function runSmokeTest(win) {
       if (!state || typeof state !== 'object') return { error: 'IPC 返回值不是对象' };
       if (typeof state.dataRoot !== 'string' || !state.dataRoot) return { error: 'IPC 未返回 dataRoot' };
 
+      // 带参通道的实参形态（K1 回归判据）：走一次真实带参往返——openUrl 的白名单外键会把
+      // 「收到的那个值」原样回填进 error 文案，故哨兵串进去、必须哨兵串回来；包装层若漏剥
+      // event，回显就成了那个对象的字符串形式，断言随即失败。只认回显里有没有哨兵、不认整句
+      // 措辞：将来改这句报错文案不会让护栏误报（回显里没哨兵才是真回归）。
+      let argShape = false;
+      let argEcho = null;
+      try {
+        const probe = await window.api.openUrl('__smoke-arg-probe__');
+        argEcho = probe && probe.error;
+        argShape = typeof argEcho === 'string' && argEcho.includes('__smoke-arg-probe__');
+      } catch (e) {
+        return { error: '带参 IPC 调用失败：' + e.message };
+      }
+
       // 两条界面链路各走一遍。都不依赖「本机装没装 GitHub Desktop」，CI 上同样成立：
       // ① 切到「翻译提示词」标签页要能经 IPC 拿到文本（展示的就是 dict-prompt.js 那份）；
       // ② 「关于」点了要开。
@@ -121,6 +138,8 @@ async function runSmokeTest(win) {
         promptOk,
         aboutOk,
         switchOk,
+        argShape,
+        argEcho,
         rows: document.querySelectorAll('#dict-body tr').length,
         status: bar().textContent.trim().replace(/\\s+/g, ' ').slice(0, 60),
         toolVersion: state.toolVersion,
@@ -139,13 +158,14 @@ async function runSmokeTest(win) {
     if (!r.promptOk) throw new Error('「翻译提示词」标签页没有取到提示词');
     if (!r.aboutOk) throw new Error('「关于」窗口没能打开');
     if (!r.switchOk) throw new Error('「切换版本」窗口没能打开');
+    if (!r.argShape) throw new Error(`带参通道把事件对象当业务参数传给了处理器：openUrl 回显 ${JSON.stringify(r.argEcho)}`);
 
     const gpu = app.getGPUFeatureStatus() || {};
     smokeOut(
       `SMOKE_OK platform=${process.platform} arch=${process.arch} window=${w}x${h} buttons=${r.buttons} tabs=${r.tabs}` +
         ` prompt=true about=true switch=true versionItems=${r.versionItems} downloadItems=${r.downloadItems}` +
         (r.downloadHint ? ` downloadHint="${r.downloadHint}"` : '') +
-        ` rows=${r.rows} ipc=true toolVersion=${r.toolVersion}` +
+        ` rows=${r.rows} ipc=true argShape=${r.argShape} toolVersion=${r.toolVersion}` +
         ` gpu_compositing=${gpu.gpu_compositing || '?'} webgl=${gpu.webgl || '?'} vulkan=${gpu.vulkan || '?'}` +
         ` dataRoot="${r.dataRoot}" status="${r.status}"`
     );
