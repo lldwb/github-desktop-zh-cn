@@ -5,6 +5,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const vm = require('vm');
+const { execFileSync } = require('child_process');
 
 const REPO_ROOT = path.resolve(__dirname, '..');
 
@@ -159,6 +160,27 @@ function parseVersion(v) {
   return { raw: v, major: +m[1], minor: +m[2], patch: +m[3] };
 }
 
+// macOS 上经 Spotlight 按官方 bundle id 动态发现 GitHub Desktop.app——app 放在任意位置
+// （桌面 / 下载 / 自定义目录）都能自动识别，不必先挪进「应用程序」。实测有用户把 app
+// 放在桌面子目录里，标准位置探测不到。mdfind 缺失、Spotlight 被禁用或超时都静默跳过：
+// 定位退回标准位置候选，手动 --path 仍然可用。不缓存结果——GUI 每次刷新都要能发现新装的应用。
+function macSpotlightResourcesDirs() {
+  const dirs = [];
+  try {
+    // 官方 bundle id 固定（com.github.GitHubClient），改名 / 挪位置都不影响命中；
+    // 本工具 GUI 产物的 appId 是 com.lldwb.github-desktop-zh-cn，不会被误认成 GitHub Desktop。
+    const out = execFileSync('mdfind', ["kMDItemCFBundleIdentifier == 'com.github.GitHubClient'"], {
+      timeout: 5000,
+      encoding: 'utf8',
+    });
+    for (const line of out.split('\n')) {
+      const app = line.trim();
+      if (app) dirs.push(path.join(app, 'Contents', 'Resources'));
+    }
+  } catch { /* 见函数头：失败不算错误，走标准位置兜底 */ }
+  return dirs;
+}
+
 // 候选安装根目录（按平台）
 function candidateRoots() {
   const roots = [];
@@ -166,8 +188,16 @@ function candidateRoots() {
     const local = process.env.LOCALAPPDATA || path.join(os.homedir(), 'AppData', 'Local');
     roots.push(path.join(local, 'GitHubDesktop'));
   } else if (process.platform === 'darwin') {
-    roots.push('/Applications/GitHub Desktop.app/Contents/Resources');
-    roots.push(path.join(os.homedir(), 'Applications', 'GitHub Desktop.app', 'Contents', 'Resources'));
+    // mdfind 会把标准位置里的那份再报一遍，按 includes 去重；标准位置排前面，
+    // 多份并存时优先用「应用程序」里的正式安装。
+    const candidates = [
+      '/Applications/GitHub Desktop.app/Contents/Resources',
+      path.join(os.homedir(), 'Applications', 'GitHub Desktop.app', 'Contents', 'Resources'),
+      ...macSpotlightResourcesDirs(),
+    ];
+    for (const dir of candidates) {
+      if (!roots.includes(dir)) roots.push(dir);
+    }
   } else {
     roots.push('/usr/lib/github-desktop/resources');
     roots.push('/opt/GitHubDesktop/resources');

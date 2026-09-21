@@ -207,7 +207,7 @@ GUI 与命令行是**同一套脚本**的两种界面——定位 / 替换 / 备
 
 Windows 下会自动探测 `%LOCALAPPDATA%\GitHubDesktop` 下的**最新版本**目录。装了多个版本时（官方升级后旧的 `app-<版本>` 目录通常还留着），用菜单 `4)` 或 GUI 的「切换版本」切过去（CLI 的列表默认只列有字典的版本，其余版本用 `0)` 手动粘路径）。
 
-macOS / Linux 或自定义安装位置：选 `4) 安装位置 / 切换版本`，把 `resources` 目录路径粘进去（也可直接拖拽文件夹）。指定过一次会被记住。
+macOS 下会自动探测「应用程序」里的 GitHub Desktop，并经 Spotlight 按官方应用标识发现**放在任意位置**的副本（桌面 / 下载 / 自定义目录都行，不必先挪进「应用程序」）。Linux 或探测不到时（如 Spotlight 被禁用）：选 `4) 安装位置 / 切换版本`，把 `resources` 目录路径粘进去（也可直接拖拽文件夹）。指定过一次会被记住。
 
 - macOS 例：`/Applications/GitHub Desktop.app/Contents/Resources`
 - Linux 例：`/usr/lib/github-desktop/resources`
@@ -269,7 +269,7 @@ npm run scan           # 自查还有哪些界面文案没翻译（输出待补�
 - `patch` 前建议先 `patch --dry-run` 预览命中统计（不写盘）；
 - 替换前已自动备份：恢复官方版 = `npm run restore`（等价于把 `tmp/backup/<版本>/` 下的 `main.js` / `renderer.js` 复制回 `resources/app/`）；
 - `patch` 是**原地替换**：删掉或改掉字典条目后不会自动从产物里退出，必须先 `npm run restore` 再 `npm run patch` 重打；
-- 自动探测覆盖三平台的标准安装位置（Windows `%LOCALAPPDATA%\GitHubDesktop`、macOS `/Applications/GitHub Desktop.app`——访达里右键 → 显示包内容 → `Contents/Resources`、Linux `/usr/lib/github-desktop` 等）；非标准位置用 `--path <resources目录>` 显式指定（`node scripts/cmd/locate.js --path /path/to/resources`）；
+- 自动探测覆盖三平台的标准安装位置（Windows `%LOCALAPPDATA%\GitHubDesktop`、macOS `/Applications/GitHub Desktop.app` 等，macOS 另经 Spotlight 按官方应用标识发现放在任意位置的 GitHub Desktop.app、Linux `/usr/lib/github-desktop` 等）；非标准位置用 `--path <resources目录>` 显式指定（`node scripts/cmd/locate.js --path /path/to/resources`）；
 - 官方更新覆盖汉化后，用对应新版本的字典重新执行 `locate` + `patch` 即可。
 
 自己构建单文件产物：`npm run build`（产物在 `dist/` 下，双击即用；跨平台构建方式见 [docs/打包与分发.md](docs/打包与分发.md)）。图形界面版见上面的「方式一」。
