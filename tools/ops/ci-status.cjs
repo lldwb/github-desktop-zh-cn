@@ -16,7 +16,7 @@ const R = '/repos/' + GH_OWNER + '/' + GH_REPO;
       console.log(`   [job] ${j.name} ${j.status}/${j.conclusion || '-'} 步骤 ${done}/${(j.steps || []).length}${bad.length ? ' 失败：' + bad.join(' / ') : ''}`);
       if (j.conclusion === 'failure') {
         const ann = await getJson(`${R}/check-runs/${j.id}/annotations`);
-        for (const a of ann || []) console.log(`     [${a.annotation_level}] ${String(a.message).slice(0, 240)}`);
+        for (const a of Array.isArray(ann) ? ann : []) console.log(`     [${a.annotation_level}] ${String(a.message).slice(0, 240)}`);
       }
     }
   }
