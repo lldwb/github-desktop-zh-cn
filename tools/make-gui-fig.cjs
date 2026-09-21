@@ -14,6 +14,7 @@
 'use strict';
 const fs = require('fs');
 const path = require('path');
+const common = require('../scripts/common.js');
 
 const ROOT = path.resolve(__dirname, '..');
 
@@ -81,12 +82,16 @@ const switchLines = [
   '  3.6.0  218 MB',
 ];
 
+// 地址取自 common.repoUrls()——与 GUI「关于」窗口（gui/ipc/misc.js）展示的是同一份，
+// 别在这里再写一份硬编码（换仓库时图会与界面不一致）。
+const URLS = common.repoUrls();
+
 const aboutLines = [
   'GitHub Desktop 汉化工具',
   '',
   '版本      v1.0.0',
-  '项目地址  https://github.com/lldwb/github-desktop-zh-cn',
-  '国内镜像  https://gitee.com/lldwb/github-desktop-zh-cn',
+  `项目地址  ${URLS.repo}`,
+  `国内镜像  ${URLS.mirror}`,
   '许可证    GPL-3.0',
   '数据目录  D:\\工具',
 ];
