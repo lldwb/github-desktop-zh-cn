@@ -92,13 +92,16 @@ github-desktop-zh-cn/
 │   ├── bundle.js           # 零依赖 CJS 单文件打包器
 │   ├── changelog.js        # 从 CHANGELOG.md 提取指定版本段落（发版用）
 │   ├── check-gui-dist.js   # GUI 产物静态自检（包结构 / 内置字典 / Windows 子系统），CI 与本地共用
+│   ├── make-gui-fig.cjs    # 生成 / 刷新 design.md 的界面示意块（定宽文本图按显示宽度对齐）
 │   └── ops/                # CI / Release 运维探针（匿名只读、参数化、自包含；lib.js 为本目录唯一联网处）
 ├── .npmrc                  # 构建期镜像（Electron 与 electron-builder 二进制走 npmmirror）
 ├── test/                   # 单元测试（npm test）：目录镜像 scripts/
+│   ├── cmd/                # CLI 命令契约测试（patch / restore / verify 的输入 → 副作用 / 退出码）
 │   ├── common/             # 匹配引擎与逆向还原
 │   ├── dict/               # 字典工具链
 │   ├── inject/             # 注入块
 │   ├── fixtures/           # 夹具约定与清理助手
+│   ├── tools/              # 工具回归（check-naming：cli / gui 产物命名下的资产挑选）
 │   └── update.test.js      # 自更新（镜像 scripts/ 顶层）
 └── docs/                   # 文档
     ├── 打包与分发.md        # 分发给普通用户：用法、构建、跨平台、常见问题
