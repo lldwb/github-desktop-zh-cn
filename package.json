@@ -1,6 +1,6 @@
 {
   "name": "github-desktop-zh-cn",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "GitHub Desktop 中文汉化补丁工具（字典驱动）：定位安装目录，按 JSON 语言字典替换 resources/app 下 main.js / renderer.js 中的界面文本",
   "license": "GPL-3.0",
   "author": "lldwb",

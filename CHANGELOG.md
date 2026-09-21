@@ -1,5 +1,32 @@
 # Changelog
 
+## [1.1.0] - 2026-09-21
+
+> 这一版给工具加了「下载并安装本机没有的 GitHub Desktop 版本」的能力（CLI 菜单与 GUI「切换版本」窗口共用入口），网络层改为自动读系统代理（环境变量 → Windows 注册表 → macOS scutil，代理不可用回退直连），GUI 新增「关于」窗口、把「切换版本」改成按钮 + 弹窗列表，并让「检查更新」只管工具自身、字典同步独立成项。另修好按组还原时更新管控模式被静默降级、GUI IPC 三个带参通道把事件对象当业务参数用（K1）两个问题。内部做了几处收敛（cmd 公共逻辑上收 common、拆出 `dict-ai.js`、GUI IPC 处理器按域拆出、CI 探针联网收敛到 `lib.js`），测试补了 verify / patch / restore 编排层契约测试与冒烟带参通道判据。
+
+### 新增
+
+- **下载并安装本机没有的 GitHub Desktop 版本**（`scripts/cmd/install-version.js`，CLI 菜单「安装位置 / 切换版本」下新增 `d)` 入口，GUI「切换版本」窗口共用同一入口）：取官方 nupkg → 校验 sha256 → 解压 `lib/net45/*` → 铺到 `<安装根>/app-<版本>/`，装完即切过去。列表只列「有汉化字典、本机未装」的版本，且只在用户明确选 `d)` 时才联网取——进菜单这个动作本身不该等一次网络往返。**不跑官方 Setup.exe**——那是 Squirrel 升级语义、会替换现有版本，与本工具「多版本并存」的模型冲突；解压出来的目录与官方安装逐项同形（实测对照 `app-3.6.6`）。**只支持 Windows**（官方不发 Linux 产物；macOS 的 `.app` 覆盖是另一套）。失败不留半个目录：先铺 `app-<版本>.part`、必需文件齐了才改名。`--from <本地包>` 是下载不通时的降级路径。底座是 `release-assets.js` 扩展出的 `listVersions()`（列官方有产物的正式版）与 `extractLocal()`（把下到本地的整包按前缀铺开），zip 解析仍是同一套、不另写一份。
+- **自动读系统代理**（`scripts/net.js`）：`openStream()` 是全仓唯一的发请求入口，现在按「环境变量（`HTTPS_PROXY` 等，`NO_PROXY` 排除）→ Windows 注册表 → macOS `scutil`」的顺序读系统代理，https 走自实现的 CONNECT 隧道（`tunnelAgent`），**代理不可用时回退直连并记住**（记一次、在 stderr 说一次）——一个配坏的代理不该让工具彻底断网。这是「直连 15 KB/s vs 走代理 593 KB/s」的本机实测差距背后的自动化解法：之前要手动设环境变量，现在装了系统代理的机器开箱即用。
+- **GUI「关于」窗口与「切换版本」弹窗**：工具栏新增「关于」（工具版本 / 项目地址 / 国内镜像 / 许可证 / 数据目录 + 「检查更新」「同步字典」两个动作）；「切换版本」改成按钮 + 弹窗列表选择本机已安装版本。与 CLI 共用 `common.setTargetVersion()`，切换后默认注入「完全禁止自动更新」；「检查更新」只管工具自身、字典同步独立成 `syncDict`（CLI / GUI 两处语义一致）；`openUrl` 只收白名单键（`repo` / `mirror`）。「翻译提示词」标签页展示的 `dict-prompt.js` 独立成模块、成为唯一来源——GUI 展示与 `dict-auto` 调模型共用同一份。
+
+### 变更
+
+- **按组还原更新管控按记账模式重放**：`restore --group` 只撤其他组时，`updateControl` 组此前被固定按 `guard` 模式重放——以「完全禁止自动更新」（`--block-update`）打的补丁，撤一组无关的组后「完全禁止」会静默变回「没有字典就不更新」。现在 `setPatchGroups` 把实际注入模式随组记账（`updateControlMode`），重放改读 `getUpdateControlMode`，老账（无模式字段）按 `guard` 兜底、与原行为一致。记账往返 7 场景实测，`npm test` 142 用例全绿。
+- **重构收敛**：cmd 公共逻辑上收 `common.js`、拆开 `patch` / `verify` 的长函数；`dict-ai.js` 独立成 AI 协议适配层、`dict-auto.js` 只留字典领域逻辑；GUI IPC 处理器按域拆到 `gui/ipc/`（`patching` / `versions` / `updates` / `misc`）；CI 探针联网收敛到 `tools/ops/lib.js`，产物命名回归并入 `npm test`；收口对抗性审查发现的死代码与规范问题。
+- **文档重组**：`AGENTS.md` 拆出三份按需加载分册（`docs/agents/`：发版 / 翻译维护 / 已知坑），主文件只留每次都要遵守的规则；README 补充技术栈说明、优化目录与贡献指引、菜单示例去掉会随平台变动的字典条数；`docs/design/gui/design.md` 补「切换版本」弹窗示意（界面图生成脚本 `tools/make-gui-fig.cjs` 固化为仓库工具，按显示宽度对齐、幂等）；已知坑补条目（字典条数口径 / 冒烟等待窗口 / spawn 双通道 / CRLF 纪律等）。
+
+### 修复
+
+- **GUI IPC 包装剥离 invoke 事件对象，修复三个带参通道**（`gui/main.js`）：`ipcMain.handle` 的 listener 签名是 `(event, ...args)`，包装层未剥首参时带参处理器会把事件对象当业务参数用（实测 `openUrl` 回显「未知的地址：[object Object]」），而无参通道完全看不出来。现在包装层剥掉事件对象；`--smoke-test` 补「哨兵进去、哨兵回来」的带参通道实参形态判据作回归护栏（只认回显里有没有那个哨兵串，改报错文案不会误报）。
+- **自更新 / 重启接住 spawn 的同步抛**：Windows 上「文件在、内容却不是有效可执行体」时 `spawn` 在调用处**同步**抛（`spawn UNKNOWN` / `EFTYPE`），此前只在异步 `error` 事件上兜——起不来时 GUI 把「安装包已下到哪、请手动打开」这条唯一能照做的补救信息抹掉、报成「检查工具版本失败」。三处调用点按「`try { spawn } catch {}` + `child.on('error', …)`」两件套补上。
+- **`install-version` 未知参数改为报错**，与其他 cmd 脚本一致；`rel-check` 缺省 tag 改取最新 Release；`ci-status` 对限流等非数组响应恢复静默跳过；界面图生成脚本的仓库地址改取 `common.js` SSOT；删除 `restart.launch` 的无调用方导出。
+
+### 说明
+
+- 本次是**工具链与界面的中幅扩展**（新增脚本 + GUI 新窗口 + 在线能力增强），按语义化分级规则取**中版本** 1.1.0。
+- `package.json` 版本号 1.0.0 → 1.1.0
+
 ## [1.0.0] - 2026-09-20
 
 > 把整个仓库的文件结构按职责重排了一遍：`scripts/` 分 `cmd` / `dict` / `inject` 三层，构建与发布工具收进新的 `tools/`，`test/` 按被测模块归目录——**对外行为一处未变**（npm 命令、CLI 参数、模块导出面、GUI 的 IPC 契约逐项冻结后核对无意外）。字典侧清掉 36 条「不是界面文案」的条目（2154 → 2118）：被当成文案收进来的 CSS 类名会打掉 `renderer.css` 的规则、机器标识译掉会改行为，另清了 29 条早被整模板键接管的死键、恢复 `patch` 告警的信号价值。还修好一个**从 v0.1.1 起就没装成过**的缺陷——自更新下的是 GitHub 的 API 元数据 JSON 而不是产物（CLI 侧被文件头护栏拦下，GUI 侧会把 JSON 当安装包启动），并给下载物补了一道 `SHA256SUMS` 校验。
