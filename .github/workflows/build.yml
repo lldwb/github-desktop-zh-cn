@@ -125,45 +125,10 @@ jobs:
         with:
           path: ${{ runner.temp }}/node-small-icu
           key: node-small-icu-${{ matrix.os }}-${{ env.NODE_BASE_VERSION }}
-      - name: 自编译 small-icu node 基底（mac / Linux）
-        if: runner.os != 'Windows'
-        shell: bash
-        run: |
-          set -e
-          out="$RUNNER_TEMP/node-small-icu/bin"
-          if [ -x "$out/node" ]; then
-            echo "命中缓存：$out/node（$("$out/node" --version)，small-icu）"
-            "$out/node" -p "process.config.variables.node_use_system_icu ? '有系统 ICU（编译参数失效！）' : 'small-icu 确认'" || exit 1
-            exit 0
-          fi
-          curl -fsSL "https://nodejs.org/dist/v$NODE_BASE_VERSION/node-v$NODE_BASE_VERSION.tar.xz" -o "$RUNNER_TEMP/node-src.tar.xz"
-          src="$RUNNER_TEMP/node-src"
-          mkdir -p "$src"
-          tar -xJf "$RUNNER_TEMP/node-src.tar.xz" -C "$src" --strip-components=1
-          cd "$src"
-          # macOS x64 专用：新式链接器（Xcode 15 起默认）的产物经 postject 注入后 dyld 报
-          # 「unsupported thread-local, larger than 4GB」起不来（nodejs/node#59553，上游已把
-          # SEA 对 Intel macOS 降为不支持）；官方 node 二进制（老链接器产物）注入无恙，故换
-          # 经典链接器产基底。gyp 的链接命令透传 make 变量 LDFLAGS（LDFLAGS.target ?= $(LDFLAGS)，
-          # node 根 Makefile 不覆盖它），configure.py 不用动。
-          ldflags=""
-          if [ "$RUNNER_OS" = macOS ] && [ "$RUNNER_ARCH" = X64 ]; then
-            if echo 'int main(void){return 0;}' | cc -x c - -Wl,-ld_classic -o "$RUNNER_TEMP/ld-probe" 2>/dev/null; then
-              ldflags="-Wl,-ld_classic"
-              echo "macOS x64：启用经典链接器（-ld_classic）"
-            else
-              echo "::warning::macOS x64：此 runner 的链接器不支持 -ld_classic，按默认链接器继续"
-            fi
-          fi
-          ./configure --with-intl=small-icu
-          LDFLAGS="$ldflags" make -j"$(nproc 2>/dev/null || sysctl -n hw.ncpu)"
-          mkdir -p "$out"
-          cp ./node "$out/node"
-          "$out/node" --version
       # 上游已知问题（nodejs/node#59553）：新式链接器产物经 postject 注入后，dyld 报
       # 「unsupported thread-local, larger than 4GB」起不来，官方已把 SEA 对 Intel macOS
-      # 降为不支持。这里用最小 TLS 程序现场复现并验证候选修复（经典链接器 / strip），
-      # 各情形独立报告、失败不影响构建——只做取证，判据以「构建单文件产物」的自检为准。
+      # 降为不支持。放在基底编译之前跑：两三分钟就拿到候选修复（经典链接器 / strip）的
+      # 现场判定，不被基底编译的成败与时长绑架；只做取证，判据以「构建单文件产物」自检为准。
       - name: SEA 注入诊断（macOS x64）
         if: runner.os == 'macOS' && runner.arch == 'X64'
         shell: bash
@@ -195,6 +160,42 @@ jobs:
             fi
           done
           echo "未注入基线：$(./hello-default)"
+      - name: 自编译 small-icu node 基底（mac / Linux）
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          set -e
+          out="$RUNNER_TEMP/node-small-icu/bin"
+          if [ -x "$out/node" ]; then
+            echo "命中缓存：$out/node（$("$out/node" --version)，small-icu）"
+            "$out/node" -p "process.config.variables.node_use_system_icu ? '有系统 ICU（编译参数失效！）' : 'small-icu 确认'" || exit 1
+            exit 0
+          fi
+          curl -fsSL "https://nodejs.org/dist/v$NODE_BASE_VERSION/node-v$NODE_BASE_VERSION.tar.xz" -o "$RUNNER_TEMP/node-src.tar.xz"
+          src="$RUNNER_TEMP/node-src"
+          mkdir -p "$src"
+          tar -xJf "$RUNNER_TEMP/node-src.tar.xz" -C "$src" --strip-components=1
+          cd "$src"
+          # macOS x64 的 SEA 注入损坏（nodejs/node#59553）原计划用经典链接器产基底：gyp 的
+          # 链接命令透传 make 变量 LDFLAGS，configure.py 不用动。但 2026-09-22 实测带
+          # -Wl,-ld_classic 的 make 在四台不同 worker、同一镜像上三次全数中途静默卡死，
+          # 不带的当天一次通过——先回退默认链接器，路线等「SEA 注入诊断」步判定后再定。
+          # make 套 timeout 看门狗：真卡死时杀掉后增量续编一次（out/Release 里编好的
+          # 目标文件都在，重跑 make 只补剩余的），不再靠人肉发现、取消、重跑。
+          ./configure --with-intl=small-icu
+          jobs="$(nproc 2>/dev/null || sysctl -n hw.ncpu)"
+          if command -v timeout >/dev/null 2>&1; then
+            timeout 6000 make -j"$jobs" || {
+              echo "::warning::make 首次执行超时或失败（疑似 runner 卡死），增量续编一次"
+              sleep 30
+              make -j"$jobs"
+            }
+          else
+            make -j"$jobs"
+          fi
+          mkdir -p "$out"
+          cp ./node "$out/node"
+          "$out/node" --version
       - name: 构建单文件产物
         shell: bash
         run: |
@@ -206,9 +207,9 @@ jobs:
             if npm run build -- --node "$base"; then
               exit 0
             elif [ "$RUNNER_OS" = macOS ] && [ "$RUNNER_ARCH" = X64 ]; then
-              # macOS x64 的 SEA 注入有上游已知损坏（nodejs/node#59553）；经典链接器修复若未
-              # 生效，回退官方 node 保住可用产物（约 110 MB，超 Gitee 上限、仅 GitHub 渠道），
-              # 不让整条流水线红掉
+              # macOS x64 的 SEA 注入有上游已知损坏（nodejs/node#59553）；自编译基底的
+              # 候选修复（经典链接器 / strip）若未落地，回退官方 node 保住可用产物
+              # （约 110 MB，超 Gitee 上限、仅 GitHub 渠道），不让整条流水线红掉
               echo "::warning::自编译基底产物自检失败，回退官方 node 重打（macOS x64 上游 SEA 注入问题，nodejs/node#59553）"
               rm -f dist/*
               npm run build
