@@ -151,7 +151,10 @@ jobs:
           cat > hello.c <<'EOF'
           #include <stdio.h>
           static __thread int t = 7;
-          const char sea_fuse[] = "NODE_SEA_FUSE_fce680ab2cc467b6e072b8b5df1996b2";
+          /* fuse 格式必须是「哨兵串 + ':' + 状态位」：postject 注入前校验冒号与状态位，
+            只埋哨兵串会在「must be ':'」校验上崩（其报错模板还有二级 bug，对 Buffer
+            数字调 charCodeAt，真实报错被 charCodeAt is not a function 掩盖） */
+          const char sea_fuse[] = "NODE_SEA_FUSE_fce680ab2cc467b6e072b8b5df1996b2:0";
           int main(void) { t++; printf("hi %d\n", t); (void)sea_fuse; return 0; }
           EOF
           printf 'dummy\n' > blob
@@ -204,9 +207,12 @@ jobs:
           # LDFLAGS 同样冻）——本条目因此挪到 arm64 机器交叉编译。
           # macOS x64 交叉编译：--dest-cpu=x64 让 configure 走交叉链（clang -arch x86_64，
           # macOS SDK 双架构；V8 的宿主工具如 mksnapshot 由构建系统按 host 编 host 跑——
-          # 官方 universal 产物走的就是这条路）。
+          # 官方 universal 产物走的就是这条路）。--openssl-no-asm 是交叉的硬要求：OpenSSL
+          # 的 x86_64 内联汇编用 GCC 寄存器约束（=a 等 rax 系），只对 x86_64 目标合法，
+          # 交叉时必炸（2026-09-22 实测 20 个 invalid output constraint 后 make Error 2）；
+          # 纯 C 实现对本仓库 CLI 的 https 下载场景无感，体积还略小。
           if [ "${{ matrix.cross-x64 }}" = "true" ]; then
-            ./configure --with-intl=small-icu --dest-cpu=x64
+            ./configure --with-intl=small-icu --dest-cpu=x64 --openssl-no-asm
           else
             ./configure --with-intl=small-icu
           fi
