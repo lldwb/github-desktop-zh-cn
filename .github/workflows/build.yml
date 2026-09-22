@@ -205,13 +205,19 @@ jobs:
           # 上反复尝试无果，2026-09-22 定性：与 -ld_classic 无关，是上游 runner 镜像整机停摆
           #（actions/runner-images#13882：5 次尝试 4 次冻死，四台不同 Worker 同镜像，去掉
           # LDFLAGS 同样冻）——本条目因此挪到 arm64 机器交叉编译。
-          # macOS x64 交叉编译：--dest-cpu=x64 让 configure 走交叉链（clang -arch x86_64，
-          # macOS SDK 双架构；V8 的宿主工具如 mksnapshot 由构建系统按 host 编 host 跑——
-          # 官方 universal 产物走的就是这条路）。--openssl-no-asm 是交叉的硬要求：OpenSSL
-          # 的 x86_64 内联汇编用 GCC 寄存器约束（=a 等 rax 系），只对 x86_64 目标合法，
-          # 交叉时必炸（2026-09-22 实测 20 个 invalid output constraint 后 make Error 2）；
-          # 纯 C 实现对本仓库 CLI 的 https 下载场景无感，体积还略小。
+          # macOS x64 交叉编译：node 的 make 构建在 mac 上从不传 -arch（原生构建靠编译器
+          # 默认 = host 架构），交叉必须把 CC/CXX 连 -arch x86_64 一起钉死——否则编译器按
+          # host 的 arm64 出码而 target 宏仍是 x64：zlib 的 cpu_features.c（node 树里唯一
+          # include <cpuid.h> 的文件）当场 #error（2026-09-23 实测），就算侥幸编完也是
+          # arm64 码冒名 x64 的废品。CC 钉死后 configure 的编译器探针同样报 x64，host_arch
+          # 判成 x64，整个构建退化为「arm64 机器上的原生 x64 构建」：host 工具（mksnapshot
+          # 等）一并是 x64、构建期经 Rosetta 运行（macos-latest 镜像预装，诊断步的 hello
+          # 即靠它跑）。--openssl-no-asm：CC 已带 -arch 时 openssl 的 x86 汇编其实编得过
+          #（此前把 invalid output constraint 误记为交叉硬伤，真因是缺 -arch）；保留
+          # no-asm 是纯 C 实现对本仓库 CLI 的 https 下载场景无感、体积还略小。
           if [ "${{ matrix.cross-x64 }}" = "true" ]; then
+            export CC="clang -arch x86_64"
+            export CXX="clang++ -arch x86_64"
             ./configure --with-intl=small-icu --dest-cpu=x64 --openssl-no-asm
           else
             ./configure --with-intl=small-icu
@@ -232,6 +238,12 @@ jobs:
           mkdir -p "$out"
           cp ./node "$out/node"
           "$out/node" --version
+          # 交叉构建的硬校验：基底必须真是 x64——CC 没钉住时编出来的会是 arm64 码，
+          # 在本机照常运行、名字也错，拖到产物步才炸就晚了
+          if [ "${{ matrix.cross-x64 }}" = "true" ]; then
+            arch="$("$out/node" -p process.arch)"
+            [ "$arch" = "x64" ] || { echo "::error::自编译基底编出来是 $arch，预期 x64"; exit 1; }
+          fi
       - name: 构建单文件产物
         shell: bash
         run: |
