@@ -141,11 +141,60 @@ jobs:
           mkdir -p "$src"
           tar -xJf "$RUNNER_TEMP/node-src.tar.xz" -C "$src" --strip-components=1
           cd "$src"
+          # macOS x64 专用：新式链接器（Xcode 15 起默认）的产物经 postject 注入后 dyld 报
+          # 「unsupported thread-local, larger than 4GB」起不来（nodejs/node#59553，上游已把
+          # SEA 对 Intel macOS 降为不支持）；官方 node 二进制（老链接器产物）注入无恙，故换
+          # 经典链接器产基底。gyp 的链接命令透传 make 变量 LDFLAGS（LDFLAGS.target ?= $(LDFLAGS)，
+          # node 根 Makefile 不覆盖它），configure.py 不用动。
+          ldflags=""
+          if [ "$RUNNER_OS" = macOS ] && [ "$RUNNER_ARCH" = X64 ]; then
+            if echo 'int main(void){return 0;}' | cc -x c - -Wl,-ld_classic -o "$RUNNER_TEMP/ld-probe" 2>/dev/null; then
+              ldflags="-Wl,-ld_classic"
+              echo "macOS x64：启用经典链接器（-ld_classic）"
+            else
+              echo "::warning::macOS x64：此 runner 的链接器不支持 -ld_classic，按默认链接器继续"
+            fi
+          fi
           ./configure --with-intl=small-icu
-          make -j"$(nproc 2>/dev/null || sysctl -n hw.ncpu)"
+          LDFLAGS="$ldflags" make -j"$(nproc 2>/dev/null || sysctl -n hw.ncpu)"
           mkdir -p "$out"
           cp ./node "$out/node"
           "$out/node" --version
+      # 上游已知问题（nodejs/node#59553）：新式链接器产物经 postject 注入后，dyld 报
+      # 「unsupported thread-local, larger than 4GB」起不来，官方已把 SEA 对 Intel macOS
+      # 降为不支持。这里用最小 TLS 程序现场复现并验证候选修复（经典链接器 / strip），
+      # 各情形独立报告、失败不影响构建——只做取证，判据以「构建单文件产物」的自检为准。
+      - name: SEA 注入诊断（macOS x64）
+        if: runner.os == 'macOS' && runner.arch == 'X64'
+        shell: bash
+        run: |
+          set -u
+          d="$RUNNER_TEMP/sea-diag"
+          rm -rf "$d"; mkdir -p "$d"; cd "$d"
+          cat > hello.c <<'EOF'
+          #include <stdio.h>
+          static __thread int t = 7;
+          int main(void) { t++; printf("hi %d\n", t); return 0; }
+          EOF
+          printf 'dummy\n' > blob
+          cc hello.c -o hello-default
+          cp hello-default hello-stripped && strip hello-stripped
+          cc hello.c -Wl,-ld_classic -o hello-classic 2>classic.err || echo "（-ld_classic 不受支持：$(head -c 160 classic.err)）"
+          for b in hello-default hello-stripped hello-classic; do
+            [ -x "$b" ] || continue
+            codesign --remove-signature "$b" 2>/dev/null || true
+            cp "$b" inj
+            npx --yes postject@1.0.0-alpha.6 inj NODE_SEA_BLOB blob \
+              --sentinel-fuse NODE_SEA_FUSE_fce680ab2cc467b6e072b8b5df1996b2 \
+              --macho-segment-name NODE_SEA >/dev/null 2>&1 || { echo "[$b] postject 注入失败"; continue; }
+            codesign --sign - inj 2>/dev/null || true
+            if out="$(./inj 2>&1)"; then
+              echo "[$b] 注入后正常运行：$out"
+            else
+              echo "[$b] 注入后启动失败：$(printf '%s' "$out" | head -1)"
+            fi
+          done
+          echo "未注入基线：$(./hello-default)"
       - name: 构建单文件产物
         shell: bash
         run: |
@@ -154,7 +203,18 @@ jobs:
           base="$RUNNER_TEMP/node-small-icu/bin/node"
           if [ -x "$base" ]; then
             echo "使用 small-icu 自编译基底：$base"
-            npm run build -- --node "$base"
+            if npm run build -- --node "$base"; then
+              exit 0
+            elif [ "$RUNNER_OS" = macOS ] && [ "$RUNNER_ARCH" = X64 ]; then
+              # macOS x64 的 SEA 注入有上游已知损坏（nodejs/node#59553）；经典链接器修复若未
+              # 生效，回退官方 node 保住可用产物（约 110 MB，超 Gitee 上限、仅 GitHub 渠道），
+              # 不让整条流水线红掉
+              echo "::warning::自编译基底产物自检失败，回退官方 node 重打（macOS x64 上游 SEA 注入问题，nodejs/node#59553）"
+              rm -f dist/*
+              npm run build
+            else
+              exit 1
+            fi
           else
             echo "无自编译基底（Windows），使用官方 node"
             npm run build
