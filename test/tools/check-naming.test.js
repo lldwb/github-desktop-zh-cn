@@ -44,17 +44,17 @@ const CASES = [
     wantGui: 'github-desktop-zh-cn-gui-v0.2.0-win32-x64-setup.exe',
   },
   {
-    // macOS 自 v0.3.0 起只出 dmg，不再有 zip 附件
-    title: 'darwin-arm64：cli 认 .bin、gui 认 dmg（dmg 之后不再有 zip 附件）',
+    // macOS 自 v0.3.0 起只出 dmg，不再有 zip 附件；平台词 v1.1.3 起是 macos（darwin 是旧词）
+    title: 'darwin-arm64：cli 认 .bin、gui 认 dmg（macos 平台词，v1.1.3 起）',
     platform: 'darwin',
     arch: 'arm64',
     names: [
-      'github-desktop-zh-cn-gui-v0.2.0-darwin-arm64.dmg',
-      'github-desktop-zh-cn-cli-v0.2.0-darwin-arm64.bin',
+      'github-desktop-zh-cn-gui-v0.2.0-macos-arm64.dmg',
+      'github-desktop-zh-cn-cli-v0.2.0-macos-arm64.bin',
       'SHA256SUMS',
     ],
-    want: 'github-desktop-zh-cn-cli-v0.2.0-darwin-arm64.bin',
-    wantGui: 'github-desktop-zh-cn-gui-v0.2.0-darwin-arm64.dmg',
+    want: 'github-desktop-zh-cn-cli-v0.2.0-macos-arm64.bin',
+    wantGui: 'github-desktop-zh-cn-gui-v0.2.0-macos-arm64.dmg',
   },
   {
     // 反向用例：旧版本留下的 mac zip 附件（若还在某个老 Release 里）也不能被挑中——
@@ -71,9 +71,38 @@ const CASES = [
     title: 'darwin-arm64：v0.1.x 的无后缀老 cli 产物仍挑得中',
     platform: 'darwin',
     arch: 'arm64',
-    names: ['github-desktop-zh-cn-gui-v0.2.0-darwin-arm64.dmg', 'github-desktop-zh-cn-v0.1.1-darwin-arm64'],
+    names: ['github-desktop-zh-cn-gui-v0.2.0-macos-arm64.dmg', 'github-desktop-zh-cn-v0.1.1-darwin-arm64'],
     want: 'github-desktop-zh-cn-v0.1.1-darwin-arm64',
-    wantGui: 'github-desktop-zh-cn-gui-v0.2.0-darwin-arm64.dmg',
+    wantGui: 'github-desktop-zh-cn-gui-v0.2.0-macos-arm64.dmg',
+  },
+  {
+    // 平台词过渡：v1.1.2 及更早装出去的工具只会发 darwin 词的附件名匹配——过渡期 Release
+    // 同一份产物挂 macos / darwin 两个名字，macos 在前优先（见 build.yml 的 TRANSITION_DARWIN_ALIASES）
+    title: 'darwin-x64：过渡期 macos / darwin 双名字并存时只挑 macos 那份',
+    platform: 'darwin',
+    arch: 'x64',
+    names: [
+      'github-desktop-zh-cn-gui-v1.1.3-darwin-x64.dmg',
+      'github-desktop-zh-cn-gui-v1.1.3-macos-x64.dmg',
+      'github-desktop-zh-cn-cli-v1.1.3-darwin-x64.bin',
+      'github-desktop-zh-cn-cli-v1.1.3-macos-x64.bin',
+      'SHA256SUMS',
+    ],
+    want: 'github-desktop-zh-cn-cli-v1.1.3-macos-x64.bin',
+    wantGui: 'github-desktop-zh-cn-gui-v1.1.3-macos-x64.dmg',
+  },
+  {
+    // 反向兜底：过渡结束后 Release 上只剩 darwin 名的老版本，新工具仍要挑得中
+    title: 'darwin-arm64：只剩 darwin 旧词的 Release 也能挑中（兜底旧版本）',
+    platform: 'darwin',
+    arch: 'arm64',
+    names: [
+      'github-desktop-zh-cn-gui-v1.1.2-darwin-arm64.dmg',
+      'github-desktop-zh-cn-cli-v1.1.2-darwin-arm64.bin',
+      'SHA256SUMS',
+    ],
+    want: 'github-desktop-zh-cn-cli-v1.1.2-darwin-arm64.bin',
+    wantGui: 'github-desktop-zh-cn-gui-v1.1.2-darwin-arm64.dmg',
   },
   {
     // Linux 的 GUI 产物用 x86_64 / amd64 而不是 Node 的 x64——三套写法都得认，

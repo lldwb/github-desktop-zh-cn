@@ -1,5 +1,5 @@
 // build.js — 打包成单文件可执行（Node SEA：Single Executable Application）
-// 用法：node tools/build.js [--out <目录>] [--name <文件名>]
+// 用法：node tools/build.js [--out <目录>] [--name <文件名>] [--node <node 可执行文件>]
 //
 // 流程：bundle.js 合成单文件 → 生成 sea-config（内嵌全部字典）→ node 生成 blob
 //       → 复制当前 node 可执行文件 → postject 注入 → 产出 dist/ 下的单文件。
@@ -25,16 +25,22 @@ const SENTINEL_FUSE = 'NODE_SEA_FUSE_fce680ab2cc467b6e072b8b5df1996b2';
 const POSTJECT_VERSION = '1.0.0-alpha.6';
 
 function parseArgs(argv) {
-  const args = { outDir: path.join(REPO_ROOT, 'dist'), name: null };
+  const args = { outDir: path.join(REPO_ROOT, 'dist'), name: null, node: null };
   for (let i = 2; i < argv.length; i++) {
     const a = argv[i];
     if (a === '--out') args.outDir = path.resolve(argv[++i]);
     else if (a === '--name') args.name = argv[++i];
+    else if (a === '--node') args.node = path.resolve(argv[++i]);
     else if (a === '--help' || a === '-h') args.help = true;
     else throw new Error(`未知参数：${a}（--help 查看用法）`);
   }
   return args;
 }
+
+// 产物名里的平台词：mac 产物写 macos（使用者一眼看出是给什么系统的），Windows / Linux
+// 直接用 Node 词。**只影响产物文件名**——文件头 / 签名 / 注入等运行时判定仍用 process.platform
+//（内核词 darwin），两者是两回事。
+const PLATFORM_WORD = { darwin: 'macos' }[process.platform] || process.platform;
 
 function printHelp() {
   console.log(`用法：node tools/build.js [选项]
@@ -42,8 +48,10 @@ function printHelp() {
 把工具打包成单文件可执行（产物在 dist/ 下，双击即用，无需安装 Node）。
 
 选项：
-  --out <目录>     产物输出目录（默认 dist/）
+  --out <目录>      产物输出目录（默认 dist/）
   --name <文件名>   自定义产物文件名（默认 github-desktop-zh-cn-cli-v<版本>-<平台>-<架构>[.exe|.bin]）
+  --node <可执行文件> 指定作为产物基底的 node（默认当前 node；CI 上传 small-icu 自编译基底以压缩体积，
+                    官方 node 的 ICU 数据约 28 MB，见 docs/打包与分发.md）
   -h, --help       显示本帮助`);
 }
 
@@ -170,17 +178,19 @@ function main() {
     );
     console.log(`2/5 已生成 SEA 配置（内嵌字典 ${Object.keys(assets).length} 份）`);
 
-    // 3. 生成 blob
-    execFileSync(process.execPath, ['--experimental-sea-config', configFile], { stdio: 'inherit' });
+    // 3. 生成 blob（基底若非当前 node，用 --node 指定的那份来跑——blob 与最终产物必须是同一个 node）
+    const baseNode = args.node || process.execPath;
+    execFileSync(baseNode, ['--experimental-sea-config', configFile], { stdio: 'inherit' });
 
     // 4. 复制 node 可执行文件作为产物基底
     // 产物名带通道词：单文件可执行是 cli（图形界面是 gui，由 electron-builder 出，见 electron-builder.yml）。
     // macOS / Linux 也带后缀（.bin）——不带后缀的附件在 Release 页面里看不出是什么文件；
-    // scripts/update.js 的自更新按「-平台-架构 + 平台后缀」匹配附件（.exe / .bin）。
+    // scripts/update.js 的自更新按「-平台词-架构 + 平台后缀」匹配附件（.exe / .bin）。
+    // 平台词：macos / win32 / linux（见 PLATFORM_WORD），不带 darwin 这种内核词。
     const ext = process.platform === 'win32' ? '.exe' : '.bin';
-    const name = args.name || `${PKG.name}-cli-v${PKG.version}-${process.platform}-${process.arch}${ext}`;
+    const name = args.name || `${PKG.name}-cli-v${PKG.version}-${PLATFORM_WORD}-${process.arch}${ext}`;
     const outFile = path.join(args.outDir, name);
-    fs.copyFileSync(process.execPath, outFile);
+    fs.copyFileSync(baseNode, outFile);
     fs.chmodSync(outFile, 0o755);
     console.log(`3/5 已复制运行时：${path.relative(REPO_ROOT, outFile)}`);
 

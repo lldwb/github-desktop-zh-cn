@@ -17,20 +17,30 @@ const path = require('node:path');
 const net = require('../scripts/net.js');
 const { pickAsset, pickGuiAsset, pickSums, parseSums, verifySha256 } = require('../scripts/update.js');
 
-// v0.4.0 发布页的实际命名（cli / gui 两套，见 `docs/agents/发版.md` 的「产物命名」）
+// v1.1.3 发布页的命名（cli / gui 两套，见 `docs/agents/发版.md` 的「产物命名」）：
+// 平台词 v1.1.3 起 mac 侧用 macos（darwin 是 v1.1.2 及更早的旧词，工具要能从两边都更新）
 const CLI = [
-  'github-desktop-zh-cn-cli-v0.4.0-darwin-arm64.bin',
-  'github-desktop-zh-cn-cli-v0.4.0-darwin-x64.bin',
+  'github-desktop-zh-cn-cli-v0.4.0-macos-arm64.bin',
+  'github-desktop-zh-cn-cli-v0.4.0-macos-x64.bin',
   'github-desktop-zh-cn-cli-v0.4.0-linux-x64.bin',
   'github-desktop-zh-cn-cli-v0.4.0-win32-x64.exe',
 ];
 const GUI = [
-  'github-desktop-zh-cn-gui-v0.4.0-darwin-arm64.dmg',
-  'github-desktop-zh-cn-gui-v0.4.0-darwin-x64.dmg',
+  'github-desktop-zh-cn-gui-v0.4.0-macos-arm64.dmg',
+  'github-desktop-zh-cn-gui-v0.4.0-macos-x64.dmg',
   'github-desktop-zh-cn-gui-v0.4.0-linux-amd64.deb',
   'github-desktop-zh-cn-gui-v0.4.0-linux-x86_64.AppImage',
   'github-desktop-zh-cn-gui-v0.4.0-win32-x64-setup.exe',
   'github-desktop-zh-cn-gui-v0.4.0-win32-x64.7z', // 免安装包：随 Release 分发，但不走自动更新
+];
+// 过渡期 Release 的 mac 附件是双名字（macos + darwin 各一份，见 build.yml 的 TRANSITION_DARWIN_ALIASES）
+const CLI_LEGACY_DARWIN = [
+  'github-desktop-zh-cn-cli-v0.4.0-darwin-arm64.bin',
+  'github-desktop-zh-cn-cli-v0.4.0-darwin-x64.bin',
+];
+const GUI_LEGACY_DARWIN = [
+  'github-desktop-zh-cn-gui-v0.4.0-darwin-arm64.dmg',
+  'github-desktop-zh-cn-gui-v0.4.0-darwin-x64.dmg',
 ];
 const OTHER = ['SHA256SUMS'];
 
@@ -38,13 +48,11 @@ const DIRECT = (name) => `https://github.com/lldwb/github-desktop-zh-cn/releases
 const API = (name) => `https://api.github.com/repos/lldwb/github-desktop-zh-cn/releases/assets/${name.length}${name.charCodeAt(0)}`;
 
 // GitHub 的资产对象：两个地址都在（url 是 API 端点，browser_download_url 是直链）
+function asGitHubAsset(name) {
+  return { name, size: 12345, url: API(name), browser_download_url: DIRECT(name) };
+}
 function githubAssets() {
-  return [...CLI, ...GUI, ...OTHER].map((name) => ({
-    name,
-    size: 12345,
-    url: API(name),
-    browser_download_url: DIRECT(name),
-  }));
+  return [...CLI, ...GUI, ...OTHER].map(asGitHubAsset);
 }
 
 // Gitee 的资产对象：实测只有 name 与 browser_download_url（连 url 都没有），另有自动生成的源码包
@@ -116,6 +124,26 @@ test('pickGuiAsset：只挑能被直接装起来的那种（win32 是 -setup.exe
   const linux = on('linux', 'x64', () => pickGuiAsset(githubAssets()));
   assert.ok([GUI[2], GUI[3]].includes(linux.name), `linux-x64 挑的不是安装包：${linux.name}`);
   assert.strictEqual(linux.url, DIRECT(linux.name));
+});
+
+test('mac 平台词：新 Release 只有 macos 名时挑得中，macos 与 darwin 并存时优先 macos', () => {
+  // 过渡期：同一份产物挂 macos / darwin 两个名字——只挑 macos 那份，别拿到重复的 darwin 拷贝
+  const both = on('darwin', 'arm64', () => pickAsset([...CLI_LEGACY_DARWIN, ...CLI, ...GUI_LEGACY_DARWIN, ...GUI].map(asGitHubAsset)));
+  assert.strictEqual(both.name, CLI[0]);
+  const bothGui = on('darwin', 'arm64', () => pickGuiAsset([...GUI_LEGACY_DARWIN, ...GUI, ...CLI_LEGACY_DARWIN, ...CLI].map(asGitHubAsset)));
+  assert.strictEqual(bothGui.name, GUI[0]);
+
+  // 下一版：Release 上只剩 macos 名（过渡结束）——新工具照样挑得中
+  const macosOnly = on('darwin', 'x64', () => pickAsset([...CLI, ...GUI, ...OTHER].map(asGitHubAsset)));
+  assert.strictEqual(macosOnly.name, CLI[1]);
+});
+
+test('mac 平台词：旧 Release 只有 darwin 名时也能更新（darwin 兜底）', () => {
+  const cli = on('darwin', 'arm64', () => pickAsset([...CLI_LEGACY_DARWIN, ...GUI_LEGACY_DARWIN].map(asGitHubAsset)));
+  assert.strictEqual(cli.name, CLI_LEGACY_DARWIN[0]);
+  const gui = on('darwin', 'x64', () => pickGuiAsset([...CLI_LEGACY_DARWIN, ...GUI_LEGACY_DARWIN].map(asGitHubAsset)));
+  assert.strictEqual(gui.name, GUI_LEGACY_DARWIN[1]);
+  assert.strictEqual(gui.url, DIRECT(GUI_LEGACY_DARWIN[1]));
 });
 
 test('Gitee 形态（只有 browser_download_url）也拿得到直链', () => {
