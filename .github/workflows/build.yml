@@ -8,10 +8,14 @@
 # 注解 tag 三处对齐；Release 正文取自 CHANGELOG.md 对应段落（tools/changelog.js 提取），
 # 不是自动生成的变更列表。
 #
-# 两种产物形态各跑一遍矩阵，都是「每平台一个原生 runner」：
+# 两种产物形态各跑一遍矩阵，基本都是「每平台一个原生 runner」：
 #   - build：单文件可执行（Node SEA）——基底是构建机上的 node 可执行文件，只能在构建平台运行；
 #   - gui：Electron 图形界面（electron-builder）——macOS 的 dmg 与签名只能在 macOS 上做。
-#   两者都不做交叉构建，理由见 docs/打包与分发.md。
+#   例外：build 的 macOS x64 挪到了 arm64 机器上交叉编译（--dest-cpu=x64，产物仍是 x64
+#   的）——2026-09-22 实测 intel runner 池做 node 重编译反复**整机静默停摆**（上游
+#   actions/runner-images#13882：5 次尝试 4 次冻死、四台不同 Worker 同镜像，本地看门狗
+#   随 VM 一起冻、救不回来，平台约 1 小时 44 分才收走）。gui 的 mac x64 不做重编译，
+#   intel 池上一直无恙，不挪。其余平台的取舍理由见 docs/打包与分发.md。
 #
 # 扩展：需要 arm64 产物时，往两个矩阵的 matrix.include 里加 `ubuntu-24.04-arm`（Linux arm64）
 # 或 `windows-11-arm`（Windows arm64）即可，其余无需改动。
@@ -91,7 +95,7 @@ jobs:
           echo "三处对齐：CHANGELOG.md 条目 / package.json $pkg / tag v$tag"
 
   build:
-    name: 构建（${{ matrix.os }}）
+    name: 构建（${{ matrix.name || matrix.os }}）
     needs: check-version
     runs-on: ${{ matrix.os }}
     # mac / Linux 要从源码编译一遍 node 基底（见下），整体预算放宽到 2 小时
@@ -107,7 +111,11 @@ jobs:
         include:
           - os: windows-latest   # Windows x64
           - os: macos-latest     # macOS arm64（Apple Silicon）
-          - os: macos-15-intel   # macOS Intel x64
+          # macOS x64：不在 intel runner 上编（整机停摆，见文件头注释），挪到 arm64 机器
+          # 交叉编译；name 字段把 job 名 / 缓存 key / 产物名与上面的原生 macos-latest 区分开
+          - os: macos-latest
+            name: macos-x64-cross
+            cross-x64: true
           - os: ubuntu-latest    # Linux x64
     steps:
       - uses: actions/checkout@v7
@@ -124,13 +132,17 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ${{ runner.temp }}/node-small-icu
-          key: node-small-icu-${{ matrix.os }}-${{ env.NODE_BASE_VERSION }}
+          # key 带上 matrix.name（交叉条目专属 key，避免与原生 arm64 基底互相污染）
+          key: node-small-icu-${{ matrix.name || matrix.os }}-${{ env.NODE_BASE_VERSION }}
       # 上游已知问题（nodejs/node#59553）：新式链接器产物经 postject 注入后，dyld 报
       # 「unsupported thread-local, larger than 4GB」起不来，官方已把 SEA 对 Intel macOS
       # 降为不支持。放在基底编译之前跑：两三分钟就拿到候选修复（经典链接器 / strip）的
       # 现场判定，不被基底编译的成败与时长绑架；只做取证，判据以「构建单文件产物」自检为准。
+      # 注意：本步随交叉条目跑在 **arm64 机器**上——hello 一律 -arch x86_64，运行靠
+      # Rosetta。Rosetta 的 dyld 与真机 x64 的 dyld 不是一套实现，判定可能失真，仅作参考；
+      # 最终判据是产物自检（同样经 Rosetta）与 Intel 真机验证。
       - name: SEA 注入诊断（macOS x64）
-        if: runner.os == 'macOS' && runner.arch == 'X64'
+        if: matrix.cross-x64 == true
         shell: bash
         run: |
           set -u
@@ -143,9 +155,9 @@ jobs:
           int main(void) { t++; printf("hi %d\n", t); (void)sea_fuse; return 0; }
           EOF
           printf 'dummy\n' > blob
-          cc hello.c -o hello-default
+          cc -arch x86_64 hello.c -o hello-default
           cp hello-default hello-stripped && strip hello-stripped
-          cc hello.c -Wl,-ld_classic -o hello-classic 2>classic.err || echo "（-ld_classic 不受支持：$(head -c 160 classic.err)）"
+          cc -arch x86_64 hello.c -Wl,-ld_classic -o hello-classic 2>classic.err || echo "（-ld_classic 不受支持：$(head -c 160 classic.err)）"
           for b in hello-default hello-stripped hello-classic; do
             [ -x "$b" ] || continue
             codesign --remove-signature "$b" 2>/dev/null || true
@@ -172,6 +184,11 @@ jobs:
           out="$RUNNER_TEMP/node-small-icu/bin"
           if [ -x "$out/node" ]; then
             echo "命中缓存：$out/node（$("$out/node" --version)，small-icu）"
+            # 交叉条目防缓存错配：恢复出来的必须是 x64 基底，arm64 的拿去打包就是名实不符的产物
+            if [ "${{ matrix.cross-x64 }}" = "true" ] && [ "$("$out/node" -p process.arch)" != "x64" ]; then
+              echo "::error::缓存里的基底是 $("$out/node" -p process.arch)，预期 x64——缓存 key 撞了"
+              exit 1
+            fi
             "$out/node" -p "process.config.variables.node_use_system_icu ? '有系统 ICU（编译参数失效！）' : 'small-icu 确认'" || exit 1
             exit 0
           fi
@@ -180,13 +197,22 @@ jobs:
           mkdir -p "$src"
           tar -xJf "$RUNNER_TEMP/node-src.tar.xz" -C "$src" --strip-components=1
           cd "$src"
-          # macOS x64 的 SEA 注入损坏（nodejs/node#59553）原计划用经典链接器产基底：gyp 的
-          # 链接命令透传 make 变量 LDFLAGS，configure.py 不用动。但 2026-09-22 实测带
-          # -Wl,-ld_classic 的 make 在四台不同 worker、同一镜像上三次全数中途静默卡死，
-          # 不带的当天一次通过——先回退默认链接器，路线等「SEA 注入诊断」步判定后再定。
-          # make 套 timeout 看门狗：真卡死时杀掉后增量续编一次（out/Release 里编好的
-          # 目标文件都在，重跑 make 只补剩余的），不再靠人肉发现、取消、重跑。
-          ./configure --with-intl=small-icu
+          # macOS x64 的 SEA 注入损坏（nodejs/node#59553）的候选修复是经典链接器基底（gyp 链接
+          # 命令透传 LDFLAGS）——是否需要由上面诊断步判定，先走默认链接器。曾在 intel runner
+          # 上反复尝试无果，2026-09-22 定性：与 -ld_classic 无关，是上游 runner 镜像整机停摆
+          #（actions/runner-images#13882：5 次尝试 4 次冻死，四台不同 Worker 同镜像，去掉
+          # LDFLAGS 同样冻）——本条目因此挪到 arm64 机器交叉编译。
+          # macOS x64 交叉编译：--dest-cpu=x64 让 configure 走交叉链（clang -arch x86_64，
+          # macOS SDK 双架构；V8 的宿主工具如 mksnapshot 由构建系统按 host 编 host 跑——
+          # 官方 universal 产物走的就是这条路）。
+          if [ "${{ matrix.cross-x64 }}" = "true" ]; then
+            ./configure --with-intl=small-icu --dest-cpu=x64
+          else
+            ./configure --with-intl=small-icu
+          fi
+          # make 套 timeout 看门狗：编译子进程挂起但 VM 还活着时，杀掉后增量续编一次
+          #（out/Release 里编好的目标文件都在，重跑 make 只补剩余的）；整机停摆它救不了
+          #（timeout 也随 VM 一起冻死，2026-09-22 已实证），但能兜「编译慢被误判」的场景。
           jobs="$(nproc 2>/dev/null || sysctl -n hw.ncpu)"
           if command -v timeout >/dev/null 2>&1; then
             timeout 6000 make -j"$jobs" || {
@@ -210,13 +236,18 @@ jobs:
             echo "使用 small-icu 自编译基底：$base"
             if npm run build -- --node "$base"; then
               exit 0
-            elif [ "$RUNNER_OS" = macOS ] && [ "$RUNNER_ARCH" = X64 ]; then
+            elif [ "${{ matrix.cross-x64 }}" = "true" ]; then
               # macOS x64 的 SEA 注入有上游已知损坏（nodejs/node#59553）；自编译基底的
               # 候选修复（经典链接器 / strip）若未落地，回退官方 node 保住可用产物
-              # （约 110 MB，超 Gitee 上限、仅 GitHub 渠道），不让整条流水线红掉
-              echo "::warning::自编译基底产物自检失败，回退官方 node 重打（macOS x64 上游 SEA 注入问题，nodejs/node#59553）"
+              #（约 110 MB，超 Gitee 上限、仅 GitHub 渠道），不让整条流水线红掉。
+              # 必须下载官方 darwin-x64 包当基底：runner 是 arm64，不指定 --node 会拿
+              # 本机 arm64 官方 node 打出架构不符的 x64 名产物
+              echo "::warning::自编译基底产物自检失败，回退官方 darwin-x64 node 重打（macOS x64 上游 SEA 注入问题，nodejs/node#59553）"
               rm -f dist/*
-              npm run build
+              curl -fsSL "https://nodejs.org/dist/v$NODE_BASE_VERSION/node-v$NODE_BASE_VERSION-darwin-x64.tar.gz" -o "$RUNNER_TEMP/node-official-x64.tar.gz"
+              mkdir -p "$RUNNER_TEMP/node-official-x64"
+              tar -xzf "$RUNNER_TEMP/node-official-x64.tar.gz" -C "$RUNNER_TEMP/node-official-x64" --strip-components=1
+              npm run build -- --node "$RUNNER_TEMP/node-official-x64/bin/node"
             else
               exit 1
             fi
@@ -227,7 +258,7 @@ jobs:
       - name: 上传产物
         uses: actions/upload-artifact@v7
         with:
-          name: dist-${{ matrix.os }}
+          name: dist-${{ matrix.name || matrix.os }}
           path: dist/*
           if-no-files-found: error
 
