@@ -187,8 +187,12 @@ function main() {
     // macOS / Linux 也带后缀（.bin）——不带后缀的附件在 Release 页面里看不出是什么文件；
     // scripts/update.js 的自更新按「-平台词-架构 + 平台后缀」匹配附件（.exe / .bin）。
     // 平台词：macos / win32 / linux（见 PLATFORM_WORD），不带 darwin 这种内核词。
+    // 架构词取**基底**的 process.arch 而非构建机的：CI 的 macOS x64 改在 arm64 机器上
+    // 交叉编译基底（绕开 intel runner 的停摆，见 .github/workflows/build.yml），产物名
+    // 必须如实写 x64——自更新按名字匹配附件，名实不符会让 Intel mac 用户拿错产物。
     const ext = process.platform === 'win32' ? '.exe' : '.bin';
-    const name = args.name || `${PKG.name}-cli-v${PKG.version}-${PLATFORM_WORD}-${process.arch}${ext}`;
+    const baseArch = execFileSync(baseNode, ['-p', 'process.arch'], { encoding: 'utf8' }).trim();
+    const name = args.name || `${PKG.name}-cli-v${PKG.version}-${PLATFORM_WORD}-${baseArch}${ext}`;
     const outFile = path.join(args.outDir, name);
     fs.copyFileSync(baseNode, outFile);
     fs.chmodSync(outFile, 0o755);
