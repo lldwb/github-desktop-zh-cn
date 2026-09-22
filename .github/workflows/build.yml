@@ -94,7 +94,13 @@ jobs:
     name: 构建（${{ matrix.os }}）
     needs: check-version
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 30
+    # mac / Linux 要从源码编译一遍 node 基底（见下），整体预算放宽到 2 小时
+    timeout-minutes: 120
+    env:
+      # 产物基底 node 固化版本：官方 node 的 ICU 数据约 28 MB，是单文件产物 >100 MB 的主因；
+      # 自编译 --with-intl=small-icu 的基底能省下这部分，而本仓库的代码零 Intl 使用（grep 实证，
+      # 见 docs/打包与分发.md）。固化版本保证可复现——换版本时改这里与缓存 key。
+      NODE_BASE_VERSION: 22.20.0
     strategy:
       fail-fast: false        # 单个平台失败不打断其余平台，一次看清全部结果
       matrix:
@@ -111,8 +117,48 @@ jobs:
           # 不开 cache: npm —— 本仓库无 dependencies，没有 package-lock.json
       - name: 单元测试
         run: npm test
+      # Windows 不自编译：官方基底构建出的产物 83.6 MB 本就达标，省掉一套 VS 工具链编译的复杂度。
+      # mac / Linux 官方基底分别是 107～120 MB，必须换 small-icu 基底才能进 100 MB。
+      - name: 恢复自编译 node 基底缓存
+        if: runner.os != 'Windows'
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/node-small-icu
+          key: node-small-icu-${{ matrix.os }}-${{ env.NODE_BASE_VERSION }}
+      - name: 自编译 small-icu node 基底（mac / Linux）
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          set -e
+          out="$RUNNER_TEMP/node-small-icu/bin"
+          if [ -x "$out/node" ]; then
+            echo "命中缓存：$out/node（$("$out/node" --version)，small-icu）"
+            "$out/node" -p "process.config.variables.node_use_system_icu ? '有系统 ICU（编译参数失效！）' : 'small-icu 确认'" || exit 1
+            exit 0
+          fi
+          curl -fsSL "https://nodejs.org/dist/v$NODE_BASE_VERSION/node-v$NODE_BASE_VERSION.tar.xz" -o "$RUNNER_TEMP/node-src.tar.xz"
+          src="$RUNNER_TEMP/node-src"
+          mkdir -p "$src"
+          tar -xJf "$RUNNER_TEMP/node-src.tar.xz" -C "$src" --strip-components=1
+          cd "$src"
+          ./configure --with-intl=small-icu
+          make -j"$(nproc 2>/dev/null || sysctl -n hw.ncpu)"
+          mkdir -p "$out"
+          cp ./node "$out/node"
+          "$out/node" --version
       - name: 构建单文件产物
-        run: npm run build
+        shell: bash
+        run: |
+          # 有自编译基底就用它（blob 与基底必须是同一个 node，build.js 的 --node 一次传到位）；
+          # Windows 没有基底文件，走官方 node
+          base="$RUNNER_TEMP/node-small-icu/bin/node"
+          if [ -x "$base" ]; then
+            echo "使用 small-icu 自编译基底：$base"
+            npm run build -- --node "$base"
+          else
+            echo "无自编译基底（Windows），使用官方 node"
+            npm run build
+          fi
       - name: 上传产物
         uses: actions/upload-artifact@v7
         with:
@@ -152,6 +198,23 @@ jobs:
       # 只认这个键），CI 上覆盖回官方源
       - name: 打包 GUI 产物
         run: npm run dist -- --config.electronDownload.mirror=https://github.com/electron/electron/releases/download/
+      # dmg 转 ULMO（LZMA）：UDBZ（bzip2）压不进 100 MB 的 dmg-x64（v1.1.2 实测 102.5 MB），
+      # LZMA 能压进去。不配在 electron-builder.yml——builder 的 schema 白名单没有 ULMO
+      #（dmg.format 只收六种、additionalProperties: false，实测直接拒配置），所以出完 UDBZ
+      # 后用系统 hdiutil convert 换格式（换完删掉 UDBZ 原件，别让它混进附件）。挂载要求
+      # macOS 10.15+，GitHub Desktop 3.6.x 最低支持 macOS 12，覆盖所有受支持的系统。
+      - name: dmg 转 ULMO
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          set -e
+          for f in dist/gui/*.dmg; do
+            [ -e "$f" ] || continue
+            tmp="${f%.dmg}.ulmo.dmg"
+            hdiutil convert "$f" -format ULMO -o "$tmp"
+            mv "$tmp" "$f"
+            echo "已转 ULMO：$f（$(du -h "$f" | cut -f1)）"
+          done
       - name: 产物自检
         run: node tools/check-gui-dist.js
       # 产物启动冒烟：真的把产物起一次，确认窗口与界面能加载——静态自检看不出「删掉的组件是不是
@@ -212,6 +275,12 @@ jobs:
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     timeout-minutes: 45        # 上传卡死时的兜底：附件传完只需几分钟，超过这个数多半是传输卡住了
+    env:
+      # darwin→macos 平台词的过渡开关：v1.1.2 及更早装出去的工具只匹配 -darwin- 词，
+      # 本次 Release 的 mac 附件要多挂一份 darwin 名的拷贝（SHA256SUMS 里双名字各一行）。
+      # **下一版发版时把它改成 'false'**（附件翻倍 ~200 MB，只过渡一版），届时
+      # scripts/update.js 的 darwin 兜底保留、这个复制步骤与开关一并删除。
+      TRANSITION_DARWIN_ALIASES: 'true'
     permissions:
       contents: write         # 附件传输走内置 token（PAT 传附件实测卡死）；Release 本身仍由 RELEASE_TOKEN 创建
     steps:
@@ -220,6 +289,15 @@ jobs:
         with:
           path: dist
           merge-multiple: true
+      - name: 生成 darwin 过渡附件（仅本次）
+        if: env.TRANSITION_DARWIN_ALIASES == 'true'
+        working-directory: dist
+        run: |
+          for f in *-macos-*; do
+            [ -e "$f" ] || continue
+            cp "$f" "${f/-macos-/-darwin-}"
+            echo "过渡附件：$f -> ${f/-macos-/-darwin-}"
+          done
       - name: 生成 SHA256 校验和
         working-directory: dist
         run: sha256sum github-desktop-zh-cn-* > SHA256SUMS
@@ -331,12 +409,13 @@ jobs:
       # 同步到 Gitee。放在 GitHub Release 发布**之后**：Gitee 是镜像渠道，它出问题不该
       # 影响权威源的成果（下面失败时只让 job 标红，已发布的 GitHub Release 原样保留）。
       #
-      # **只建发行版 + 放正文，不传附件**：Gitee 的配额放不下这些产物——附件**单文件上限
-      # 100 MB**（13 个产物里 10 个是 106～146 MB，实测传 125 MB 的被拒：「文件大小已超出
-      # 限制：100 MB」），**单仓库附件总容量 1 GB**（产物合计 1.38 GB）；这两项在 SaaS 各档位
-      # 都一样（企业版单文件同样是 100 MB），只有私有化部署才提供定制配额。所以传附件这条路
-      # 不是「不稳」而是「不通」，不该留在发布链路上。正文里给出 GitHub Release 的地址——
-      # Gitee 侧没有产物，这段链接就是唯一的下载入口，少了它使用者只会看到一个空壳。
+      # **最新版传全套附件**（v1.1.3 起，产物压缩后单文件 ≤ 100 MB 的 Gitee 上限）：
+      #   - 附件配额是「单仓库合计 1 GB」，只装得下最新一版（压缩后约 842 MB + 过渡版翻倍的
+      #     mac 侧 ~200 MB 超限，故 **darwin 过渡附件不进 Gitee**，只在 GitHub 上）；Gitee 的
+      #     旧版本 Release 删掉附件、正文补 GitHub 下载链接，配额让给最新版。
+      #   - SHA256SUMS 一并上传——Gitee 侧从此也有校验和清单，自更新对两个来源走同一套校验。
+      #   - 重跑幂等：按 sha256 判等，已传的不重传，缺的补传（Gitee 上传接口没有 digest，
+      #     用「名字 + 大小」判存在、大小一致视为已传）。
       - name: 发布到 Gitee
         env:
           GITEE_TOKEN: ${{ secrets.GITEE_TOKEN }}
@@ -355,30 +434,123 @@ jobs:
           existing="$(curl -sfS -m 30 -H "$AUTH" "$API/releases/tags/$TAG" || echo null)"
           rid="$(printf '%s' "$existing" | jq -r 'if type=="object" then (.id // empty) else empty end' 2>/dev/null || true)"
 
-          if [ -n "$rid" ]; then
-            # 与 GitHub 侧同一原则：已发布的发行版与它的正文都不再改动。
-            echo "Gitee 上已有 $TAG 的发行版（id=$rid），跳过"
-            echo "Gitee 发行版：https://gitee.com/$GITHUB_REPOSITORY/releases/tag/$TAG"
-            exit 0
+          if [ -z "$rid" ]; then
+            # 正文 = CHANGELOG 段落 + 下载指引
+            {
+              cat notes.md
+              printf '\n\n---\n\n构建产物以本页附件为准；若附件缺失，请到 GitHub Release 下载：\n\n'
+              printf 'https://github.com/%s/releases/tag/%s\n' "$GITHUB_REPOSITORY" "$TAG"
+            } > gitee-notes.md
+
+            # payload 走文件、**不走命令行参数**：Windows 版 curl 会把 argv 里的非 ASCII 转成
+            # 本地代码页（实测中文变 GBK 字节发出去，Gitee 上正文成乱码，而报错里看不出线索）；
+            # --data-binary @文件 不经过 argv，两个平台行为一致。
+            jq -n --arg t "$TAG" --rawfile b gitee-notes.md \
+              '{tag_name:$t, name:$t, body:$b, target_commitish:"main", prerelease:false}' > gitee-payload.json
+            resp="$(curl -sfS -m 60 -X POST "$API/releases" -H "$AUTH" \
+              -H "Content-Type: application/json" --data-binary @gitee-payload.json 2>&1 || true)"
+            rid="$(printf '%s' "$resp" | jq -r '.id // empty' 2>/dev/null || true)"
+            if [ -z "$rid" ]; then
+              echo "::error::在 Gitee 创建 $TAG 的发行版失败：$(printf '%s' "$resp" | tr '\n' ' ' | tail -c 300)"
+              exit 1
+            fi
+            echo "已在 Gitee 创建发行版（id=$rid）：https://gitee.com/$GITHUB_REPOSITORY/releases/tag/$TAG"
           fi
 
-          # 正文 = CHANGELOG 段落 + 下载指引
-          {
-            cat notes.md
-            printf '\n\n---\n\n**构建产物不在 Gitee 存放**，请到 GitHub Release 下载：\n\n'
-            printf 'https://github.com/%s/releases/tag/%s\n' "$GITHUB_REPOSITORY" "$TAG"
-          } > gitee-notes.md
+          # —— 附件配额交接：把**其它** Release 的附件删掉、正文补上 GitHub 下载链接 ——
+          # Gitee 附件配额单仓库合计 1 GB，只装得下最新一版。列全量 Release 逐个处理，
+          # 本 tag 跳过。删除**已发布的**旧版附件是本策略的设计使然（旧版正文有 GitHub 链接兜底）。
+          page=1
+          while :; do
+            list="$(curl -sfS -m 30 -H "$AUTH" "$API/releases?page=$page&per_page=20" || echo '[]')"
+            count="$(printf '%s' "$list" | jq 'length')"
+            [ "$count" -gt 0 ] || break
+            for r in $(printf '%s' "$list" | jq -r '.[].id'); do
+              [ "$r" = "$rid" ] && continue
+              rtag="$(printf '%s' "$list" | jq -r --argjson i "$r" '.[] | select(.id==$r) | .tag_name')"
+              # 删附件
+              for f in $(curl -sfS -m 30 -H "$AUTH" "$API/releases/$r/attach_files" | jq -r '.[].id' 2>/dev/null || true); do
+                echo "清配额：删旧版 $rtag 的附件 #$f"
+                curl -sfS -m 60 -X DELETE -H "$AUTH" "$API/releases/$r/attach_files/$f" >/dev/null || \
+                  echo "::warning::旧版 $rtag 附件 #$f 删除失败（配额可能被占用，最新版附件或许传不上）"
+              done
+              # 正文补 GitHub 链接（幂等：已含链接就不再改）
+              body="$(curl -sfS -m 30 -H "$AUTH" "$API/releases/$r" | jq -r '.body')"
+              gh_url="https://github.com/$GITHUB_REPOSITORY/releases/tag/$rtag"
+              if printf '%s' "$body" | grep -qF "$gh_url"; then continue; fi
+              jq -n --arg b "$(printf '%s\n\n---\n\n本页附件已清理（配额让给最新版），请到 GitHub Release 下载：\n%s' "$body" "$gh_url")" \
+                '{body:$b}' > gitee-body-patch.json
+              curl -sfS -m 60 -X PATCH "$API/releases/$r" -H "$AUTH" \
+                -H "Content-Type: application/json" --data-binary @gitee-body-patch.json >/dev/null || \
+                echo "::warning::旧版 $rtag 正文补链接失败"
+              echo "旧版 $rtag：附件已清，正文补上 GitHub 下载链接"
+            done
+            page=$((page+1))
+            [ "$page" -gt 10 ] && break   # 配额交接只做 10 页，防御分页异常
+          done
 
-          # payload 走文件、**不走命令行参数**：Windows 版 curl 会把 argv 里的非 ASCII 转成
-          # 本地代码页（实测中文变 GBK 字节发出去，Gitee 上正文成乱码，而报错里看不出线索）；
-          # --data-binary @文件 不经过 argv，两个平台行为一致。
-          jq -n --arg t "$TAG" --rawfile b gitee-notes.md \
-            '{tag_name:$t, name:$t, body:$b, target_commitish:"main", prerelease:false}' > gitee-payload.json
-          resp="$(curl -sfS -m 60 -X POST "$API/releases" -H "$AUTH" \
-            -H "Content-Type: application/json" --data-binary @gitee-payload.json 2>&1 || true)"
-          rid="$(printf '%s' "$resp" | jq -r '.id // empty' 2>/dev/null || true)"
-          if [ -z "$rid" ]; then
-            echo "::error::在 Gitee 创建 $TAG 的发行版失败：$(printf '%s' "$resp" | tr '\n' ' ' | tail -c 300)"
+          # —— 传附件：逐个上传、按「名字 + 大小」判等补传 ——
+          # Gitee 附件单文件上限 100 MB：超限的（不该有——产物已压缩；若出现说明体积回涨）
+          # 跳过并在正文有 GitHub 链接兜底的前提下如实报错，不让整条发布链断在这一个文件上。
+          failed=""
+          for f in dist/github-desktop-zh-cn-*; do
+            name="$(basename "$f")"
+            case "$name" in *-darwin-*) echo "跳过过渡附件（只在 GitHub）：$name"; continue;; esac
+            size="$(stat -c%s "$f")"
+            if [ "$size" -ge $((100 * 1024 * 1024)) ]; then
+              echo "::error::附件 $name 达 $((size / 1024 / 1024)) MB，超出 Gitee 单文件 100 MB 上限——产物体积回涨了，先修体积再发版"
+              failed="$failed $name"
+              continue
+            fi
+            # 已存在且大小一致 → 跳过（幂等重跑）；名字在、大小不一致 → 删了重传
+            have_id="$(curl -sfS -m 30 -H "$AUTH" "$API/releases/$rid/attach_files" | jq -r --arg n "$name" '.[] | select(.name==$n) | "\(.id) \(.size)"' 2>/dev/null | head -1 || true)"
+            if [ "$(printf '%s' "$have_id" | awk '{print $2}')" = "$size" ]; then
+              echo "Gitee 上已有且大小一致，跳过：$name"
+              continue
+            fi
+            if [ -n "$have_id" ]; then
+              old_id="$(printf '%s' "$have_id" | awk '{print $1}')"
+              echo "Gitee 上已有同名但大小不符，删除重传：$name（#$old_id）"
+              curl -sfS -m 60 -X DELETE -H "$AUTH" "$API/releases/$rid/attach_files/$old_id" >/dev/null || true
+            fi
+            ok=""
+            for attempt in 1 2 3; do
+              if out="$(curl -sS -m 1200 -X POST "$API/releases/$rid/attach_files" -H "$AUTH" \
+                -F "file=@$f" 2>&1)"; then
+                echo "已上传 $name（$((size / 1024 / 1024)) MB）"
+                ok=1
+                break
+              fi
+              detail="$(printf '%s' "$out" | tr '\n' ' ' | tr -d '\r' | tail -c 200)"
+              if [ "$attempt" -lt 3 ]; then
+                echo "附件 $name 第 $attempt 次上传失败，15 秒后重试：$detail"
+                sleep 15
+              else
+                echo "附件 $name 第 3 次上传失败：$detail"
+              fi
+            done
+            if [ -z "$ok" ]; then
+              failed="$failed $name"
+              echo "::error::附件 $name 上传 Gitee 失败：$(printf '%s' "$out" | tr '\n' ' ' | tr -d '\r' | tail -c 300)"
+            fi
+          done
+
+          # SHA256SUMS 一并传（Gitee 侧从此也有校验和清单）
+          if [ -f dist/SHA256SUMS ]; then
+            sums_name="SHA256SUMS"
+            sums_size="$(stat -c%s dist/SHA256SUMS)"
+            have_id="$(curl -sfS -m 30 -H "$AUTH" "$API/releases/$rid/attach_files" | jq -r --arg n "$sums_name" '.[] | select(.name==$n) | "\(.id) \(.size)"' 2>/dev/null | head -1 || true)"
+            if [ "$(printf '%s' "$have_id" | awk '{print $2}')" != "$sums_size" ]; then
+              [ -n "$have_id" ] && curl -sfS -m 60 -X DELETE -H "$AUTH" "$API/releases/$rid/attach_files/$(printf '%s' "$have_id" | awk '{print $1}')" >/dev/null || true
+              curl -sS -m 120 -X POST "$API/releases/$rid/attach_files" -H "$AUTH" -F "file=@dist/SHA256SUMS" >/dev/null \
+                && echo "已上传 SHA256SUMS" || echo "::warning::SHA256SUMS 上传 Gitee 失败（自更新在 Gitee 来源会跳过校验和比对，不阻断）"
+            else
+              echo "Gitee 上已有 SHA256SUMS，跳过"
+            fi
+          fi
+
+          if [ -n "$failed" ]; then
+            echo "::error::本次未能上传 Gitee：$failed（重跑即可续传，已传成功的不会重来）"
             exit 1
           fi
-          echo "已在 Gitee 创建发行版（id=$rid）：https://gitee.com/$GITHUB_REPOSITORY/releases/tag/$TAG"
+          echo "Gitee 发行版已就绪：https://gitee.com/$GITHUB_REPOSITORY/releases/tag/$TAG"

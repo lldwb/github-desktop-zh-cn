@@ -117,7 +117,7 @@ github-desktop-zh-cn/
 - **官网下载（推荐）**：<https://desktop.github.com> —— 页面会自动识别你的系统，点对应按钮下载 Windows / macOS / Linux 版；
 - 装好后记下**版本号**（应用内 `Help` → `About GitHub Desktop`，或本工具菜单的 `3) 详细信息`）——汉化字典与版本**强对应**，错配可能导致应用无法启动。
 
-本工具自身的下载：优先 **GitHub Releases**（<https://github.com/lldwb/github-desktop-zh-cn/releases>），国内访问不畅时用 **Gitee 镜像**（<https://gitee.com/lldwb/github-desktop-zh-cn/releases>）——发行版正文两边由 CI 自动同步，但**产物附件只在 GitHub**（Gitee 附件有单文件 100 MB、单仓库合计 1 GB 的限制，装不下这些安装包），Gitee 页面里的下载指引会带你回 GitHub。工具内的「检查更新」也是**先问 GitHub、取不到再退回 Gitee**（Gitee 兜底只够告知版本号，下载仍须走 GitHub）。
+本工具自身的下载：优先 **GitHub Releases**（<https://github.com/lldwb/github-desktop-zh-cn/releases>），国内访问不畅时用 **Gitee 镜像**（<https://gitee.com/lldwb/github-desktop-zh-cn/releases>）——**最新版**的产物附件两边都有（Gitee 附件配额是单仓库合计 1 GB，只装得下最新一版；发新版时旧版本的附件会被清掉、正文补上 GitHub 下载链接），历史版本请到 GitHub Releases 取。工具内的「检查更新」也是**先问 GitHub、取不到再退回 Gitee**。
 
 ## 使用方式
 
@@ -144,7 +144,7 @@ github-desktop-zh-cn/
 
 它往 GitHub Desktop 的 `main.js` 里注入一段代码，**改动的是逻辑不是文案**；和汉化一样可以单独撤掉，备份始终只有一份（官方原文）。注入的代码读不到工具的字典目录时**一律放行**——宁可让你更新，也不会因为工具自己的问题把你锁死在旧版本上。
 
-GUI 产物**随 Release 分发**（三平台）：Windows 用 `github-desktop-zh-cn-gui-v<版本>-win32-x64-setup.exe`（安装包，可选安装目录）或 `…-gui-v<版本>-win32-x64.7z`（免安装，Windows 11 可直接解压），macOS 用 `…-gui-v<版本>-darwin-arm64.dmg`（Intel 机是 `…-gui-v<版本>-darwin-x64.dmg`），Linux 用 `…-gui-v<版本>-linux-x86_64.AppImage` / `…-gui-v<版本>-linux-amd64.deb`。也可以自行构建：
+GUI 产物**随 Release 分发**（三平台）：Windows 用 `github-desktop-zh-cn-gui-v<版本>-win32-x64-setup.exe`（安装包，可选安装目录）或 `…-gui-v<版本>-win32-x64.7z`（免安装，Windows 11 可直接解压），macOS 用 `…-gui-v<版本>-macos-arm64.dmg`（Intel 机是 `…-gui-v<版本>-macos-x64.dmg`；v1.1.2 及更早版本的文件名里是 `darwin`），Linux 用 `…-gui-v<版本>-linux-x86_64.AppImage` / `…-gui-v<版本>-linux-amd64.deb`。也可以自行构建：
 
 ```bash
 npm install       # 首次：安装 Electron 与 electron-builder（仅构建期依赖，不进产物逻辑）

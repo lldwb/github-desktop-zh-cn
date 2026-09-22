@@ -45,15 +45,24 @@ directories:
 #   deb          91.1 MB（fpm 默认就是 xz）
 #   AppImage    115.2 MB ← 根级 compression 未设时 AppImageTarget 传给 mksquashfs 的是
 #                undefined，而 mksquashfs 默认 gzip——同一份内容比 deb 胖 24 MB，纯粹是算法差异
-#   dmg          UDZO（zlib）→ 设 maximum 后变 UDBZ（bzip2）
-# 设成 maximum 后：AppImage 走 xz、dmg 走 UDBZ、deb 仍是 xz、NSIS 不受影响。零取舍。
+#   dmg          UDZO（zlib）→ 设 maximum 后变 UDBZ（bzip2）；**CI 上还会再转一道 ULMO（LZMA）**，
+#                见 build.yml mac 侧的「dmg 转 ULMO」步骤——builder 的 schema 白名单里没有 ULMO
+#                （configuration.dmg.format 只收上面六种，additionalProperties: false 实测直接拒），
+#                只能出完 UDBZ 后用系统 hdiutil convert 换格式
+# 设成 maximum 后：AppImage 走 xz、dmg 走 UDBZ（CI 再转 ULMO）、deb 仍是 xz、NSIS 不受影响。
 # （依据：app-builder-lib/out/targets/appimage/AppImageTarget.js 的压缩选择分支、
 #   dmg-builder/out/dmg.js 的 format 决策、FpmTarget.js 的 defaultCompression。）
 compression: maximum
 
-# 产物命名与单文件产物（SEA）同一套词序：<name>-<通道>-v<版本>-<平台>-<架构>[...-setup].<扩展名>
+# （dmg 的最终格式是 ULMO/LZMA，但不在这里配——builder 的 schema 白名单没有这个值，见上。
+#   转 ULMO 的理由：LZMA 对这类大二进制压得更狠，v1.1.2 压不进 100 MB 的 dmg-x64（102.5 MB）
+#   预期就此达标；代价是挂载要求 macOS 10.15+，GitHub Desktop 3.6.x 最低支持 macOS 12，
+#   覆盖所有受支持的系统。转换步骤在 build.yml 的 gui job。）
+
+# 产物命名与单文件产物（SEA）同一套词序：<name>-<通道>-v<版本>-<平台词>-<架构>[...-setup].<扩展名>
 # 通道词 gui 紧跟项目名（单文件产物是 cli，见 tools/build.js）——附件列表里同类相邻、一眼分得出
-# 用 ${platform}（darwin / win32 / linux）而不是 ${os}（mac / win / linux），与 SEA 产物的平台词一致
+# ${platform} 是 Node 词（win32 / linux / darwin）：win32 / linux 直接用；mac 上它只能给出内核词
+# darwin，使用者看不出对应什么系统，mac 产物在下方 mac.artifactName 覆盖为 macos（v1.1.3 起）
 artifactName: ${name}-gui-v${version}-${platform}-${arch}.${ext}
 
 # 应用代码：界面 + 业务逻辑（主进程直接 require scripts/ 下的模块）
@@ -96,6 +105,10 @@ mac:
     # 只出 dmg，不出 zip：两者装的是同一份 .app，zip 那份纯属重复附件（dmg 本身就能挂载取用）。
     # 少一个附件就少一份 100+ MB 的下载量，也少一份要传的字节。
     - dmg
+  # 平台词固定 macos（顶层 ${platform} 在 mac 上给的是内核词 darwin）。v1.1.3 起；
+  # 更早发布的 Release 上还是 darwin 名，scripts/update.js 新旧两个词都认，过渡方案见
+  # docs/agents/发版.md「产物命名」
+  artifactName: ${name}-gui-v${version}-macos-${arch}.${ext}
   category: public.app-category.developer-tools
   identity: null
 

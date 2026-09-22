@@ -32,14 +32,24 @@ function downloadUrl(asset) {
   return asset.browser_download_url || asset.url || null;
 }
 
-// Release 资产名形如 <name>-cli-v<版本>-<platform>-<arch>[.exe|.bin]；按「-平台-架构」后缀匹配，不拼死名字。
+// Release 资产名形如 <name>-cli-v<版本>-<平台词>-<arch>[.exe|.bin]；按「-平台词-架构」后缀匹配，不拼死名字。
 // 后缀随平台：Windows 是 .exe，macOS / Linux 是 .bin（v0.2.0 起）；无后缀的老产物也认，
 // 免得还留在旧版本上的使用者更新时找不到附件。
+// 平台词 mac 侧有两个：v1.1.3 起产物用 macos，更早的 Release 上还是内核词 darwin——
+// 新版工具要能从**两边**都更新，故按 macos 优先、darwin 兜底排候选（Windows / Linux 只有一个词）。
 // 返回的是**归一后的副本**：`url` 一律是能直接下载到二进制的那条（见 downloadUrl），调用方不必再分辨来源。
+function platformWords() {
+  return process.platform === 'darwin' ? ['macos', 'darwin'] : [process.platform];
+}
+
 function pickAsset(assets) {
-  const suffix = `-${process.platform}-${process.arch}`;
   const exts = process.platform === 'win32' ? ['.exe'] : ['.bin', ''];
-  const hit = assets.find((a) => exts.some((e) => String(a.name).endsWith(suffix + e))) || null;
+  const hit =
+    platformWords()
+      .map((w) => `-${w}-${process.arch}`)
+      .flatMap((suffix) => exts.map((e) => suffix + e))
+      .map((needle) => assets.find((a) => String(a.name).endsWith(needle)))
+      .find(Boolean) || null;
   if (!hit) return null;
   return { ...hit, url: downloadUrl(hit) };
 }
@@ -66,15 +76,14 @@ const ARCH_ALIASES = {
 };
 
 function pickGuiAsset(assets) {
-  const suffixes = (ARCH_ALIASES[process.arch] || [process.arch]).map((a) => `-${process.platform}-${a}`);
+  const archs = ARCH_ALIASES[process.arch] || [process.arch];
+  // 平台词 mac 侧双写（macos 优先、darwin 兜底），见 pickAsset 的说明；
+  // 匹配顺序是「后缀优先、资产其次」——过渡期同一份产物挂两个名字，得保证挑中的是 macos 那份
+  const suffixes = platformWords().flatMap((w) => archs.map((a) => `-${w}-${a}`));
   const exts =
     { win32: ['.exe'], darwin: ['.dmg'], linux: ['.AppImage', '.deb'] }[process.platform] || ['.AppImage'];
-  const hit =
-    assets.find((a) => {
-      const name = String(a.name);
-      if (!name.includes('-gui-')) return false; // 只认 gui 那一套，别把 cli 产物当安装包
-      return suffixes.some((s) => exts.some((e) => name.endsWith(s + e) || name.endsWith(`${s}-setup${e}`)));
-    }) || null;
+  const needles = suffixes.flatMap((s) => exts.flatMap((e) => [s + e, `${s}-setup${e}`]));
+  const hit = needles.map((n) => assets.find((a) => String(a.name).includes('-gui-') && String(a.name).endsWith(n))).find(Boolean) || null;
   if (!hit) return null;
   return { ...hit, url: downloadUrl(hit) }; // 与 pickAsset 同一条口径：url 一律是下载直链
 }
