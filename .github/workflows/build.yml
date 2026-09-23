@@ -132,15 +132,17 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ${{ runner.temp }}/node-small-icu
-          # key 带上 matrix.name（交叉条目专属 key，避免与原生 arm64 基底互相污染）
-          key: node-small-icu-${{ matrix.name || matrix.os }}-${{ env.NODE_BASE_VERSION }}
+          # key 带上 matrix.name（交叉条目专属 key，避免与原生 arm64 基底互相污染）；
+          # 交叉条目再按链接器加后缀——换链接器重编后不能命中默认链接器的旧缓存
+          key: node-small-icu-${{ matrix.name || matrix.os }}-${{ env.NODE_BASE_VERSION }}${{ matrix.cross-x64 == true && '-ldclassic' || '' }}
       # 上游已知问题（nodejs/node#59553）：新式链接器产物经 postject 注入后，dyld 报
       # 「unsupported thread-local, larger than 4GB」起不来，官方已把 SEA 对 Intel macOS
       # 降为不支持。放在基底编译之前跑：两三分钟就拿到候选修复（经典链接器 / strip）的
       # 现场判定，不被基底编译的成败与时长绑架；只做取证，判据以「构建单文件产物」自检为准。
       # 注意：本步随交叉条目跑在 **arm64 机器**上——hello 一律 -arch x86_64，运行靠
-      # Rosetta。Rosetta 的 dyld 与真机 x64 的 dyld 不是一套实现，判定可能失真，仅作参考；
-      # 最终判据是产物自检（同样经 Rosetta）与 Intel 真机验证。
+      # Rosetta。Rosetta 的 dyld 与真机 x64 的不是同一实现，hello 这类小程序无判别力；
+      # 但 #59553 的 thread-local 检查 Rosetta 下同样触发（2026-09-23 产物自检实证），
+      # 产物自检（经 Rosetta）可作该问题的判定，Intel 真机验证仍是最终把关。
       - name: SEA 注入诊断（macOS x64）
         if: matrix.cross-x64 == true
         shell: bash
@@ -218,6 +220,12 @@ jobs:
           if [ "${{ matrix.cross-x64 }}" = "true" ]; then
             export CC="clang -arch x86_64"
             export CXX="clang++ -arch x86_64"
+            # nodejs/node#59553：新式链接器产物经 postject 注入后 dyld 报 unsupported
+            # thread-local larger than 4GB——2026-09-23 交叉构建实证（自编译基底 84.3 MB
+            # 产物自检必崩，回退官方 108.9 MB 才过），且 Rosetta 下同样复现，产物自检
+            # 对该问题的判定有效。经典链接器是上游候选修复（诊断步已证 Xcode 26.6 支持
+            # -ld_classic），基底改用它链接，期望产物回到 ~84 MB。
+            export LDFLAGS="-Wl,-ld_classic"
             ./configure --with-intl=small-icu --dest-cpu=x64 --openssl-no-asm
           else
             ./configure --with-intl=small-icu
