@@ -531,13 +531,11 @@ jobs:
       # 同步到 Gitee。放在 GitHub Release 发布**之后**：Gitee 是镜像渠道，它出问题不该
       # 影响权威源的成果（下面失败时只让 job 标红，已发布的 GitHub Release 原样保留）。
       #
-      # **最新版传全套附件**（v1.1.3 起，产物压缩后单文件 ≤ 100 MB 的 Gitee 上限）：
-      #   - 附件配额是「单仓库合计 1 GB」，只装得下最新一版（压缩后约 842 MB + 过渡版翻倍的
-      #     mac 侧 ~200 MB 超限，故 **darwin 过渡附件不进 Gitee**，只在 GitHub 上）；Gitee 的
-      #     旧版本 Release 删掉附件、正文补 GitHub 下载链接，配额让给最新版。
-      #   - SHA256SUMS 一并上传——Gitee 侧从此也有校验和清单，自更新对两个来源走同一套校验。
-      #   - 重跑幂等：按 sha256 判等，已传的不重传，缺的补传（Gitee 上传接口没有 digest，
-      #     用「名字 + 大小」判存在、大小一致视为已传）。
+      # **附件不在 CI 传**：runner 在境外，跨境上行传不完一个 90 MB 的附件（v1.1.3 发版
+      # run #35 实测：curl 两次 20 分钟超时、0 bytes received，job 的超时兜底把整步掐死）。
+      # 附件由发版后的本地步骤补传：`node tools/ops/gitee-attach.cjs <tag>`（本机直连 Gitee
+      # 几分钟传完）——最新版传全套产物 + SHA256SUMS、darwin 过渡附件不进 Gitee、发新版时
+      # 删旧版附件清配额、按「名字 + 大小」判等补传，口径见 docs/agents/发版.md 与脚本头注释。
       - name: 发布到 Gitee
         env:
           GITEE_TOKEN: ${{ secrets.GITEE_TOKEN }}
@@ -578,101 +576,4 @@ jobs:
             fi
             echo "已在 Gitee 创建发行版（id=$rid）：https://gitee.com/$GITHUB_REPOSITORY/releases/tag/$TAG"
           fi
-
-          # —— 附件配额交接：把**其它** Release 的附件删掉、正文补上 GitHub 下载链接 ——
-          # Gitee 附件配额单仓库合计 1 GB，只装得下最新一版。列全量 Release 逐个处理，
-          # 本 tag 跳过。删除**已发布的**旧版附件是本策略的设计使然（旧版正文有 GitHub 链接兜底）。
-          page=1
-          while :; do
-            list="$(curl -sfS -m 30 -H "$AUTH" "$API/releases?page=$page&per_page=20" || echo '[]')"
-            count="$(printf '%s' "$list" | jq 'length')"
-            [ "$count" -gt 0 ] || break
-            for r in $(printf '%s' "$list" | jq -r '.[].id'); do
-              [ "$r" = "$rid" ] && continue
-              rtag="$(printf '%s' "$list" | jq -r --argjson r "$r" '.[] | select(.id==$r) | .tag_name')"
-              # 删附件
-              for f in $(curl -sfS -m 30 -H "$AUTH" "$API/releases/$r/attach_files" | jq -r '.[].id' 2>/dev/null || true); do
-                echo "清配额：删旧版 $rtag 的附件 #$f"
-                curl -sfS -m 60 -X DELETE -H "$AUTH" "$API/releases/$r/attach_files/$f" >/dev/null || \
-                  echo "::warning::旧版 $rtag 附件 #$f 删除失败（配额可能被占用，最新版附件或许传不上）"
-              done
-              # 正文补 GitHub 链接（幂等：已含链接就不再改）
-              body="$(curl -sfS -m 30 -H "$AUTH" "$API/releases/$r" | jq -r '.body')"
-              gh_url="https://github.com/$GITHUB_REPOSITORY/releases/tag/$rtag"
-              if printf '%s' "$body" | grep -qF "$gh_url"; then continue; fi
-              jq -n --arg b "$(printf '%s\n\n---\n\n本页附件已清理（配额让给最新版），请到 GitHub Release 下载：\n%s' "$body" "$gh_url")" \
-                '{body:$b}' > gitee-body-patch.json
-              curl -sfS -m 60 -X PATCH "$API/releases/$r" -H "$AUTH" \
-                -H "Content-Type: application/json" --data-binary @gitee-body-patch.json >/dev/null || \
-                echo "::warning::旧版 $rtag 正文补链接失败"
-              echo "旧版 $rtag：附件已清，正文补上 GitHub 下载链接"
-            done
-            page=$((page+1))
-            [ "$page" -gt 10 ] && break   # 配额交接只做 10 页，防御分页异常
-          done
-
-          # —— 传附件：逐个上传、按「名字 + 大小」判等补传 ——
-          # Gitee 附件单文件上限 100 MB：超限的（不该有——产物已压缩；若出现说明体积回涨）
-          # 跳过并在正文有 GitHub 链接兜底的前提下如实报错，不让整条发布链断在这一个文件上。
-          failed=""
-          for f in dist/github-desktop-zh-cn-*; do
-            name="$(basename "$f")"
-            case "$name" in *-darwin-*) echo "跳过过渡附件（只在 GitHub）：$name"; continue;; esac
-            size="$(stat -c%s "$f")"
-            if [ "$size" -ge $((100 * 1024 * 1024)) ]; then
-              echo "::error::附件 $name 达 $((size / 1024 / 1024)) MB，超出 Gitee 单文件 100 MB 上限——产物体积回涨了，先修体积再发版"
-              failed="$failed $name"
-              continue
-            fi
-            # 已存在且大小一致 → 跳过（幂等重跑）；名字在、大小不一致 → 删了重传
-            have_id="$(curl -sfS -m 30 -H "$AUTH" "$API/releases/$rid/attach_files" | jq -r --arg n "$name" '.[] | select(.name==$n) | "\(.id) \(.size)"' 2>/dev/null | head -1 || true)"
-            if [ "$(printf '%s' "$have_id" | awk '{print $2}')" = "$size" ]; then
-              echo "Gitee 上已有且大小一致，跳过：$name"
-              continue
-            fi
-            if [ -n "$have_id" ]; then
-              old_id="$(printf '%s' "$have_id" | awk '{print $1}')"
-              echo "Gitee 上已有同名但大小不符，删除重传：$name（#$old_id）"
-              curl -sfS -m 60 -X DELETE -H "$AUTH" "$API/releases/$rid/attach_files/$old_id" >/dev/null || true
-            fi
-            ok=""
-            for attempt in 1 2 3; do
-              if out="$(curl -sS -m 1200 -X POST "$API/releases/$rid/attach_files" -H "$AUTH" \
-                -F "file=@$f" 2>&1)"; then
-                echo "已上传 $name（$((size / 1024 / 1024)) MB）"
-                ok=1
-                break
-              fi
-              detail="$(printf '%s' "$out" | tr '\n' ' ' | tr -d '\r' | tail -c 200)"
-              if [ "$attempt" -lt 3 ]; then
-                echo "附件 $name 第 $attempt 次上传失败，15 秒后重试：$detail"
-                sleep 15
-              else
-                echo "附件 $name 第 3 次上传失败：$detail"
-              fi
-            done
-            if [ -z "$ok" ]; then
-              failed="$failed $name"
-              echo "::error::附件 $name 上传 Gitee 失败：$(printf '%s' "$out" | tr '\n' ' ' | tr -d '\r' | tail -c 300)"
-            fi
-          done
-
-          # SHA256SUMS 一并传（Gitee 侧从此也有校验和清单）
-          if [ -f dist/SHA256SUMS ]; then
-            sums_name="SHA256SUMS"
-            sums_size="$(stat -c%s dist/SHA256SUMS)"
-            have_id="$(curl -sfS -m 30 -H "$AUTH" "$API/releases/$rid/attach_files" | jq -r --arg n "$sums_name" '.[] | select(.name==$n) | "\(.id) \(.size)"' 2>/dev/null | head -1 || true)"
-            if [ "$(printf '%s' "$have_id" | awk '{print $2}')" != "$sums_size" ]; then
-              [ -n "$have_id" ] && curl -sfS -m 60 -X DELETE -H "$AUTH" "$API/releases/$rid/attach_files/$(printf '%s' "$have_id" | awk '{print $1}')" >/dev/null || true
-              curl -sS -m 120 -X POST "$API/releases/$rid/attach_files" -H "$AUTH" -F "file=@dist/SHA256SUMS" >/dev/null \
-                && echo "已上传 SHA256SUMS" || echo "::warning::SHA256SUMS 上传 Gitee 失败（自更新在 Gitee 来源会跳过校验和比对，不阻断）"
-            else
-              echo "Gitee 上已有 SHA256SUMS，跳过"
-            fi
-          fi
-
-          if [ -n "$failed" ]; then
-            echo "::error::本次未能上传 Gitee：$failed（重跑即可续传，已传成功的不会重来）"
-            exit 1
-          fi
-          echo "Gitee 发行版已就绪：https://gitee.com/$GITHUB_REPOSITORY/releases/tag/$TAG"
+          echo "Gitee 发行版正文已就绪（附件由 tools/ops/gitee-attach.cjs 发版后本地补传）：https://gitee.com/$GITHUB_REPOSITORY/releases/tag/$TAG"
