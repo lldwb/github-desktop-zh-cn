@@ -589,7 +589,7 @@ jobs:
             [ "$count" -gt 0 ] || break
             for r in $(printf '%s' "$list" | jq -r '.[].id'); do
               [ "$r" = "$rid" ] && continue
-              rtag="$(printf '%s' "$list" | jq -r --argjson i "$r" '.[] | select(.id==$r) | .tag_name')"
+              rtag="$(printf '%s' "$list" | jq -r --argjson r "$r" '.[] | select(.id==$r) | .tag_name')"
               # 删附件
               for f in $(curl -sfS -m 30 -H "$AUTH" "$API/releases/$r/attach_files" | jq -r '.[].id' 2>/dev/null || true); do
                 echo "清配额：删旧版 $rtag 的附件 #$f"
