@@ -1,5 +1,26 @@
 # Changelog
 
+## [1.1.3] - 2026-09-23
+
+> 产物全面瘦身：10 个产物（cli 4 + gui 6）全部压进 Gitee 单文件附件上限 100 MB，mac 侧平台词从内核词 darwin 改成使用者一眼可读的 macos（本次发版双名字过渡一版），Gitee 镜像开始随发行版传附件。构建侧把 mac x64 基底挪到 arm64 机器交叉编译，绕开 intel runner 的整机停摆。
+
+### 新增
+
+- **产物全面瘦身进 100 MB**：单文件产物 mac / Linux 换 small-icu 自编译 node 基底（CI 从源码编译、`actions/cache` 缓存；官方 node 的 ICU 数据约 28 MB，本仓库零 Intl 使用），GUI 根级 `compression: maximum`（AppImage 走 xz、dmg 转 ULMO/LZMA）、Windows 免安装包 zip 换 7z、语言包裁到中英两个、软渲染与 WebGPU 编译器按平台裁剪。CI 实测：cli 81.4～93.8 MB（Windows 83.6 / mac arm64 81.4 / mac x64 84.8 / Linux 93.8），gui 79.7～91.7 MB（Windows 7z 81.2 / setup 90.8、dmg 79.7 arm64 / 90.8 x64、AppImage 91.7 / deb 91.2）——v1.1.2 唯一超限的 macOS x64 dmg（102.5 MB）就此达标；体积随构建打进 CI 日志（`check-gui-dist`），超 100 MB 打 `::warning::`，不必下载附件。
+- **平台词 mac 侧 darwin → macos**（v1.1.3 起）：SEA 产物名由 `tools/build.js` 的 `PLATFORM_WORD` 映射，GUI 靠 `electron-builder.yml` 的 `mac.artifactName` 固定；自更新 `scripts/update.js` 按「macos 优先、darwin 兜底」双词匹配，新版工具对两代名字的 Release 都更新得动。本次 Release 同时挂 macos 与 darwin 两份名字（release job 的 `TRANSITION_DARWIN_ALIASES`，SHA256SUMS 双名字各一行），v1.1.2 及更早的老工具也能更新；只过渡一版，下一版发版前关掉开关并删复制步骤。
+- **Gitee 镜像开始传附件**：此前产物超 100 MB 只发正文，压缩后全部达标——CI 给最新版传全套产物 + SHA256SUMS，发新版时删旧版附件、旧版正文补上 GitHub 下载链接（1 GB 附件配额让给最新版）；darwin 过渡附件不进 Gitee。
+- **mac x64 基底挪 arm64 机器交叉编译**（受迫例外：intel runner 随机整机静默停摆，上游 actions/runner-images#13882，看门狗救不了）：`CC/CXX` 钉 `-arch x86_64`——node 的 make 构建在 mac 上从不传 `-arch`，缺了编译器按 host 的 arm64 出码、编出 arm64 码冒名 x64 的废品；链接用经典链接器 `-ld_classic` 绕 nodejs/node#59553（新式链接器产物经 SEA 注入后 dyld 报 thread-local 超 4GB 起不来，Rosetta 下同样复现、产物自检判定有效）；缓存 key 按 matrix.name + 链接器区分；自编译基底加 `process.arch == x64` 硬校验，产物按基底架构取名不会错标。
+
+### 变更
+
+- `tools/build.js` 新增 `--node <可执行文件>` 指定产物基底（默认当前 node）；交叉构建不另做特殊命名，产物名架构词一律按基底查询。
+- 文档口径同步：AGENTS.md（矩阵现状 / 体积实测 / 交叉构建受迫例外）、docs/打包与分发.md（Gitee 新口径、体积数字、检查清单、产物计数 13→10）、docs/agents/发版.md（产物命名、Gitee 段、产物计数）。
+
+### 说明
+
+- 构建与分发侧的工具链调整（自编译基底、压缩体系、产物命名、Gitee 附件策略、交叉编译），对使用者零行为变化——汉化 / 还原 / 字典逻辑未动，产物命名变更由自更新双词匹配兜底、历史字典与备份完全不受影响；按语义化分级规则取**小版本** 1.1.3。
+- `package.json` 版本号 1.1.2 → 1.1.3
+
 ## [1.1.2] - 2026-09-21
 
 > 接着 v1.1.1 把 macOS 安装目录识别修到底：GitHub Desktop.app 放在任意位置（桌面 / 下载 / 自定义目录）也能自动识别，不再要求先挪进「应用程序」。

@@ -171,7 +171,7 @@ GUI 与命令行是**同一套脚本**的两种界面——定位 / 替换 / 备
 双击产物，出现中文菜单：
 
 ```text
- GitHub Desktop 汉化工具 v1.1.2
+ GitHub Desktop 汉化工具 v1.1.3
 ────────────────────────────────────────────────────────────────
  安装位置：C:\Users\<用户名>\AppData\Local\GitHubDesktop\app-3.6.6\resources\app
  应用版本：3.6.6
