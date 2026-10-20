@@ -125,12 +125,12 @@ Electron 里 `process.execPath` 是**应用可执行文件**（改名后的 exe�
 
 | 通道 | 方向 | 入参 | 返回 |
 |---|---|---|---|
-| `state` | invoke | — | `{ ok, error?, appDir, resourcesDir, rootDir, version, dict: { version, matched, count, source, error? }, patched, hasBackup, backupPath, toolVersion, platform, dataRoot, license, repoUrl, mirrorUrl, dictVersions, installed: [{ version, resourcesDir, hasDict, current, custom }] }` |
+| `state` | invoke | — | `{ ok, error?, appDir, resourcesDir, rootDir, version, dict: { version, matched, count, source, error? }, patched, hasBackup, backupPath, toolVersion, platform, dataRoot, license, repoUrl, mirrorUrl, dictVersions, installed: [{ version, resourcesDir, hasDict, current, custom }] }`——`installed[].hasDict` 是**本地口径**（不联网），远端叠加见下文「字典可用性的三态」 |
 | `dictEntries` | invoke | — | `{ ok, version, count, rows: [{ en, zh, group, type }], error? }` |
 | `prompt` | invoke | — | `{ ok, text }`——`scripts/dict/dict-prompt.js` 里那份系统提示词，原样展示 |
 | `pickPath` | invoke | — | 同 `state`（弹系统目录选择框 → `writeConfig` → 重新解析）；选中无效目录时返回 `{ ...state, ok: false, error }`，界面据此提示 |
 | `setVersion` | invoke | `version` | `{ ok, version, notes, hasError, restarted, error? }`；版本不在本机已安装列表里 → `{ ok: false, error }`；选中的就是当前目标、或确认框被取消 → `{ ok: false, canceled: true }`。确认框里带「同时禁止该版本自动更新」勾选（默认勾上） |
-| `downloadable` | invoke | — | `{ ok, platform, installable, versions: [{ version, assetName, size, hasDict }] }`——官方 Release 里**有产物、本机未装**的版本（已装的在 `state.installed` 里）。只在窗口打开时取一次 |
+| `downloadable` | invoke | — | `{ ok, platform, installable, remoteDict: { ok, versions, error?, failures }, versions: [{ version, assetName, size, hasDict, dictLocal, dictRemote, dictState }] }`——官方 Release 里**有产物、本机未装**的版本（已装的在 `state.installed` 里）。只在窗口打开时取一次；同一次调用顺带取**远端仓库字典目录列表**（只取列表、不下载字典）：`hasDict` = 本地 ∪ 远端，`dictState` 为 `local` / `remote` / `none` 三态，`remoteDict.ok` 为假表示远端列表取不到（界面提示并降级为本地判断）。详见下文「字典可用性的三态」 |
 | `installVersion` | invoke | `version` | `{ ok, version, notes, restarted, error? }`——下载官方产物并铺到 `<安装根>/app-<版本>/`（约 300 MB，与现有版本并存），装完自动切过去；确认框在主进程弹，取消 → `{ ok: false, canceled: true }` |
 | `patch` | invoke | — | `{ ok, version, total, restarted, error?, hint? }`；用户在确认框点取消时返回 `{ ok: false, canceled: true }` |
 | `restore` | invoke | — | `{ ok, version, source, total, ambiguous, skipped, restarted, error?, hint? }`（取消同上） |
@@ -142,6 +142,23 @@ Electron 里 `process.execPath` 是**应用可执行文件**（改名后的 exe�
 | `busy` | send（主 → 渲染） | `{ task, phase }` | 无（用于显示「正在汉化…」；`task` 为 `null` 表示回到空闲） |
 
 `state` 的字段全部来自现有函数：`locateApp` / `listInstalledVersions` / `listDictVersions` / `loadDict` / `dictLabel` / `isPatched` / `backupExists` / `backupDir` / `readConfig` / `dataRoot` / `repoUrls`，外加 `package.json` 的 `license`。唯一在主进程里做整理的是 `installedForPicker()`——把已安装版本列表补上 `hasDict` / `current` / `custom` 三个标记并按版本排序，供「切换版本」窗口直接用。`rootDir` 是界面上展示的「安装根」（Windows 取 `app-<版本>` 的上一级，即截图里的 `…\AppData\Local\GitHubDesktop`），仅用于展示，不参与任何写盘路径计算。
+
+### 字典可用性的三态（2026-09-23）
+
+「这个版本有没有字典」原先只看本地（`common.listDictVersions()` = 数据根外部字典 + 内嵌资源），而打包产物只内嵌构建时的最新字典——之后新产出的字典（如 3.6.7）远端 main 上已经有、本地数据根没有，于是「切换版本」窗口把本来可以汉化的版本标成「无字典」。现在：
+
+- `state.installed[].hasDict` **仍是本地口径**：启动时的状态查询不联网（进工具不该等一次网络往返）；
+- 打开「切换版本」窗口时，`downloadable` 顺带取一次**远端仓库字典目录列表**（返回里的 `remoteDict`，只取目录名、不下载任何字典文件），渲染层用它与本地口径叠加出三态：
+
+| 三态 | 判定 | 界面标签 | 切换 / 安装时 |
+|---|---|---|---|
+| `local` | 本地数据根 / 内嵌资源有字典 | 无标签 | 直接可汉化 |
+| `remote` | 仅远端仓库有 | 「字典待下载」 | 自动下载该版本字典（`dict-sync.prefetchDict`） |
+| `none` | 本地与远端都没有 | 「无字典」 | 仍可切换，但汉化时取不到字典会报可读错误 |
+
+- 默认视图「只显示有汉化的版本」按 `hasDict`（= local ∪ remote）过滤，所以「字典待下载」的版本也在默认视图里；
+- 远端列表取不到时 `remoteDict.ok` 为假：渲染层退回纯本地判断，并在「可下载」组上方显示一句降级提示（`#download-note`），窗口照常打开（`downloadable` 不因远端接口失败而整体失败）；
+- 拿到远端列表后会重渲染「本机已安装」那组，让两组标签口径一致——否则刚装好的新版本在已安装组里仍显示「无字典」。
 
 ### 界面（复刻截图，去掉编辑与平台下拉）
 

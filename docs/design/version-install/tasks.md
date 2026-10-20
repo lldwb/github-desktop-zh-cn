@@ -16,6 +16,7 @@
 ## 3. 安装模块（新增 `scripts/cmd/install-version.js`）
 
 - [x] `listDownloadable()`：官方版本 × 本机已装 × 本机字典，合并出带 `hasDict` / `installed` 标记的列表 —— 实测 `--list` 输出 3.6.5（已安装）/ 3.6.4 / 3.6.0，3.6.6 因官方未发 Release 产物不在列、3.6.3 等因无字典被过滤，均符合预期。
+- [x] **口径修正（2026-09-23）**：`hasDict` 从「本地有字典」放宽为「本地或远端有字典」。取官方 Release 列表时顺带取远端仓库字典目录列表（GitHub contents API → Gitee 兜底，只取列表、不下载字典），新增 `dictLocal` / `dictRemote` / `dictState`（local / remote / none）与 `remoteDict` 状态字段；远端有而本地没有的标「字典待下载」并留在默认视图。切换（GUI `setVersion` / CLI 菜单 4）与安装（`install()` 成功与已装 skipped 两条分支）会自动调 `dict-sync.prefetchDict()` 预取字典，失败只提示、不回滚切换/安装。远端列表取不到时降级本地判断 + 界面可读提示，窗口照常打开。实测：`app-3.6.7` 本机已装、工作区无其字典时，GUI「本机已安装」显示「3.6.7 当前 字典待下载」（不再是无字典），勾「显示没汉化的版本」后 3.6.3 / 3.6.1 / 3.5.x 仍正确标「无字典」。
 - [x] `install(version)`：校验和比对 → 下载到 `tmp/downloads/*.part` → 解压到 `app-<版本>.part` → 校验必需文件 → 改名成 `app-<版本>` —— 用自造的小 nupkg 走通全链路（`LOCALAPPDATA` 指向临时目录，不碰真实安装根）：铺出 6 个文件、NuGet 元数据被跳过、`locateApp` 认得出来。
 - [x] 下载前磁盘空间检查（`fs.statfsSync`），不足即拒绝并说明所需空间 —— 代码就位；未实测触发（需要造一个空间不足的分区）。
 - [x] CLI 入口（`<版本>` / `--list` / `--from <本地包>`），带百分比进度 —— `--list` 与 `--from` 已实测。
