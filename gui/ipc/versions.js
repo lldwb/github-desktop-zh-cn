@@ -6,6 +6,7 @@
 const common = require('../../scripts/common.js');
 const patch = require('../../scripts/cmd/patch.js');
 const installer = require('../../scripts/cmd/install-version.js');
+const dictSync = require('../../scripts/dict/dict-sync.js');
 
 module.exports = function createVersionHandlers(ctx) {
   const { ask, confirmed, notifyBusy, withBusy } = ctx;
@@ -36,13 +37,28 @@ module.exports = function createVersionHandlers(ctx) {
           checkboxLabel: blocked ? '禁止自动更新（该版本已开启，不会重复注入）' : '同时禁止该版本自动更新',
           checkboxChecked: true,
         },
-        // 忙碌消息只在真要注入更新管控时发（见下），故不由骨架包
+        // 忙碌消息由下面的预取与注入各自发（两者都可能要等网络 / 复制几百 KB，见 run 里）
         task: null,
         run: async (choice) => {
           common.setTargetVersion(version); // 与 CLI 菜单的「切换版本」走同一个入口（SSOT 在 common.js）
           const notes = [`已切换到 GitHub Desktop ${version}。`];
           let hasError = false;
           let restarted = 'skipped';
+
+          // 切过去之前把该版本字典准备好：本地缺就联网取（远端列表里标「字典待下载」的版本，
+          // 通常就在这一步落盘）。失败**不阻止切换**——版本是用户选定的目标，字典是附赠能力；
+          // 为一次网络失败回滚用户的选择只会制造「切不过去」的假故障。原因明说，下次「汉化」还会兜底。
+          const dict = await withBusy(
+            'setVersion',
+            `正在准备 ${version} 的字典 …`,
+            () => dictSync.prefetchDict(version)
+          );
+          if (!dict.ok) {
+            notes.push(`${dict.error}（可稍后在「关于」里点「同步字典」重试）`);
+            hasError = true;
+          } else if (dict.message) {
+            notes.push(dict.message);
+          }
 
           if (choice.checkboxChecked && !blocked) {
             try {
@@ -67,6 +83,9 @@ module.exports = function createVersionHandlers(ctx) {
 
     // 可下载的版本（官方 Release）。只在「切换版本」窗口打开时取一次——进工具就联网会拖慢启动。
     // 本机已装的不列在这里（它们在「本机已安装」那一组）。
+    // 同时带回远端字典列表（remoteDict）：界面用「本地或远端有字典」判断，3.6.7 这类
+    // 「远端已有、本地还没下」的版本才不会被标成「无字典」，标「字典待下载」；
+    // 远端列表取不到时 remoteDict.ok 为假，界面提示一句并退回本地判断，窗口照常打开。
     downloadable: async () => {
       try {
         const r = await installer.listDownloadable();
@@ -74,6 +93,7 @@ module.exports = function createVersionHandlers(ctx) {
           ok: true,
           platform: r.platform,
           installable: r.installable,
+          remoteDict: r.remoteDict,
           versions: r.versions.filter((v) => !v.installed),
         };
       } catch (e) {
@@ -100,7 +120,7 @@ module.exports = function createVersionHandlers(ctx) {
 
       const mb = (n) => `${(n / 1048576).toFixed(0)} MB`;
       return withBusy('installVersion', `正在准备 ${version} …`, async () => {
-        await installer.install(version, {
+        const r = await installer.install(version, {
           log: () => notifyBusy('installVersion', `正在解压 ${version} …`),
           onProgress: (got, total) => {
             const pct = total ? Math.round((got / total) * 100) : 0;
@@ -110,12 +130,17 @@ module.exports = function createVersionHandlers(ctx) {
         });
         notifyBusy('installVersion', `正在切换到 ${version} …`);
         common.setTargetVersion(version);
-        return {
-          ok: true,
-          version,
-          notes: [`已安装 GitHub Desktop ${version} 并切换过去。`],
-          restarted: 'skipped',
-        };
+        const notes = [`已安装 GitHub Desktop ${version} 并切换过去。`];
+        let hasError = false;
+        // install() 装完顺手预取了字典（dict-sync.prefetchDict），结果在这里说清：
+        // 取不到不判安装失败（版本已就绪），提示下一步即可。
+        if (r.dict && !r.dict.ok) {
+          notes.push(`${r.dict.error}（可稍后在「关于」里点「同步字典」重试）`);
+          hasError = true;
+        } else if (r.dict && r.dict.message) {
+          notes.push(r.dict.message);
+        }
+        return { ok: true, version, notes, hasError, restarted: 'skipped' };
       });
     },
   };

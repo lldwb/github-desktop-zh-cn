@@ -15,6 +15,7 @@ const common = require('../common.js');
 const net = require('../net.js');
 const update = require('../update.js');
 const releaseAssets = require('../dict/release-assets.js');
+const dictSync = require('../dict/dict-sync.js');
 
 const checksumFile = (version) => `GitHub.Desktop-${version}-checksums.txt`;
 
@@ -45,30 +46,67 @@ function checkSpace(dir, pkgBytes) {
   return { free, need };
 }
 
-// 可下载的版本：官方列表（有产物的正式版） × 本机是否已装 × 本机是否有字典。
-// `hasDict` 决定它出不出现在默认视图（「只列有汉化的版本」），由调用方过滤——
+// 可下载的版本：官方列表（有产物的正式版） × 本机是否已装 × **本地或远端**是否有字典。
+//
+// 「有字典」的口径 2026-09-23 从「本地有」放宽为「本地或远端有」：打包产物只内嵌构建时的最新
+// 字典，之后新产出的字典（如 3.6.7）远端 main 上已有、本地数据根没有——只看本地会把「装完
+// 就能直接汉化」的版本标成「无字典」（用户报的就是这个）。故取官方列表时顺带取一次远端字典
+// **目录列表**（只取列表、**不下载任何字典文件**），两者取并集；远端列表取不到时降级为本地
+// 判断，原因随 remoteDict 带回给界面提示。
+//
+// 字段语义（三态必须可区分，别把「远端也没有」也放宽）：
+//   dictLocal  本地数据根 / 内嵌有该版本字典——装完立刻可汉化；
+//   dictRemote 远端仓库有该版本字典——切换 / 安装时会由 dict-sync.prefetchDict 自动下载；
+//   dictState  'local' | 'remote' | 'none' 三态，界面文案直接按它选（标签判定可单测，不散在渲染层）；
+//   hasDict    dictState !== 'none'——决定它出不出现在默认视图（「只列有汉化的版本」）；
+// 三者都在「本地无、远端无」时为 none——**不能放宽成有字典**。
 // 这里一律返回全量，GUI 的「显示没汉化的版本」勾选才有东西可展开。
 async function listDownloadable(opts = {}) {
   const dictVersions = common.listDictVersions();
   const installed = new Set(common.listInstalledVersions().map((x) => x.version));
-  const { platform, arch, versions } = await releaseAssets.listVersions(opts);
+  const listVersions = opts.listVersions || releaseAssets.listVersions; // 注入点：单测不真打网络
+  // 两个网络请求互不依赖，并行取；远端字典列表失败**不影响**官方版本列表（各自降级）
+  const [{ platform, arch, versions }, remote] = await Promise.all([
+    listVersions(opts),
+    opts.remoteDict || dictSync.remoteDictVersions(),
+  ]);
+  const remoteVersions = remote && remote.ok ? remote.versions : [];
   return {
     ok: true,
     platform,
     arch,
     installable: platform === 'windows',
-    versions: versions.map((v) => ({
-      version: v.version,
-      assetName: v.assetName,
-      size: v.size,
-      hasDict: dictVersions.includes(v.version),
-      installed: installed.has(v.version),
-    })),
+    // 远端字典列表的状态原样带出：界面据此提示「未能获取远端字典列表」并降级本地判断
+    remoteDict: {
+      ok: !!(remote && remote.ok),
+      versions: remoteVersions,
+      error: remote && !remote.ok ? remote.error : null,
+      failures: (remote && remote.failures) || [],
+    },
+    versions: versions.map((v) => {
+      const dictLocal = dictVersions.includes(v.version);
+      const dictRemote = remoteVersions.includes(v.version);
+      const dictState = dictLocal ? 'local' : dictRemote ? 'remote' : 'none';
+      return {
+        version: v.version,
+        assetName: v.assetName,
+        size: v.size,
+        installed: installed.has(v.version),
+        hasDict: dictState !== 'none',
+        dictLocal,
+        dictRemote,
+        dictState,
+      };
+    }),
   };
 }
 
-// 下载并安装指定版本。返回 { version, appDir, bytes, files }；已装且未 force 时返回 { skipped: true }。
+// 下载并安装指定版本。返回 { version, appDir, bytes, files, dict }；已装且未 force 时
+// 返回 { skipped: true, dict }（同样会补字典——「安装」的意图就是「切过去就能汉化」）。
 // `opts.from` 指定本地安装包时跳过下载（离线 / 自备包——也是下载通道不通时的降级路径）。
+// `dict` 是 dict-sync.prefetchDict 的结果：装完顺手把该版本字典取到本地，**失败不回滚安装**
+// （版本已铺好可正常使用），调用方按 { ok:false, error } 明说原因，降级策略见 prefetchDict。
+// `opts.dict === false` 可关掉这一步（只在测试与「只想铺版本」的场景用）。
 //
 // 失败语义：**任一步失败都不留半个 app-<版本> 目录**——先铺到 `app-<版本>.part`，必需文件齐了
 // 才改名成正式目录。官方改了打包结构时也能在这一步挡住（缺 main.js 即失败并清理）。
@@ -83,7 +121,8 @@ async function install(version, opts = {}) {
 
   const dest = targetDir(version);
   if (!opts.force && installedAt(version)) {
-    return { version, appDir: dest, skipped: true };
+    const dict = opts.dict === false ? null : await dictSync.prefetchDict(version);
+    return { version, appDir: dest, skipped: true, dict };
   }
 
   const platform = 'windows';
@@ -156,7 +195,10 @@ async function install(version, opts = {}) {
   fs.renameSync(staging, dest);
   // 安装包只在是下载来的、且放在临时目录时才删；用户自己给的本地包不动
   if (!opts.from) fs.rmSync(pkg, { force: true });
-  return { version, appDir: dest, bytes, files: r.written };
+  // 装完顺手把该版本字典取到本地：装这个版本的目的就是「切过去就能汉化」。
+  // 字典取不到**不回滚安装**（版本已铺好、可正常使用），原因随返回值带回给调用方明说。
+  const dict = opts.dict === false ? null : await dictSync.prefetchDict(version);
+  return { version, appDir: dest, bytes, files: r.written, dict };
 }
 
 // ============================ CLI ============================
@@ -182,7 +224,7 @@ function printHelp() {
 装出来的目录与官方安装同形，可被 locateApp 直接识别，与已装版本并存。
 
   <版本>          要安装的版本，如 3.6.4
-  --list          列出可下载的版本（只列本工具有字典的）
+  --list          列出可下载的版本（只列本地或远端已有字典的；远端有而本地没有的标「字典待下载」）
   --force         已装也重新下载覆盖
   --from <文件>   用本地安装包（跳过下载；下载通道不通时的降级路径）
   -h, --help      显示本帮助
@@ -202,10 +244,17 @@ async function main() {
     const rows = r.versions.filter((v) => v.hasDict);
     console.log(`可下载版本（${r.platform}-${r.arch}，只列有汉化字典的）：`);
     for (const v of rows) {
-      const mark = v.installed ? '（已安装）' : '';
-      console.log(`  ${v.version.padEnd(10)} ${(v.size / 1048576).toFixed(1).padStart(7)} MB ${mark}`);
+      const tags = [];
+      if (v.installed) tags.push('（已安装）');
+      if (!v.dictLocal) tags.push('（字典待下载）');
+      console.log(`  ${v.version.padEnd(10)} ${(v.size / 1048576).toFixed(1).padStart(7)} MB ${tags.join('')}`);
     }
     if (!rows.length) console.log('  （无）');
+    // 远端字典列表取不到时降级为本地判断——把原因说清楚，别让人以为「远端确实没字典」
+    if (!r.remoteDict.ok) {
+      console.log(`  注意：${r.remoteDict.error}。`);
+      for (const f of r.remoteDict.failures) console.log(`    ${f}`);
+    }
     return;
   }
 
@@ -229,10 +278,24 @@ async function main() {
   if (r.skipped) {
     console.log(`\n${r.version} 已经在本机：${r.appDir}`);
     console.log('（要重新下载加 --force）');
+    printDictResult(r.dict);
     return;
   }
   console.log(`\n\n已安装 ${r.version}：${r.appDir}`);
   console.log(`共铺开 ${r.files} 个文件。用「切换版本」切过去即可汉化。`);
+  printDictResult(r.dict);
+}
+
+// 安装后的字典预取结果：下载成功说一句；失败**明确提示但不判安装失败**（版本已就绪）。
+// 降级策略见 dict-sync.prefetchDict 的注释（切换 / 安装成功 + 提示失败，不拒绝）。
+function printDictResult(dict) {
+  if (!dict) return;
+  if (!dict.ok) {
+    console.log(` 注意：${dict.error}`);
+    console.log(' 版本本身已就绪；之后点「汉化」时还会再尝试获取字典。');
+  } else if (dict.message) {
+    console.log(` ${dict.message}`);
+  }
 }
 
 module.exports = { listDownloadable, install, targetDir, installedAt, main };

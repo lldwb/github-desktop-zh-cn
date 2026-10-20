@@ -10,6 +10,7 @@ const {
   dictLabel, backupDir, backupExists, isPatched, isPackaged, dataRoot, writeConfig,
   getPatchGroups, resolveTarget,
 } = require('./common');
+const dictSync = require('./dict/dict-sync.js');
 
 // 「关于」里展示的两条项目地址（SSOT 在 common.js，与 GUI 的「关于」窗口同源）
 const URLS = repoUrls();
@@ -330,21 +331,30 @@ async function downloadAndSwitch(rl) {
   console.log('');
   console.log(' 正在取官方版本列表…');
   let rows;
+  let list;
   try {
-    const r = await mod.listDownloadable();
-    rows = r.versions.filter((v) => v.hasDict && !v.installed);
+    list = await mod.listDownloadable();
+    // hasDict 是「本地或远端有字典」：远端已有、本地还没下载的版本也算有——
+    // 装上之后 install() 会自动把字典取到本地，故不再按纯本地口径过滤掉它们。
+    rows = list.versions.filter((v) => v.hasDict && !v.installed);
   } catch (e) {
     console.log(` 取列表失败：${e.message}`);
     return resolveTarget();
   }
+  if (!list.remoteDict.ok) {
+    // 降级说明：远端字典列表取不到时按本地判断，别让人以为「远端确实没字典」
+    console.log(` 注意：${list.remoteDict.error}。`);
+    for (const f of list.remoteDict.failures) console.log(`   ${f}`);
+  }
   if (!rows.length) {
-    console.log(' 没有可下载的版本：官方有产物的版本本机都装了，或都不在本工具有字典的范围内。');
+    console.log(' 没有可下载的版本：官方有产物的版本本机都装了，或本地与远端都没有对应字典。');
     return resolveTarget();
   }
 
   console.log(' 可下载的版本（有汉化字典、本机未装）：');
   rows.forEach((v, i) => {
-    console.log(`  ${i + 1}) ${v.version}  ${(v.size / 1048576).toFixed(1)} MB`);
+    const tag = v.dictLocal ? '' : '（字典待下载）';
+    console.log(`  ${i + 1}) ${v.version}  ${(v.size / 1048576).toFixed(1)} MB ${tag}`);
   });
   console.log('  0) 返回');
   const idx = Number(await ask(rl, ' 请选择：'));
@@ -371,6 +381,13 @@ async function downloadAndSwitch(rl) {
     });
     console.log(`\n\n 已安装 ${r.version}：${r.appDir}`);
     setTargetVersion(r.version);
+    // 安装时已由 install() 预取字典，这里把结果说清（失败不判安装失败，版本本身已就绪）
+    if (r.dict && !r.dict.ok) {
+      console.log(` 注意：${r.dict.error}`);
+      console.log(' （版本已就绪；回到菜单选 1) 汉化时还会再尝试获取字典。）');
+    } else if (r.dict && r.dict.message) {
+      console.log(` ${r.dict.message}`);
+    }
     console.log(' 已切到该版本——回到菜单选 1) 汉化即可。');
   } catch (e) {
     console.log(`\n 安装失败：${e.message}`);
@@ -393,7 +410,9 @@ async function setPath(rl) {
   if (installed.length > 1) {
     console.log(' 本机检测到多个 GitHub Desktop（默认只列有汉化字典的版本）：');
     list.forEach((x, i) => {
-      const tag = versions.includes(x.version) ? '' : '（无字典）';
+      // 这里只看本地字典：进菜单不联网（本文件既有约定，别让进菜单等一次网络往返）。
+      // 远端已有、本地还没下载的版本（如 3.6.7）选中切换时会自动下载字典，见下面的预取。
+      const tag = versions.includes(x.version) ? '' : '（本地无字典；远端若已有，切换时会自动下载）';
       console.log(`  ${i + 1}) ${x.version}${tag}  ${x.resourcesDir}`);
     });
   } else if (installed.length === 1) {
@@ -411,6 +430,16 @@ async function setPath(rl) {
     const hit = list[idx - 1];
     setTargetVersion(hit.version);
     console.log(`\n 已切换到 GitHub Desktop ${hit.version}（${hit.resourcesDir}）`);
+    // 切过去顺便把该版本字典准备好：本地缺就联网取（远端有、本地还没有的版本在这一步落盘）。
+    // 失败不阻止切换——版本已是用户选定的目标，字典取不到不该把切换判失败；原因明说，
+    // 之后「汉化」时 patch 的 ensureDict 还会再兜底一次（与 GUI 的 setVersion 同一套语义）。
+    const dict = await dictSync.prefetchDict(hit.version);
+    if (!dict.ok) {
+      console.log(` 注意：${dict.error}`);
+      console.log(' （之后选 1) 汉化时还会再尝试获取字典。）');
+    } else if (dict.message) {
+      console.log(` ${dict.message}`);
+    }
     // 与 GUI 的「切换版本」同一套：版本是使用者自己挑的，默认把它钉住、别被官方更新悄悄换走
     if (!getPatchGroups(hit.version).includes('updateControl')
       && (await confirm(rl, ' 同时禁止该版本自动更新（会重启 GitHub Desktop）？[Y/n] '))) {

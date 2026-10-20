@@ -512,6 +512,19 @@ function remoteDictUrls(version) {
   return [`${GH_RAW}/${rel}`, `${GH_CDN}/${rel}`, `${GITEE_RAW}/${rel}`];
 }
 
+// 远端仓库**字典目录列表**的候选地址（按序尝试：GitHub API 权威源 → Gitee 镜像兜底）。
+// 用途是「显示阶段判断某个版本远端有没有字典」——只取目录名，**不下载任何字典文件**：
+// 下载走 remoteDictUrls + dict-sync.ensureDict，只在切换 / 安装这类动作里发生。
+// 地址拼装留在本文件：GH_* / GITEE_* 是地址 SSOT，其余脚本不得自行拼 URL（同「在线能力」约定）。
+// 两个端点同形：GitHub contents API 与 Gitee v5 的 contents 接口都返回
+// [{ name, type: 'dir' | 'file', path, … }]，故解析一处即可（调用方见 dict-sync.remoteDictVersions）。
+// 匿名调用有速率上限（GitHub 60 次/小时/IP），调用方必须缓存结果——那是调用方的责任，
+// 本函数只给地址。
+function remoteDictListUrls() {
+  const rel = '/contents/dictionaries';
+  return [`${GH_API}${rel}?ref=${GH_BRANCH}`, `${GITEE_API}${rel}?ref=${GH_BRANCH}`];
+}
+
 // 英文排版同样会用到的 Unicode 标点：官方原版里本来就可能存在，不能当「来自汉化」的凭据。
 // 实测教训——「…」译文（省略号）单靠「非 ASCII」判据会通过，而官方原版里 11 处省略号
 // 并未被汉化，逆替换后全变成 "automatically…"。
@@ -959,6 +972,7 @@ module.exports = {
   splitScopedKey,
   reverseEntries,
   remoteDictUrls,
+  remoteDictListUrls,
   hasEmbeddedDict,
   compareVersions,
   PLATFORM_SEGMENTS,

@@ -103,6 +103,13 @@ test('infer：真实安装目录可用时，菜单分组覆盖到具体父菜单
     t.skip('本机无 GitHub Desktop 安装目录');
     return;
   }
+  // 本机安装版本可能比工作区字典新（官方升级 / 装了新版本，而仓库 dictionaries/ 还没覆盖它）：
+  // 此时 infer 要读的 dictionaries/<版本>/zh-CN.json 不存在，属**环境不满足**而非分组逻辑出错。
+  // CI 上没有安装目录、不会走到这里；本地真实机器会遇到，故跳过而不是让用例挂掉。
+  if (!common.listDictVersions().includes(app.version)) {
+    t.skip(`本机安装版本 ${app.version} 在仓库字典中不存在（工作区字典未覆盖本机版本），跳过分组推断`);
+    return;
+  }
   const r = groups.infer(app.version, {});
   const menuGroups = Object.keys(r.groups).filter((n) => n.startsWith('菜单-'));
   assert.ok(

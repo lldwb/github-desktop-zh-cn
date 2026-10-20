@@ -23,6 +23,7 @@ const els = {
   versionEmpty: document.getElementById('version-empty'),
   downloadList: document.getElementById('download-list'),
   downloadEmpty: document.getElementById('download-empty'),
+  downloadNote: document.getElementById('download-note'),
   aboutModal: document.getElementById('about'),
   aboutClose: document.getElementById('btn-about-close'),
   aboutVersion: document.getElementById('about-version'),
@@ -56,6 +57,12 @@ let pending = false; // 有操作在跑：按钮全部禁用，避免并发改�
 let toastTimer = null;
 let promptLoaded = false; // 提示词是静态内容，读一次就够
 let downloadableRows = null; // 官方可下载版本（null = 还没取过；取一次后在会话内复用）
+// 远端仓库已有字典的版本号数组（随 downloadable 一起取回；null = 还不知道/取失败）。
+// 「有没有字典」要按**本地或远端**判断：打包产物只内嵌构建时的最新字典，之后新产出的字典
+// （如 3.6.7）远端 main 已经有、本地数据根没有——只看本地会把「切过去就能汉化」的版本
+// 标成「无字典」。远端列表取不到时保持 null，退回纯本地判断（与修复前一致，不阻塞界面）。
+let remoteDictVersions = null;
+let lastState = null; // 最近一次状态：远端字典列表到达后据此重算「本机已安装」的标签
 
 // —— 界面状态 ——
 function setPhase(text) {
@@ -120,11 +127,21 @@ function renderState(state) {
   els.statusbar.textContent = parts.join(' · ');
 }
 
-// 版本列表：默认只列**有汉化**（有字典）的版本，勾「显示没汉化的版本」才连没字典的一起列。
+// 某版本「有没有字典」的三态：本地有 / 远端有（切过去时会自动下载）/ 都没有。
+// 远端列表还没取到（或取失败）时退回纯本地判断——这就是降级路径，界面照常可用。
+function dictStateOf(version, hasLocalDict) {
+  if (hasLocalDict) return 'local';
+  if (remoteDictVersions && remoteDictVersions.includes(version)) return 'remote';
+  return 'none';
+}
+
+// 版本列表：默认只列**有汉化**（本地或远端有字典）的版本，勾「显示没汉化的版本」才连没字典的一起列。
 // 当前正在处理的那个恒在列并标出来——点它没有意义（目标是它自己），直接禁用。
 function renderVersions(state) {
   const all = state.installed || [];
-  const list = els.versionAll.checked ? all : all.filter((x) => x.hasDict || x.current);
+  const list = els.versionAll.checked
+    ? all
+    : all.filter((x) => dictStateOf(x.version, x.hasDict) !== 'none' || x.current);
 
   els.versionList.replaceChildren(
     ...list.map((x) => {
@@ -142,7 +159,11 @@ function renderVersions(state) {
       line.appendChild(name);
       const tags = [];
       if (x.current) tags.push(['tag current', '当前']);
-      if (!x.hasDict) tags.push(['tag', '无字典']);
+      // 「远端有、本地没有」与「远端也没有」必须能区分：前者切过去就能用（字典会自动下载），
+      // 后者才是真的没汉化。混成一个标签会把人劝退。
+      const dictState = dictStateOf(x.version, x.hasDict);
+      if (dictState === 'remote') tags.push(['tag', '字典待下载']);
+      else if (dictState === 'none') tags.push(['tag', '无字典']);
       if (x.custom) tags.push(['tag', '自定义目录']);
       for (const [cls, text] of tags) {
         const tag = document.createElement('span');
@@ -227,6 +248,7 @@ function applyFilter() {
 // —— 数据 ——
 async function refresh() {
   const state = await window.api.state();
+  lastState = state; // 远端字典列表到达后要拿它重算「本机已安装」的标签（见 loadDownloadable）
   renderState(state);
   renderVersions(state);
   renderAbout(state);
@@ -361,10 +383,13 @@ async function doSyncDict() {
 
 // 官方可下载的版本：只在第一次打开窗口时联网取，之后复用（会话内它不会变）。
 // force 用于「装完一个再打开」——那时列表该少一项、本机已安装那组该多一项。
+// 同一次调用顺带取回**远端字典列表**（只取列表、不下载字典）：用它把「本地或远端有字典」
+// 作为「有汉化」的判据，并把「远端有、本地没有」标成「字典待下载」。
 async function loadDownloadable(force) {
   if (downloadableRows && !force) return;
   els.downloadEmpty.hidden = false;
   els.downloadEmpty.textContent = '正在取官方版本列表…';
+  els.downloadNote.hidden = true;
   els.downloadList.replaceChildren();
   try {
     const r = await window.api.downloadable();
@@ -373,13 +398,26 @@ async function loadDownloadable(force) {
       return;
     }
     downloadableRows = { versions: r.versions || [], installable: r.installable };
+    // 远端字典列表取不到时降级为本地判断（remoteDictVersions 保持 null），并给一句可读提示——
+    // 不能默默换成「本地口径」让人以为远端也没有字典。
+    const remote = r.remoteDict || null;
+    remoteDictVersions = remote && remote.ok ? remote.versions || [] : null;
+    if (remote && !remote.ok) {
+      els.downloadNote.hidden = false;
+      // 后端 error 已含「已按本地字典判断」，这里只补一句「接下来会发生什么」，不重复前半句
+      els.downloadNote.textContent = `${remote.error}——列表中「没有字典」的版本，切换时仍会再尝试获取。`;
+    } else {
+      els.downloadNote.hidden = true;
+    }
     renderDownloadable();
+    if (lastState) renderVersions(lastState); // 「本机已安装」那组的标签同样跟随远端判断
   } catch (e) {
     els.downloadEmpty.textContent = `取不到官方版本列表：${e.message || e}`;
   }
 }
 
 // 渲染可下载列表：与「本机已安装」共用同一种行样式（version-item），只是标签换成体积。
+// 「有没有字典」由后端算好：dictLocal（本地有，装完立刻可汉化）/ dictRemote（远端有，装完自动下载）。
 function renderDownloadable() {
   if (!downloadableRows) return;
   const { versions, installable } = downloadableRows;
@@ -400,7 +438,9 @@ function renderDownloadable() {
     line.appendChild(name);
     for (const text of [
       `${(v.size / 1048576).toFixed(0)} MB`,
-      v.hasDict ? null : '无字典',
+      // 三态由后端算好（dictState）：本地有 → 不加标签（装完立刻可汉化）；
+      // 仅远端有 → 「字典待下载」；两边都没有 → 「无字典」。两者混成一个标签会把人劝退。
+      v.dictState === 'local' ? null : v.dictState === 'remote' ? '字典待下载' : '无字典',
       installable ? null : '本平台暂不支持',
     ]) {
       if (!text) continue;
