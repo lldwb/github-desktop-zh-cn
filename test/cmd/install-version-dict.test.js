@@ -12,8 +12,14 @@
 //   4. prefetchDict：本地已有不联网；缺则联网取；失败收成 { ok:false, error } 不抛
 //      （切换 / 安装成功但提示字典失败，不回滚用户的选择）。
 //
-// 零网络的保证：所有网络与写盘路径都经注入驱动（fetchJson / listVersions / ensure），
+// 零网络的保证：所有网络与写盘路径都经注入驱动（fetchJson / listVersions / ensure / dictVersions），
 // 不真发请求、不落任何字典文件；夹具形态取自 GitHub contents API（type: 'dir' | 'file'）。
+//
+// 环境隔离（2026-09-23 补，方案 A 前置）：`listDownloadable` 的「本地有没有字典」一律通过
+// `opts.dictVersions` **显式注入**，不读仓库 `dictionaries/` 的真实内容。原因：仓库 checkout 的内容
+// 会变——CI / 收尾分支上仓库自带 `dictionaries/3.6.7`，而早期 HEAD 上没有；若测试直读
+// `common.listDictVersions()`，同一份代码在两种 checkout 上会得出相反的断言结果（那不是行为回归，
+// 是测试变成了「环境断言」）。注入后 local / remote / none 三态语义与产品默认路径完全一致。
 'use strict';
 
 const test = require('node:test');
@@ -23,6 +29,12 @@ const fs = require('node:fs');
 const common = require('../../scripts/common');
 const dictSync = require('../../scripts/dict/dict-sync');
 const installer = require('../../scripts/cmd/install-version');
+
+// 注入用的本地字典集合：本地只有 3.6.6（刻意不含 3.6.7，也不含仓库里可能出现的任何其它版本）。
+// 这样「远端有 3.6.7、本地没有」这一被测场景与 checkout 内容无关。
+const LOCAL_DICTS = ['3.6.6'];
+// 「仓库必然不存在」的版本号：用于落盘断言（任何 checkout 都不会有 9.9.9 的字典文件）
+const ABSENT_VERSION = '9.9.9';
 
 // 远端目录列表的条目形态（GitHub contents API 与 Gitee v5 同形）
 const dir = (name) => ({ name, type: 'dir', path: `dictionaries/${name}` });
@@ -132,7 +144,9 @@ test('remoteDictVersions：成功结果按 TTL 缓存，失败不缓存', async 
 test('listDownloadable：hasDict = 本地 ∪ 远端，三态可区分（3.6.7 不再是无字典）', async () => {
   const r = await installer.listDownloadable({
     listVersions: releaseStub(['3.6.7', '3.6.6', '3.6.3']),
-    // 远端有 3.6.7；3.6.6 本地有（仓库自带字典）；3.6.3 两边都没有
+    // 本地注入只有 3.6.6（与 checkout 里 dictionaries/ 的真实内容无关）；
+    // 远端有 3.6.7；3.6.3 两边都没有 → 覆盖 remote / local / none 三态
+    dictVersions: LOCAL_DICTS,
     remoteDict: { ok: true, versions: ['3.6.7'], error: null, failures: [] },
   });
 
@@ -165,6 +179,8 @@ test('listDownloadable：hasDict = 本地 ∪ 远端，三态可区分（3.6.7 �
 test('listDownloadable：远端列表取不到时降级为本地判断，并带回可读原因', async () => {
   const r = await installer.listDownloadable({
     listVersions: releaseStub(['3.6.7', '3.6.6']),
+    // 本地注入只有 3.6.6：3.6.7 在「远端未知 + 本地没有」时必须退回 dictState 'none'
+    dictVersions: LOCAL_DICTS,
     remoteDict: {
       ok: false,
       versions: [],
@@ -184,16 +200,20 @@ test('listDownloadable：远端列表取不到时降级为本地判断，并带�
 
 test('listDownloadable：显示阶段不下载任何字典文件', async () => {
   const fetched = [];
-  const before = fs.existsSync(common.dictFile('3.6.7'));
+  // 落盘判据用「仓库必然不存在」的版本号：不依赖 checkout 里有没有 3.6.7 字典
+  //（早先版本用 3.6.7 + `if (!before)`，仓库自带该字典时断言会被静默跳过，等于放弃判据）。
+  const absent = common.dictFile(ABSENT_VERSION);
+  assert.strictEqual(fs.existsSync(absent), false, `夹具前提：${ABSENT_VERSION} 的字典文件不应存在`);
 
   await installer.listDownloadable({
-    listVersions: releaseStub(['3.6.7']),
+    listVersions: releaseStub([ABSENT_VERSION]),
+    dictVersions: [],
     // 用真实的 remoteDictVersions 走一遍，但把唯一的网络出口换成计数桩
     remoteDict: dictSync.remoteDictVersions({
       ttlMs: 0,
       fetchJson: async (url) => {
         fetched.push(url);
-        return [dir('3.6.7')];
+        return [dir(ABSENT_VERSION)];
       },
     }),
   });
@@ -204,14 +224,15 @@ test('listDownloadable：显示阶段不下载任何字典文件', async () => {
     assert.ok(url.includes('/contents/dictionaries'), url);
     assert.ok(!url.includes('zh-CN.json'), `显示阶段请求了字典文件：${url}`);
   }
-  // 落盘判据：调用前本地没有 3.6.7 字典，调用后仍然没有（只取列表，绝不写盘）
-  if (!before) assert.strictEqual(fs.existsSync(common.dictFile('3.6.7')), false);
+  // 落盘判据：只取列表、绝不写盘——调用后该版本字典仍不存在（断言无条件执行）
+  assert.strictEqual(fs.existsSync(absent), false, '显示阶段不该落任何字典文件');
 });
 
 test('listDownloadable：dict 判定不依赖官方 Release 列表的网络结果结构（防回归）', async () => {
   // 官方列表返回的版本号与远端字典列表互不相关：远端有字典但官方没产物的版本不会出现在列表里
   const r = await installer.listDownloadable({
     listVersions: releaseStub(['3.6.6']),
+    dictVersions: LOCAL_DICTS,
     remoteDict: { ok: true, versions: ['3.6.7', '3.6.6'], error: null, failures: [] },
   });
   assert.deepStrictEqual(r.versions.map((v) => v.version), ['3.6.6']);

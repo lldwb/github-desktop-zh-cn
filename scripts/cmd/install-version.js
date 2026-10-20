@@ -61,8 +61,16 @@ function checkSpace(dir, pkgBytes) {
 //   hasDict    dictState !== 'none'——决定它出不出现在默认视图（「只列有汉化的版本」）；
 // 三者都在「本地无、远端无」时为 none——**不能放宽成有字典**。
 // 这里一律返回全量，GUI 的「显示没汉化的版本」勾选才有东西可展开。
+//
+// opts 是**依赖注入点**（生产调用方一律不传）：
+//   opts.listVersions     官方 Release 版本列表来源，默认 releaseAssets.listVersions
+//   opts.remoteDict       远端字典列表结果（或 Promise），默认 dictSync.remoteDictVersions()
+//   opts.dictVersions     本地已有字典的版本号数组，默认 common.listDictVersions()
+// 注入点的用途是让单测**不依赖运行环境**：仓库 checkout 的内容会变（例如 CI 上仓库自带
+// dictionaries/3.6.7、开发者本机可能没有），测试若直读 listDictVersions()，同一份代码在不同
+// checkout 上会得出不同结果，测试就变成了「环境断言」而不是「行为断言」。
 async function listDownloadable(opts = {}) {
-  const dictVersions = common.listDictVersions();
+  const dictVersions = opts.dictVersions || common.listDictVersions();
   const installed = new Set(common.listInstalledVersions().map((x) => x.version));
   const listVersions = opts.listVersions || releaseAssets.listVersions; // 注入点：单测不真打网络
   // 两个网络请求互不依赖，并行取；远端字典列表失败**不影响**官方版本列表（各自降级）
