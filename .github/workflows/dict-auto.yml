@@ -144,12 +144,17 @@ jobs:
 
       # 产出的字典要先过一遍仓库自身的测试，再允许进版本库
       - name: 跑测试
+        id: test
         run: node --test
 
       - name: 提交
-        # 被取消时不提交（可能是有人手动掐掉了一次跑偏的任务）；其余情况都走一遍，
-        # 由下面的「有没有变化」自行决定是空跑还是真提交
-        if: ${{ always() && !cancelled() }}
+        # 被取消时不提交（可能是有人手动掐掉了一次跑偏的任务）；**测试没通过也不提交**——
+        # 产出与测试校验是同一条链，测试红说明刚产出的字典不可用。实测 3.6.7 的自动产出丢了
+        # main.js|Delete（右键菜单标签，见 scripts/inject/context-menu.js），「每个版本字典都
+        # 覆盖注入标签」的测试当场红，但 always() 仍把这份缺键字典提交上了 main；下一轮定时任务
+        # checkout 到它之后，产出步骤因「已有字典」跳过、测试照旧红，每跑必红且自己修不回来。
+        # 其余情况都走一遍，由下面的「有没有变化」自行决定是空跑还是真提交
+        if: ${{ always() && !cancelled() && steps.test.outcome == 'success' }}
         env:
           RELEASE_TOKEN: ${{ secrets.RELEASE_TOKEN }}
           IN_DRY_RUN: ${{ inputs.dry_run }}

@@ -35,6 +35,7 @@ const dictEdit = require('./dict-edit');
 const dictGroups = require('./dict-groups');
 const releaseAssets = require('./release-assets');
 const scan = require('../cmd/scan');
+const contextMenu = require('../inject/context-menu');
 
 // 生效比例下限：字典条目里至少这么多条能在产物上真正替换到。
 // 每一条键都是「确认过在新产物里存在」才写进去的，理应条条命中；低于阈值说明写入链路出了问题。
@@ -195,6 +196,30 @@ function literalIndex(appDir) {
     }
   }
   return { exact, lower };
+}
+
+// 把「注入块写进 main.js 的英文字面量」并入产物索引。右键菜单汉化（scripts/inject/context-menu.js）
+// 会往 main.js 里写编辑项标签（'&Undo' / 'Delete' / 'Select &all' …）。它们在**官方产物**里并不存在
+// （标签由 Electron 运行时按 role 生成、产物里只有 role 名），但 patch 之后就是 main.js 的真实形态，
+// 字典要替换的正是这些字面量。
+//
+// 不给索引补这一步，继承的判据（「这条键在新产物里还在不在」）会把这些键一律判成「官方已删除」：
+// 实测 3.6.7 因此丢了 `main.js|Delete`（该键是 6ad2f24 随右键菜单汉化一起人工加入的），CI 的
+// 「仓库里每个版本的字典都覆盖了注入的标签」测试在 run #35 当场变红，而这份缺键字典又因 workflow
+// 的提交步骤没设测试门禁被提交上了 main——此后每次定时任务 checkout 到它都会再红一遍。
+//
+// 只并 main.js 的文件归属（注入目标就是它）；两平台各并自己那套标签（darwin 那套不带 &）。
+// 更新管控（scripts/inject/update-control.js）的注入块里没有界面文案、只有路径与判定代码，故不并。
+function withInjectedLiterals(idx, darwin) {
+  const add = (text) => {
+    if (!idx.exact.has(text)) idx.exact.set(text, new Set());
+    idx.exact.get(text).add('main.js');
+    const lk = text.toLowerCase();
+    if (!idx.lower.has(lk)) idx.lower.set(lk, new Set());
+    idx.lower.get(lk).add(text);
+  };
+  for (const l of common.stringLiterals(contextMenu.buildInjection({ darwin }))) add(l.content);
+  return idx;
 }
 
 // 某个字典键（可能是 `main.js|原文` 形式的作用域键）在本平台产物里的真实形态；不存在则 null。
@@ -480,8 +505,8 @@ async function fetchAppIndexes(version, args, workRoot, log) {
       await releaseAssets.fetchApp(version, { platform, arch: args.arch, out, log });
     }
     appDirs[platform] = appDir;
-    indexes[platform] = literalIndex(appDir);
-    log(`  ${platform}：产物字面量索引 ${indexes[platform].exact.size} 条`);
+    indexes[platform] = withInjectedLiterals(literalIndex(appDir), platform === 'macos');
+    log(`  ${platform}：产物字面量索引 ${indexes[platform].exact.size} 条（含注入块标签）`);
   }
   return { appDirs, indexes };
 }
@@ -849,7 +874,7 @@ function writeReport(file, data) {
 
 module.exports = {
   main, resolveIn, buildCandidates, toSegments,
-  diffDicts, shapeDiff, parseArgs,
+  diffDicts, shapeDiff, parseArgs, withInjectedLiterals,
   ON_EXIST, ON_EXIST_MODES, DIFF_LIMIT,
 };
 

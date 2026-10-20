@@ -154,6 +154,54 @@ test('buildCandidates：两平台形态不同时，只有缺译文的那个平�
   assert.strictEqual(perPlatform.macos.get('Default Branch').zh, '默认分支');
 });
 
+// ============================ 注入块字面量 ============================
+
+test('withInjectedLiterals：注入块写进 main.js 的标签算作产物真实形态', () => {
+  // 右键菜单的编辑项标签由 Electron 运行时按 role 生成，官方产物里没有这些字面量
+  // （scripts/inject/context-menu.js 文件头有实测：3.6.6 官方 main.js 里内容为 Delete 的
+  // 字符串字面量 0 处）——它们由注入块写进 main.js，patch 之后才算 main.js 的真实形态。
+  const idx = index([]);
+  assert.strictEqual(dictAuto.resolveIn(idx, 'main.js|Delete'), null, '只看官方产物时不命中');
+  dictAuto.withInjectedLiterals(idx, false);
+  const r = dictAuto.resolveIn(idx, 'main.js|Delete');
+  assert.strictEqual(r.text, 'Delete');
+  assert.ok(r.files.has('main.js'), '注入位置就是 main.js');
+
+  // 两平台各并自己那套标签：非 darwin 带 & 助记符，darwin 不带
+  for (const [darwin, hit, miss] of [
+    [false, 'main.js|Select &all', 'main.js|Select All'],
+    [true, 'main.js|Select All', 'main.js|Select &all'],
+  ]) {
+    const i = dictAuto.withInjectedLiterals(index([]), darwin);
+    assert.strictEqual(dictAuto.resolveIn(i, hit).text, hit.split('|')[1], `${darwin ? 'darwin' : 'win32'} 标签应命中`);
+    assert.strictEqual(dictAuto.resolveIn(i, miss), null, `另一平台的形态不该串味`);
+  }
+});
+
+test('buildCandidates：注入块引入的标签不因官方产物没有而丢掉（3.6.7 的 main.js|Delete 回归）', () => {
+  // 3.6.7 产出时 main.js|Delete 被判「官方已删除」而丢失，CI 的
+  // 「仓库里每个版本的字典都覆盖了注入的标签」当场变红（run #35）。根因不是官方删了这条文案，
+  // 而是它**从不在官方产物里**——由 patch 的注入块写进 main.js，继承时不并注入块就永远看不见。
+  const indexes = twoPlatforms(['&Undo'], ['Undo']);
+  dictAuto.withInjectedLiterals(indexes.windows, false);
+  dictAuto.withInjectedLiterals(indexes.macos, true);
+  const history = new Map([['main.js|Delete', '删除']]);
+  const { perPlatform, stats, dropped } = dictAuto.buildCandidates({ indexes, history, jsxFound: new Map() });
+
+  assert.deepStrictEqual(dropped, [], '注入块引入的键不该记进「官方已删除」');
+  assert.strictEqual(stats.inherited, 1);
+  assert.strictEqual(perPlatform.windows.get('main.js|Delete').zh, '删除');
+  assert.strictEqual(perPlatform.macos.get('main.js|Delete').zh, '删除');
+
+  // 对照：不并注入块时同一份历史会被丢弃——这正是修复前 3.6.7 的产出行为
+  const bare = dictAuto.buildCandidates({
+    indexes: twoPlatforms(['&Undo'], ['Undo']),
+    history: new Map([['main.js|Delete', '删除']]),
+    jsxFound: new Map(),
+  });
+  assert.deepStrictEqual(bare.dropped, ['main.js|Delete']);
+});
+
 // ============================ toSegments：平台分段 ============================
 
 test('toSegments：Windows 产物里存在的形态归 common，macOS 独有才进 macos 段', () => {
