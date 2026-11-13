@@ -1,0 +1,1061 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "GitHub Desktop 中文汉化工具 · 架构",
+    "locale": "zh-CN",
+    "output": "docs/架构图/github-desktop-zh-cn-架构图.html",
+    "quality_profile": "showcase",
+    "repository": {
+      "url": "https://github.com/lldwb/github-desktop-zh-cn.git",
+      "provider": "github",
+      "link_mode": "web",
+      "revision": "f4feb6f9b27e68ed96477c6515cc1785f6875cbf"
+    },
+    "views": [
+      {
+        "id": "main",
+        "label": "汉化 / 还原主链路",
+        "focus": [
+          "users",
+          "entry-cli",
+          "entry-gui",
+          "patch",
+          "restore",
+          "common",
+          "inject",
+          "version-profile",
+          "dict-assets",
+          "desktop-app"
+        ],
+        "note": "使用者 → 入口 → 加载成对资源与档案 → 替换 → 写回官方安装目录"
+      },
+      {
+        "id": "pair",
+        "label": "成对资产与档案",
+        "focus": [
+          "dict-assets",
+          "version-profile",
+          "dict-edit",
+          "dict-auto",
+          "dict-sync",
+          "patch",
+          "restore",
+          "verify-scan"
+        ],
+        "note": "zh-CN.json + patch.json 缺一不可；档案是数据、不执行，唯一写入口 writeProfile()"
+      },
+      {
+        "id": "online",
+        "label": "在线能力",
+        "focus": [
+          "dict-sync",
+          "net",
+          "update",
+          "release-assets",
+          "remote-repo"
+        ],
+        "note": "只在缺时联网；成对下载与校验、不留半对；代理失败回退直连"
+      },
+      {
+        "id": "dict",
+        "label": "字典产出与 CI",
+        "focus": [
+          "ci-dict-auto",
+          "dict-auto",
+          "dict-edit",
+          "dict-assets",
+          "version-profile",
+          "ai-gateway",
+          "release-assets"
+        ],
+        "note": "CI 每日取官方产物 → 成对产出（probe+buildProfile+writeProfile）→ 成对提交门禁"
+      },
+      {
+        "id": "pack",
+        "label": "打包与发布",
+        "focus": [
+          "entry-npm",
+          "build",
+          "gui-dist",
+          "ci-build",
+          "remote-repo"
+        ],
+        "note": "bundle → SEA 内嵌最新成对；electron-builder 出 GUI；矩阵构建后 tag 发版"
+      }
+    ]
+  },
+  "components": [
+    {
+      "id": "entry-npm",
+      "type": "frontend",
+      "label": "npm 脚本入口",
+      "sublabel": "package.json scripts",
+      "tag": "开发入口",
+      "pos": [
+        30,
+        170
+      ],
+      "size": [
+        150,
+        62
+      ],
+      "sources": [
+        {
+          "path": "package.json",
+          "line": 9,
+          "end_line": 21
+        }
+      ]
+    },
+    {
+      "id": "build",
+      "type": "backend",
+      "label": "单文件产物（CLI）",
+      "sublabel": "bundle → SEA · 内嵌最新成对",
+      "tag": "bundle + build",
+      "pos": [
+        400,
+        40
+      ],
+      "size": [
+        180,
+        62
+      ],
+      "sources": [
+        {
+          "path": "tools/bundle.js",
+          "line": 27,
+          "end_line": 43
+        },
+        {
+          "path": "tools/build.js",
+          "line": 66,
+          "end_line": 90
+        },
+        {
+          "path": "tools/build.js",
+          "line": 176,
+          "end_line": 196
+        }
+      ]
+    },
+    {
+      "id": "ci-build",
+      "type": "cloud",
+      "label": "CI · 构建与发布",
+      "sublabel": "build.yml · 矩阵发版",
+      "tag": "cli + gui",
+      "pos": [
+        630,
+        40
+      ],
+      "size": [
+        180,
+        62
+      ],
+      "sources": [
+        {
+          "path": ".github/workflows/build.yml",
+          "line": 23,
+          "end_line": 39
+        },
+        {
+          "path": ".github/workflows/build.yml",
+          "line": 97,
+          "end_line": 100
+        },
+        {
+          "path": ".github/workflows/build.yml",
+          "line": 394,
+          "end_line": 399
+        }
+      ]
+    },
+    {
+      "id": "gui-dist",
+      "type": "backend",
+      "label": "Electron 打包与播种",
+      "sublabel": "electron-builder · 成对播种",
+      "tag": "dist/gui",
+      "pos": [
+        860,
+        40
+      ],
+      "size": [
+        200,
+        62
+      ],
+      "sources": [
+        {
+          "path": "electron-builder.yml",
+          "line": 69,
+          "end_line": 77
+        },
+        {
+          "path": "build/after-pack.js",
+          "line": 27,
+          "end_line": 61
+        },
+        {
+          "path": "gui/main.js",
+          "line": 191,
+          "end_line": 210
+        }
+      ]
+    },
+    {
+      "id": "dict-edit",
+      "type": "backend",
+      "label": "dict-edit.js 字典写入口",
+      "sublabel": "校验 → 原子替换",
+      "tag": "唯一写入口",
+      "pos": [
+        380,
+        170
+      ],
+      "size": [
+        200,
+        62
+      ],
+      "sources": [
+        {
+          "path": "scripts/dict/dict-edit.js",
+          "line": 135,
+          "end_line": 216
+        },
+        {
+          "path": "scripts/dict/dict-edit.js",
+          "line": 245,
+          "end_line": 284
+        }
+      ]
+    },
+    {
+      "id": "dict-auto",
+      "type": "backend",
+      "label": "dict-auto.js 自动产出",
+      "sublabel": "成对产出 · 失败回滚",
+      "tag": "CI 每日",
+      "pos": [
+        600,
+        170
+      ],
+      "size": [
+        150,
+        62
+      ],
+      "sources": [
+        {
+          "path": "scripts/dict/dict-auto.js",
+          "line": 509,
+          "end_line": 530
+        },
+        {
+          "path": "scripts/dict/dict-auto.js",
+          "line": 531,
+          "end_line": 546
+        },
+        {
+          "path": "scripts/dict/dict-auto.js",
+          "line": 551,
+          "end_line": 591
+        }
+      ]
+    },
+    {
+      "id": "ci-dict-auto",
+      "type": "cloud",
+      "label": "CI · 字典自动更新",
+      "sublabel": "dict-auto.yml · 成对提交门禁",
+      "tag": "artifact + 直提",
+      "pos": [
+        1010,
+        170
+      ],
+      "size": [
+        170,
+        62
+      ],
+      "sources": [
+        {
+          "path": ".github/workflows/dict-auto.yml",
+          "line": 42,
+          "end_line": 49
+        },
+        {
+          "path": ".github/workflows/dict-auto.yml",
+          "line": 164,
+          "end_line": 168
+        },
+        {
+          "path": ".github/workflows/dict-auto.yml",
+          "line": 175,
+          "end_line": 196
+        }
+      ]
+    },
+    {
+      "id": "dict-assets",
+      "type": "database",
+      "label": "每版本成对资产",
+      "sublabel": "zh-CN.json + patch.json",
+      "tag": "8 个版本 · fmt2",
+      "pos": [
+        170,
+        300
+      ],
+      "size": [
+        180,
+        66
+      ],
+      "sources": [
+        {
+          "path": "dictionaries/3.6.10/zh-CN.json",
+          "line": 1
+        },
+        {
+          "path": "dictionaries/3.6.10/patch.json",
+          "line": 1
+        },
+        {
+          "path": "dictionaries/README.md",
+          "line": 43,
+          "end_line": 74
+        }
+      ]
+    },
+    {
+      "id": "version-profile",
+      "type": "backend",
+      "label": "version-profile.js 档案引擎",
+      "sublabel": "加载 · 校验 · 锚点 · 成对",
+      "tag": "唯一写入口",
+      "pos": [
+        380,
+        300
+      ],
+      "size": [
+        180,
+        66
+      ],
+      "sources": [
+        {
+          "path": "scripts/version-profile.js",
+          "line": 174,
+          "end_line": 193
+        },
+        {
+          "path": "scripts/version-profile.js",
+          "line": 580,
+          "end_line": 645
+        },
+        {
+          "path": "scripts/version-profile.js",
+          "line": 646,
+          "end_line": 666
+        }
+      ]
+    },
+    {
+      "id": "inject",
+      "type": "backend",
+      "label": "注入组 inject/",
+      "sublabel": "右键菜单 label · 更新管控",
+      "tag": "参数取自档案",
+      "pos": [
+        600,
+        300
+      ],
+      "size": [
+        180,
+        62
+      ],
+      "sources": [
+        {
+          "path": "scripts/inject/context-menu.js",
+          "line": 76,
+          "end_line": 151
+        },
+        {
+          "path": "scripts/inject/update-control.js",
+          "line": 116,
+          "end_line": 155
+        }
+      ]
+    },
+    {
+      "id": "ai-gateway",
+      "type": "cloud",
+      "label": "AI 网关",
+      "sublabel": "OpenAI 兼容协议",
+      "tag": "仅 dict-auto",
+      "pos": [
+        1010,
+        300
+      ],
+      "size": [
+        160,
+        62
+      ],
+      "sources": [
+        {
+          "path": "scripts/dict/dict-ai.js",
+          "line": 19,
+          "end_line": 31
+        },
+        {
+          "path": "scripts/dict/dict-auto.js",
+          "line": 640
+        }
+      ]
+    },
+    {
+      "id": "users",
+      "type": "external",
+      "label": "使用者",
+      "sublabel": "菜单 / GUI",
+      "tag": "外部",
+      "pos": [
+        30,
+        430
+      ],
+      "size": [
+        90,
+        60
+      ]
+    },
+    {
+      "id": "entry-cli",
+      "type": "frontend",
+      "label": "CLI 交互菜单",
+      "sublabel": "8 项菜单 + 子命令",
+      "tag": "npm run tool",
+      "pos": [
+        190,
+        430
+      ],
+      "size": [
+        150,
+        62
+      ],
+      "sources": [
+        {
+          "path": "scripts/cli.js",
+          "line": 19,
+          "end_line": 29
+        },
+        {
+          "path": "scripts/cli.js",
+          "line": 479,
+          "end_line": 511
+        }
+      ]
+    },
+    {
+      "id": "patch",
+      "type": "backend",
+      "label": "cmd/patch.js 汉化",
+      "sublabel": "校验 → 加载档案断言 → 替换",
+      "tag": "i18n 组",
+      "pos": [
+        380,
+        430
+      ],
+      "size": [
+        200,
+        66
+      ],
+      "sources": [
+        {
+          "path": "scripts/cmd/patch.js",
+          "line": 237,
+          "end_line": 282
+        },
+        {
+          "path": "scripts/cmd/patch.js",
+          "line": 101,
+          "end_line": 168
+        },
+        {
+          "path": "scripts/cmd/patch.js",
+          "line": 169,
+          "end_line": 205
+        }
+      ]
+    },
+    {
+      "id": "desktop-app",
+      "type": "external",
+      "label": "GitHub Desktop 安装目录",
+      "sublabel": "app/main.js · renderer.js",
+      "tag": "替换目标",
+      "pos": [
+        810,
+        430
+      ],
+      "size": [
+        190,
+        66
+      ],
+      "sources": [
+        {
+          "path": "scripts/common.js",
+          "line": 12,
+          "end_line": 19
+        }
+      ]
+    },
+    {
+      "id": "entry-gui",
+      "type": "frontend",
+      "label": "GUI 桌面板",
+      "sublabel": "Electron · gui/ipc",
+      "tag": "npm run gui",
+      "pos": [
+        190,
+        560
+      ],
+      "size": [
+        150,
+        62
+      ],
+      "sources": [
+        {
+          "path": "gui/main.js",
+          "line": 290,
+          "end_line": 323
+        },
+        {
+          "path": "gui/ipc/patching.js",
+          "line": 6,
+          "end_line": 10
+        }
+      ]
+    },
+    {
+      "id": "restore",
+      "type": "backend",
+      "label": "cmd/restore.js 还原",
+      "sublabel": "备份 / 逆向 / 按组重放读档案",
+      "tag": "restore",
+      "pos": [
+        380,
+        560
+      ],
+      "size": [
+        200,
+        62
+      ],
+      "sources": [
+        {
+          "path": "scripts/cmd/restore.js",
+          "line": 180,
+          "end_line": 219
+        },
+        {
+          "path": "scripts/cmd/restore.js",
+          "line": 69,
+          "end_line": 143
+        },
+        {
+          "path": "scripts/cmd/restore.js",
+          "line": 144,
+          "end_line": 179
+        }
+      ]
+    },
+    {
+      "id": "common",
+      "type": "backend",
+      "label": "common.js 共享引擎",
+      "sublabel": "定位 · 资产 · 备份 · 匹配器 · 逆向",
+      "tag": "SSOT",
+      "pos": [
+        600,
+        600
+      ],
+      "size": [
+        180,
+        70
+      ],
+      "sources": [
+        {
+          "path": "scripts/common.js",
+          "line": 276,
+          "end_line": 316
+        },
+        {
+          "path": "scripts/common.js",
+          "line": 803,
+          "end_line": 891
+        },
+        {
+          "path": "scripts/common.js",
+          "line": 646,
+          "end_line": 675
+        }
+      ]
+    },
+    {
+      "id": "data-root",
+      "type": "database",
+      "label": "数据根",
+      "sublabel": "config.json · tmp/backup",
+      "tag": "备份 / 记账",
+      "pos": [
+        810,
+        560
+      ],
+      "size": [
+        190,
+        62
+      ],
+      "sources": [
+        {
+          "path": "scripts/common.js",
+          "line": 108,
+          "end_line": 129
+        },
+        {
+          "path": "scripts/common.js",
+          "line": 676,
+          "end_line": 718
+        }
+      ]
+    },
+    {
+      "id": "verify-scan",
+      "type": "backend",
+      "label": "verify · scan 校验自查",
+      "sublabel": "档案锚点 / 命中率 / 语法",
+      "tag": "CLI 专用",
+      "pos": [
+        380,
+        690
+      ],
+      "size": [
+        200,
+        62
+      ],
+      "sources": [
+        {
+          "path": "scripts/cmd/verify.js",
+          "line": 149,
+          "end_line": 213
+        },
+        {
+          "path": "scripts/cmd/verify.js",
+          "line": 93,
+          "end_line": 109
+        },
+        {
+          "path": "scripts/cmd/scan.js",
+          "line": 68,
+          "end_line": 124
+        }
+      ]
+    },
+    {
+      "id": "dict-sync",
+      "type": "backend",
+      "label": "dict-sync.js 成对同步",
+      "sublabel": "fetchPair · writePair · 不留半对",
+      "tag": "缺才联网",
+      "pos": [
+        600,
+        690
+      ],
+      "size": [
+        180,
+        62
+      ],
+      "sources": [
+        {
+          "path": "scripts/dict/dict-sync.js",
+          "line": 34,
+          "end_line": 81
+        },
+        {
+          "path": "scripts/dict/dict-sync.js",
+          "line": 94,
+          "end_line": 141
+        },
+        {
+          "path": "scripts/dict/dict-sync.js",
+          "line": 153,
+          "end_line": 185
+        }
+      ]
+    },
+    {
+      "id": "net",
+      "type": "backend",
+      "label": "net.js 请求层",
+      "sublabel": "零依赖 HTTPS · 自动代理",
+      "tag": "唯一请求入口",
+      "pos": [
+        810,
+        690
+      ],
+      "size": [
+        170,
+        62
+      ],
+      "sources": [
+        {
+          "path": "scripts/net.js",
+          "line": 97,
+          "end_line": 114
+        },
+        {
+          "path": "scripts/net.js",
+          "line": 219,
+          "end_line": 267
+        },
+        {
+          "path": "scripts/net.js",
+          "line": 373,
+          "end_line": 391
+        }
+      ]
+    },
+    {
+      "id": "update",
+      "type": "backend",
+      "label": "update.js 自更新",
+      "sublabel": "查更新 · sha256 · 替换",
+      "tag": "CLI / GUI",
+      "pos": [
+        1010,
+        690
+      ],
+      "size": [
+        160,
+        62
+      ],
+      "sources": [
+        {
+          "path": "scripts/update.js",
+          "line": 91,
+          "end_line": 119
+        },
+        {
+          "path": "scripts/update.js",
+          "line": 156,
+          "end_line": 171
+        },
+        {
+          "path": "scripts/update.js",
+          "line": 195,
+          "end_line": 242
+        }
+      ]
+    },
+    {
+      "id": "release-assets",
+      "type": "backend",
+      "label": "release-assets",
+      "sublabel": "HTTP Range · zip 中央目录",
+      "tag": "只取所需",
+      "pos": [
+        810,
+        820
+      ],
+      "size": [
+        180,
+        62
+      ],
+      "sources": [
+        {
+          "path": "scripts/dict/release-assets.js",
+          "line": 121,
+          "end_line": 146
+        },
+        {
+          "path": "scripts/dict/release-assets.js",
+          "line": 264,
+          "end_line": 304
+        }
+      ]
+    },
+    {
+      "id": "remote-repo",
+      "type": "cloud",
+      "label": "GitHub / Gitee 远端",
+      "sublabel": "raw · API · Release 资产",
+      "tag": "地址 SSOT",
+      "pos": [
+        1010,
+        820
+      ],
+      "size": [
+        170,
+        62
+      ],
+      "sources": [
+        {
+          "path": "scripts/common.js",
+          "line": 31,
+          "end_line": 43
+        }
+      ]
+    }
+  ],
+  "connections": [
+    {
+      "id": "users-cli",
+      "from": "users",
+      "to": "entry-cli",
+      "label": "汉化 / 还原"
+    },
+    {
+      "id": "users-gui",
+      "from": "users",
+      "to": "entry-gui",
+      "label": "图形操作"
+    },
+    {
+      "id": "npm-cli",
+      "from": "entry-npm",
+      "to": "entry-cli",
+      "label": "npm run tool"
+    },
+    {
+      "id": "npm-build",
+      "from": "entry-npm",
+      "to": "build",
+      "label": "build"
+    },
+    {
+      "id": "cli-patch",
+      "from": "entry-cli",
+      "to": "patch",
+      "label": "1) 汉化",
+      "variant": "emphasis"
+    },
+    {
+      "id": "cli-restore",
+      "from": "entry-cli",
+      "to": "restore",
+      "label": "2) 还原"
+    },
+    {
+      "id": "gui-patch",
+      "from": "entry-gui",
+      "to": "patch",
+      "label": "IPC 调 run()"
+    },
+    {
+      "id": "patch-common",
+      "from": "patch",
+      "to": "common",
+      "label": "定位 / 字典 / 备份"
+    },
+    {
+      "id": "patch-dictsync",
+      "from": "patch",
+      "to": "dict-sync",
+      "label": "缺资源时成对取"
+    },
+    {
+      "id": "patch-inject",
+      "from": "patch",
+      "to": "inject",
+      "label": "注入补丁组"
+    },
+    {
+      "id": "patch-dict",
+      "from": "patch",
+      "to": "dict-assets",
+      "label": "loadDict(版本)"
+    },
+    {
+      "id": "patch-profile",
+      "from": "patch",
+      "to": "version-profile",
+      "label": "加载档案"
+    },
+    {
+      "id": "patch-dataroot",
+      "from": "patch",
+      "to": "data-root",
+      "label": "写前备份 / 记账"
+    },
+    {
+      "id": "patch-target",
+      "from": "patch",
+      "to": "desktop-app",
+      "label": "写回替换",
+      "variant": "emphasis"
+    },
+    {
+      "id": "restore-target",
+      "from": "restore",
+      "to": "desktop-app",
+      "label": "还原原文"
+    },
+    {
+      "id": "restore-dataroot",
+      "from": "restore",
+      "to": "data-root",
+      "label": "读备份"
+    },
+    {
+      "id": "verify-target",
+      "from": "verify-scan",
+      "to": "desktop-app",
+      "label": "读产物 / sourcemap"
+    },
+    {
+      "id": "verify-profile",
+      "from": "verify-scan",
+      "to": "version-profile",
+      "label": "锚点断言"
+    },
+    {
+      "id": "common-dataroot",
+      "from": "common",
+      "to": "data-root",
+      "label": "数据根 SSOT"
+    },
+    {
+      "id": "dictsync-net",
+      "from": "dict-sync",
+      "to": "net",
+      "label": "HTTPS 下载"
+    },
+    {
+      "id": "dictsync-profile",
+      "from": "dict-sync",
+      "to": "version-profile",
+      "label": "成对校验"
+    },
+    {
+      "id": "net-remote",
+      "from": "net",
+      "to": "remote-repo",
+      "label": "raw / API"
+    },
+    {
+      "id": "assets-net",
+      "from": "release-assets",
+      "to": "net",
+      "label": "取产物"
+    },
+    {
+      "id": "update-net",
+      "from": "update",
+      "to": "net",
+      "label": "查更新"
+    },
+    {
+      "id": "auto-edit",
+      "from": "dict-auto",
+      "to": "dict-edit",
+      "label": "事务写入"
+    },
+    {
+      "id": "auto-ai",
+      "from": "dict-auto",
+      "to": "ai-gateway",
+      "label": "AI 翻译"
+    },
+    {
+      "id": "auto-profile",
+      "from": "dict-auto",
+      "to": "version-profile",
+      "label": "探测 / 写档案"
+    },
+    {
+      "id": "edit-assets",
+      "from": "dict-edit",
+      "to": "dict-assets",
+      "label": "写字典"
+    },
+    {
+      "id": "profile-assets",
+      "from": "version-profile",
+      "to": "dict-assets"
+    },
+    {
+      "id": "ci-dict-auto",
+      "from": "ci-dict-auto",
+      "to": "dict-auto",
+      "label": "运行 auto",
+      "variant": "dashed"
+    },
+    {
+      "id": "ci-build-cli",
+      "from": "ci-build",
+      "to": "build",
+      "label": "构建",
+      "variant": "dashed"
+    },
+    {
+      "id": "ci-build-gui",
+      "from": "ci-build",
+      "to": "gui-dist",
+      "label": "打包",
+      "variant": "dashed"
+    },
+    {
+      "id": "ci-build-release",
+      "from": "ci-build",
+      "to": "remote-repo",
+      "label": "发 Release",
+      "variant": "dashed"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "成对资产（8 个版本）",
+      "items": [
+        "dictionaries/<版本>/ 成对：zh-CN.json（译什么）+ patch.json（怎么替换），缺一不可",
+        "8 个版本：3.6.0 / 3.6.4 / 3.6.5 / 3.6.6 / 3.6.7 / 3.6.8 / 3.6.9 / 3.6.10",
+        "档案是数据、不执行：schemaVersion / version / anchors / injections / evidence；唯一写入口 version-profile.writeProfile()",
+        "两个口径：listDictVersions() 原义「字典存在」；listPairVersions() 才是「成对完整」（GUI / CLI 判定用）"
+      ]
+    },
+    {
+      "dot": "amber",
+      "title": "档案强校验与拒绝语义",
+      "items": [
+        "patch / verify 按目标版本加载档案并断言锚点：缺档案、锚点次数不符、策略未启用 → 明确拒绝并给下一步",
+        "restore 整份还原 / 字典逆向不读档案（恢复通道不被卡死）；只有按组重放更新管控才读档案",
+        "注入块的标签表 / 注入点 / 方法锚点全部取自该版本档案；模块内默认值仅单测与过渡用",
+        "决策：不引入 manifest（design.md §8.4）——显示阶段目录级，正确性靠下载 / 使用时成对强校验"
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "在线成对同步",
+      "items": [
+        "ensureDict：外部成对 → 内嵌成对 → 联网成对；前两者命中完全不联网，只有一半时只补缺的那份",
+        "fetchPair 逐源成对获取 + 双校验（JSON.parse / validateProfile）；writePair 各写 .part 依次改名，任一失败回滚",
+        "远程地址：remoteDictUrls / remoteProfileUrls（raw → jsDelivr → Gitee raw）；代理自动读系统配置、失败回退直连"
+      ]
+    },
+    {
+      "dot": "rose",
+      "title": "打包与 CI（成对口径）",
+      "items": [
+        "build 只内嵌最新成对资源；最新版本缺任一文件时不内嵌并告警",
+        "Electron extraResources 整目录 + seedBundledDicts 逐文件补齐；check-gui-dist 成对校验内置资源",
+        "dict-auto 成对产出（probeApp + buildProfile + writeProfile，任一失败一起回滚）、失败分类 ai-unreachable vs ai-quality、待译草稿上传 artifact",
+        "dict-auto.yml 有 artifact + 成对提交门禁 + title= 注解；build.yml 矩阵构建，推 v* tag 才发 Release 并附 SHA256SUMS",
+        "dict-auto 最近三次运行全红：AI 网关从 runner 不可达（如实记录）"
+      ]
+    },
+    {
+      "dot": "violet",
+      "title": "运行形态与数据根",
+      "items": [
+        "源码态 / Electron 开发态：数据根 = 仓库根",
+        "SEA 与 Electron 打包产物：数据根 = 可执行文件所在目录（不可写回退用户数据目录）",
+        "macOS 的 Electron 产物恒取用户数据目录；GUI 首次运行逐文件播种内置成对资源"
+      ]
+    }
+  ]
+}
