@@ -8,6 +8,7 @@
 const fs = require('fs');
 const path = require('path');
 const common = require('../common.js');
+const versionProfile = require('../version-profile.js');
 const dictSync = require('../dict/dict-sync.js');
 const restart = require('./restart.js');
 const updateControl = require('../inject/update-control.js');
@@ -103,16 +104,28 @@ async function restoreGroups(app, version, removeGroups, log) {
   }
   if (keep.includes('updateControl')) {
     const mainFile = path.join(app.appDir, 'main.js');
+    // 重放也要按该版本的替换逻辑档案来：锚点/注入点来自档案，次数不符直接拒绝。
+    // 档案缺失或不支持这组注入时明确失败——账上记着该组，却无法重放，静默跳过会让「保留的组」凭空消失。
+    const { profile, label: profileLabel } = versionProfile.loadProfile(version);
+    if (!versionProfile.hasStrategy(profile, 'update-control')) {
+      versionProfile.strategy(profile, 'update-control'); // 抛出带原因与下一步的错误
+    }
+    const content = fs.readFileSync(mainFile, 'utf8');
+    versionProfile.assertAnchors(content, profile, { file: 'main.js', strategies: ['update-control'] });
+    const params = versionProfile.strategy(profile, 'update-control', { platform: process.platform });
     // 重放模式按记账来：当初打的是「完全禁止」就重放 off，而不是一律 guard；
     // 老账没记过模式时 getUpdateControlMode 兜底 guard（与记账功能上线前的行为一致）
     const mode = getUpdateControlMode(version);
-    const r = updateControl.inject(fs.readFileSync(mainFile, 'utf8'), {
+    const r = updateControl.inject(content, {
       dictDir: path.join(dataRoot(), 'dictionaries'),
       mode,
+      anchor: params.methodAnchor.text,
+      expected: params.methodAnchor.expected,
+      marker: params.injectionPoint.text,
     });
     if (r.changed) {
       fs.writeFileSync(mainFile, r.content, 'utf8');
-      log(`已重新注入更新管控（${mode === 'off' ? '完全禁止自动更新' : '没有字典就不更新'}）`);
+      log(`已重新注入更新管控（${mode === 'off' ? '完全禁止自动更新' : '没有字典就不更新'}；档案 ${profileLabel}）`);
     } else {
       log(`更新管控未重新注入：${r.reason}`);
     }

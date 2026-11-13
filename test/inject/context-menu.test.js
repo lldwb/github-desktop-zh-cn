@@ -14,6 +14,7 @@ const vm = require('vm');
 
 const contextMenu = require('../../scripts/inject/context-menu');
 const updateControl = require('../../scripts/inject/update-control');
+const versionProfile = require('../../scripts/version-profile');
 const {
   applyDictInStrings, scopedEntries, stringLiterals, checkSyntax, buildEntries, loadDict,
 } = require('../../scripts/common');
@@ -75,6 +76,24 @@ test('标签表：darwin 与其余平台两套，role 键一律小写', () => {
   // 两套都要真的写进注入块（否则改表不改块，标签永远不生效）
   assert.ok(contextMenu.buildInjection({ darwin: false }).includes("'Select &all'"));
   assert.ok(contextMenu.buildInjection({ darwin: true }).includes("'Select All'"));
+});
+
+test('inject 支持调用方传入标签表与注入点标记（档案参数化；不传则用过渡默认）', () => {
+  const labels = { undo: '&CustomUndo' };
+  const marker = '\n//# custom-anchor=';
+  const src = ';(function(){})();\n' + marker + 'main.js\n';
+
+  const out = contextMenu.inject(src, { labels, marker });
+  assert.strictEqual(out.changed, true);
+  assert.ok(out.content.includes("'&CustomUndo'"), out.content);
+  // 注入点用调用方给的标记：块落在它之前，而不是追加到文件末尾
+  assert.ok(out.content.indexOf(contextMenu.BEGIN) < out.content.indexOf('//# custom-anchor='));
+  // 除注入块外原文逐字节不变
+  assert.strictEqual(stripBlock(out.content), src);
+
+  // 空标签表直接拒绝：不静默回退到「最新版」默认表（那正是档案化要消灭的全局假设）
+  assert.throws(() => contextMenu.inject(src, { labels: {}, marker }), /缺少标签表/);
+  assert.throws(() => contextMenu.buildInjection({ labels: {} }), /缺少标签表/);
 });
 
 test('与更新管控共用锚点：两个块都能就位，互不干扰', () => {
@@ -199,12 +218,20 @@ test('标签靠字典替换译掉；Delete 走作用域键，不误伤 renderer 
   assert.strictEqual(r.total, 0);
 });
 
+// 每个版本的右键菜单标签表：有替换逻辑档案的版本从档案取（档案是生产路径的唯一来源），
+// 还没有档案的版本退回注入器的过渡默认表（二阶段给存量版本补齐档案后，本回退应删除）。
+function windowsLabelsForVersion(v) {
+  if (!versionProfile.pairStatus(v).profile) return contextMenu.labelsFor(false);
+  const { profile } = versionProfile.loadProfile(v);
+  return versionProfile.strategy(profile, 'context-menu', { platform: 'win32' }).labels;
+}
+
 test('仓库里每个版本的字典都覆盖了注入的标签（缺了就静默保持英文）', () => {
   const versions = dictVersions();
   assert.ok(versions.length > 0, 'dictionaries/ 下应当有版本目录');
   for (const v of versions) {
     const entries = scopedEntries(loadDict(v, 'windows'), 'main.js');
-    const miss = Object.values(contextMenu.labelsFor(false)).filter((l) => !entries.has(l));
+    const miss = Object.values(windowsLabelsForVersion(v)).filter((l) => !entries.has(l));
     assert.deepStrictEqual(miss, [], `${v} 字典缺标签：${miss.join(' / ')}`);
   }
 });
@@ -212,12 +239,14 @@ test('仓库里每个版本的字典都覆盖了注入的标签（缺了就静�
 test('注入块里除标签外的字面量，不与任何版本字典的键相撞', () => {
   // 角色名被字典命中就会让查表落空（见 context-menu.js 里 buildInjection 的注释），
   // 这条把「块里只有标签该被替换」钉成断言：多出别的可命中字面量就会红。
-  const labels = Object.values(contextMenu.labelsFor(false));
-  const lits = stringLiterals(contextMenu.buildInjection({ darwin: false })).map((l) => l.content);
-  for (const label of labels) {
-    assert.strictEqual(lits.filter((l) => l === label).length, 1, `${label} 应恰好出现一次`);
-  }
   for (const v of dictVersions()) {
+    const labels = Object.values(windowsLabelsForVersion(v));
+    const lits = stringLiterals(contextMenu.buildInjection({ labels: windowsLabelsForVersion(v) })).map(
+      (l) => l.content
+    );
+    for (const label of labels) {
+      assert.strictEqual(lits.filter((l) => l === label).length, 1, `${v}: ${label} 应恰好出现一次`);
+    }
     for (const platform of ['windows', 'macos', 'linux']) {
       const keys = new Set(loadDict(v, platform).keys());
       const hit = lits.filter((l) => !labels.includes(l) && keys.has(l));

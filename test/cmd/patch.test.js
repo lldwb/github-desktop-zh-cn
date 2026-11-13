@@ -11,6 +11,8 @@
 //     restartApp 在其中找不到 GitHubDesktop.exe，判定「没在运行」；
 //   - 字典夹具按 test/fixtures/scratch.js 的约定落在 dictionaries/0.0.0-patch/（非版本形态，
 //     并行测试互不可见），且在 run() 之前落盘——ensureDict 走「本地已有」分支，全程零联网。
+//   - 替换逻辑档案（patch.json）同样落在该夹具目录，由 test/fixtures/profile.js 生成：
+//     引擎要求「字典 + 档案」成对，缺档案/锚点不符/未知策略都必须明确拒绝（见「档案」一节）。
 // 备份落在数据根的 tmp/backup/<夹具版本>/（生产 SSOT 路径），用例前后都清这个专属目录，
 // 绝不触碰真实版本（如 3.6.6）的备份。
 //
@@ -28,9 +30,11 @@ const path = require('path');
 
 const common = require('../../scripts/common');
 const patch = require('../../scripts/cmd/patch');
+const versionProfile = require('../../scripts/version-profile');
 const contextMenu = require('../../scripts/inject/context-menu');
 const updateControl = require('../../scripts/inject/update-control');
 const scratch = require('../fixtures/scratch');
+const profileFixture = require('../fixtures/profile');
 
 // 本文件专属的夹具版本名（与 verify / restore 的测试目录互不撞车，非三段数字形态）
 const VERSION = '0.0.0-patch';
@@ -120,14 +124,17 @@ function makeApp({ main = MAIN_EN, renderer = RENDERER_EN, pkgVersion = VERSION 
   };
 }
 
-// 用例的前后清理 + 备好本地字典（幂等；scratch 删除带门禁）
-function prepare(t, app) {
+// 用例的前后清理 + 备好本地字典与替换逻辑档案（幂等；scratch 删除带门禁）。
+// profileOptions 传给 test/fixtures/profile.js 的 make：需要更新管控的用例传 { updateControl: true }，
+// 需要证明「参数来自档案」的用例传自定义 marker / labels。
+function prepare(t, app, profileOptions = {}) {
   scratch.cleanup(VERSION);
   fs.rmSync(common.backupDir(VERSION), { recursive: true, force: true });
   scratch.isolate(t, VERSION);
   t.after(() => fs.rmSync(common.backupDir(VERSION), { recursive: true, force: true }));
   t.after(() => fs.rmSync(app.root, { recursive: true, force: true }));
   writeDict();
+  profileFixture.write(VERSION, profileOptions);
 }
 
 // patch-state.json 是数据根下所有进程共享的记账文件。node --test 的各测试文件是并行子进程，
@@ -237,7 +244,8 @@ test('正式汉化：字面量整串替换、右键菜单注入、先备份后�
 
 test('updateControl=guard：checkForUpdates 方法体注入闸门，返回值带模式', async (t) => {
   const app = makeApp({ main: MAIN_UPD });
-  prepare(t, app);
+  // 更新管控的锚点来自该版本档案，夹具档案要显式声明并启用它
+  prepare(t, app, { updateControl: true });
 
   const r = await withPatchState(() =>
     patch.run({
@@ -318,4 +326,186 @@ test('0 命中：字典与产物零交集 → total=0，renderer 原样、main �
     main,
     '除注入块外原文逐字节不变'
   );
+});
+
+// ============================ 档案（dictionaries/<版本>/patch.json） ============================
+// 替换逻辑档案把「版本相关的替换逻辑」从代码搬进数据。引擎的拒绝语义必须钉死：缺档案、
+// 锚点 0/2 次、未知策略、请求了档案里未启用的策略——一律**明确失败**，且失败发生在写盘之前
+// （不留下「文案改了一半」的中间态）。
+
+test('缺档案：联网与写盘之前拒绝，错误带可执行的下一步', async (t) => {
+  const app = makeApp();
+  prepare(t, app);
+  fs.rmSync(versionProfile.profileFile(VERSION)); // 只留字典，缺档案 → 不完整
+
+  await assert.rejects(
+    patch.run({ version: VERSION, explicitPath: app.resourcesDir, quiet: true }),
+    (e) => {
+      assert.match(e.message, /替换逻辑档案/);
+      assert.match(e.message, /patch\.json/);
+      assert.ok(e.hint && e.hint.includes('version-profile.js probe'), e.hint);
+      return true;
+    }
+  );
+  assert.strictEqual(fs.readFileSync(app.mainPath, 'utf8'), MAIN_EN, '拒绝时不该写盘');
+  assert.strictEqual(fs.readFileSync(app.rendererPath, 'utf8'), RENDERER_EN);
+  assert.strictEqual(common.backupExists(VERSION), false, '拒绝时不该建备份');
+});
+
+test('锚点 0 次：产物没有注入点 → 拒绝且不写盘', async (t) => {
+  const main = ';(function () {\n  var x = 1;\n})();\n'; // 没有 sourceMappingURL 锚点
+  const app = makeApp({ main });
+  prepare(t, app); // 档案期望注入点出现 1 次
+
+  await assert.rejects(
+    patch.run({ version: VERSION, explicitPath: app.resourcesDir, quiet: true }),
+    (e) => {
+      assert.match(e.message, /锚点不符/);
+      assert.match(e.message, /出现 0 次/);
+      assert.ok(e.hint && e.hint.includes('probe --version'), e.hint);
+      return true;
+    }
+  );
+  assert.strictEqual(fs.readFileSync(app.mainPath, 'utf8'), main);
+  assert.strictEqual(common.backupExists(VERSION), false);
+});
+
+test('锚点 2 次：注入点不再唯一 → 拒绝', async (t) => {
+  // 两个 sourceMappingURL 注释：锚点出现 2 次（档案期望 1 次）——插错位置风险，必须拒绝
+  const main = `${MAIN_EN}\n//# sourceMappingURL=extra.map\n`;
+  const app = makeApp({ main });
+  prepare(t, app);
+
+  await assert.rejects(
+    patch.run({ version: VERSION, explicitPath: app.resourcesDir, quiet: true }),
+    /锚点不符[\s\S]*出现 2 次/
+  );
+  assert.strictEqual(fs.readFileSync(app.mainPath, 'utf8'), main);
+  assert.strictEqual(common.backupExists(VERSION), false);
+});
+
+test('未知策略：档案多写一个键 → 拒绝并列出可用策略', async (t) => {
+  const app = makeApp();
+  prepare(t, app);
+  const raw = profileFixture.make(VERSION);
+  raw.injections['mystery-strategy'] = { enabled: true };
+  profileFixture.writeRaw(VERSION, raw);
+
+  await assert.rejects(
+    patch.run({ version: VERSION, explicitPath: app.resourcesDir, quiet: true }),
+    (e) => {
+      assert.match(e.message, /未知的替换策略/);
+      assert.match(e.message, /context-menu/); // 列出可用策略
+      return true;
+    }
+  );
+  assert.strictEqual(fs.readFileSync(app.mainPath, 'utf8'), MAIN_EN);
+});
+
+test('schemaVersion 不认识 / targets 不一致 → 拒绝', async (t) => {
+  const app = makeApp();
+  prepare(t, app);
+
+  // 1) 未来 schema：引擎不猜结构
+  const future = profileFixture.make(VERSION);
+  future.schemaVersion = 99;
+  profileFixture.writeRaw(VERSION, future);
+  await assert.rejects(
+    patch.run({ version: VERSION, explicitPath: app.resourcesDir, quiet: true }),
+    /schemaVersion 不受支持/
+  );
+
+  // 2) 替换对象清单是引擎与档案的共同契约，单方面改即拒绝
+  const targets = profileFixture.make(VERSION);
+  targets.targets = ['main.js'];
+  profileFixture.writeRaw(VERSION, targets);
+  await assert.rejects(
+    patch.run({ version: VERSION, explicitPath: app.resourcesDir, quiet: true }),
+    /targets 与引擎支持的替换对象不一致/
+  );
+});
+
+test('参数来自档案：注入点锚点与标签表都用档案里的值', async (t) => {
+  // 产物用一个**非默认**的注入点注释，档案声明同一个文本——若引擎仍写死
+  // `//# sourceMappingURL=`，注入块就会落到文件末尾而不是锚点之前，标签也不会是自定义那套。
+  const marker = '\n//# custom-anchor=';
+  const labels = { windows: { undo: '&CustomUndo' }, macos: { undo: 'CustomUndo' } };
+  const main = `;(function () {\n  var x = 1;\n})();\n${marker}main.js\n`;
+  const app = makeApp({ main });
+  prepare(t, app, { marker, labels });
+
+  await withPatchState(() =>
+    patch.run({ version: VERSION, explicitPath: app.resourcesDir, noRestart: true, quiet: true })
+  );
+
+  const patched = fs.readFileSync(app.mainPath, 'utf8');
+  const range = contextMenu.blockRange(patched);
+  assert.ok(range, 'main.js 应有右键菜单注入块');
+  // 块被插在档案声明的锚点之前（行首换行之后），而不是被追加到文件末尾
+  assert.ok(patched.indexOf(contextMenu.BEGIN) < patched.indexOf('//# custom-anchor='), patched);
+  assert.ok(patched.slice(range.end).startsWith('//# custom-anchor='), '锚点应紧跟在注入块之后');
+  // 标签表来自档案：块里是自定义标签，不是注入器的默认表
+  assert.ok(patched.includes("'&CustomUndo'"), patched);
+  assert.ok(!patched.includes("'&Undo'"), '不该混入默认标签表');
+});
+
+test('更新管控：档案未启用该策略时请求 → 写盘前拒绝（不静默跳过）', async (t) => {
+  const app = makeApp({ main: MAIN_UPD }); // 产物有方法锚点，但档案默认禁用该策略
+  prepare(t, app);
+
+  await assert.rejects(
+    patch.run({
+      version: VERSION,
+      explicitPath: app.resourcesDir,
+      noRestart: true,
+      updateControl: 'guard',
+      quiet: true,
+    }),
+    (e) => {
+      assert.match(e.message, /未启用「更新管控」/);
+      assert.ok(e.hint, '应给出下一步');
+      return true;
+    }
+  );
+  assert.strictEqual(fs.readFileSync(app.mainPath, 'utf8'), MAIN_UPD, '拒绝时不该写盘');
+  assert.strictEqual(common.backupExists(VERSION), false);
+});
+
+test('更新管控锚点 0 / 2 次：拒绝且不写盘', async (t) => {
+  // 0 次：档案启用更新管控，但产物没有 async checkForUpdates( 方法
+  const zero = makeApp();
+  prepare(t, zero, { updateControl: true });
+  await assert.rejects(
+    patch.run({
+      version: VERSION,
+      explicitPath: zero.resourcesDir,
+      noRestart: true,
+      updateControl: 'guard',
+      quiet: true,
+    }),
+    /锚点不符[\s\S]*出现 0 次/
+  );
+  assert.strictEqual(fs.readFileSync(zero.mainPath, 'utf8'), MAIN_EN);
+
+  // 2 次：锚点不再唯一
+  const two = [
+    'class A { async checkForUpdates(a) { return a } }',
+    'class B { async checkForUpdates(b) { return b } }',
+    '',
+    '//# sourceMappingURL=main.js.map',
+    '',
+  ].join('\n');
+  const dup = makeApp({ main: two });
+  prepare(t, dup, { updateControl: true });
+  await assert.rejects(
+    patch.run({
+      version: VERSION,
+      explicitPath: dup.resourcesDir,
+      noRestart: true,
+      updateControl: 'guard',
+      quiet: true,
+    }),
+    /锚点不符[\s\S]*出现 2 次/
+  );
+  assert.strictEqual(fs.readFileSync(dup.mainPath, 'utf8'), two);
 });

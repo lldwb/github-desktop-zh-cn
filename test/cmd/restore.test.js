@@ -31,6 +31,7 @@ const restore = require('../../scripts/cmd/restore');
 const patch = require('../../scripts/cmd/patch');
 const updateControl = require('../../scripts/inject/update-control');
 const scratch = require('../fixtures/scratch');
+const profileFixture = require('../fixtures/profile');
 
 // 本文件专属的夹具版本名（与 verify / patch 的测试目录互不撞车，非三段数字形态）
 const VERSION = '0.0.0-restore';
@@ -142,14 +143,17 @@ function makeApp({ main = MAIN_EN, renderer = RENDERER_EN, pkgVersion = VERSION 
   };
 }
 
-// 用例的前后清理 + 备好本地字典（幂等；scratch 删除带门禁）
-function prepare(t, app) {
+// 用例的前后清理 + 备好本地字典与替换逻辑档案（幂等；scratch 删除带门禁）。
+// 档案是「字典 + 档案成对」的另一半：按组还原重放注入时必须按该版本档案的锚点/参数来，
+// 需要更新管控的用例传 { updateControl: true }（夹具产物需含 async checkForUpdates( 方法）。
+function prepare(t, app, profileOptions = {}) {
   scratch.cleanup(VERSION);
   fs.rmSync(common.backupDir(VERSION), { recursive: true, force: true });
   scratch.isolate(t, VERSION);
   t.after(() => fs.rmSync(common.backupDir(VERSION), { recursive: true, force: true }));
   t.after(() => fs.rmSync(app.root, { recursive: true, force: true }));
   writeDict();
+  profileFixture.write(VERSION, profileOptions);
 }
 
 // patch-state.json 是数据根下所有进程共享的记账文件。node --test 的各测试文件是并行子进程，
@@ -274,7 +278,7 @@ test('无备份且产物本就是官方原文：逆向替换 0 处，内容不�
 
 test('按组还原：账上记 off → 重放 updateControl 仍是 off（撤汉化、保留管控）', async (t) => {
   const app = makeApp({ main: MAIN_UPD });
-  prepare(t, app);
+  prepare(t, app, { updateControl: true });
 
   await withPatchState(async () => {
     // 先打完整补丁：i18n + 「完全禁止更新」（off），账上记下 updateControlMode: 'off'
@@ -309,7 +313,7 @@ test('按组还原：账上记 off → 重放 updateControl 仍是 off（撤汉�
 
 test('按组还原：老账没记模式 → 重放默认 guard（与 mode 字段上线前的行为一致）', async (t) => {
   const app = makeApp({ main: MAIN_UPD });
-  prepare(t, app);
+  prepare(t, app, { updateControl: true });
   // 备份在场（官方原文）
   fs.mkdirSync(common.backupDir(VERSION), { recursive: true });
   fs.writeFileSync(path.join(common.backupDir(VERSION), 'main.js'), MAIN_UPD, 'utf8');

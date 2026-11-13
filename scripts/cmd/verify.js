@@ -8,6 +8,7 @@ const {
   effectiveKeys, isPatched, TARGETS,
 } = require('../common');
 const contextMenu = require('../inject/context-menu.js');
+const versionProfile = require('../version-profile.js');
 
 function parseArgs(argv) {
   const args = { explicitPath: null, version: null };
@@ -65,21 +66,44 @@ function checkHits(app, entries) {
 }
 
 // 2b. 右键菜单：标签由 Electron 运行时按 role 生成、产物里没有字面量，靠注入的代码造出来再由字典译掉
-//（见 context-menu.js）。这里只看两件事：代码在不在、本平台这套标签字典覆盖得全不全。
-function checkContextMenu(app, entries) {
+//（见 context-menu.js）。这里看两件事：代码在不在、本平台这套标签（**来自该版本档案**）字典覆盖得全不全。
+function checkContextMenu(app, entries, profile, profileLabel) {
+  if (!versionProfile.hasStrategy(profile, 'context-menu')) {
+    console.log('右键菜单代码：该版本档案未启用右键菜单注入');
+    return;
+  }
+  const params = versionProfile.strategy(profile, 'context-menu', { platform: process.platform });
+  const labels = Object.values(params.labels);
   const mainContent = fs.readFileSync(path.join(app.appDir, 'main.js'), 'utf8');
   const menuRange = contextMenu.blockRange(mainContent);
   if (menuRange) {
-    const labels = Object.values(contextMenu.labelsFor(process.platform === 'darwin'));
     const mainEntries = scopedEntries(entries, 'main.js');
     const uncovered = labels.filter((l) => !mainEntries.has(l));
     const state = uncovered.length === 0 ? '✓' : `（${uncovered.join(' / ')} 保持英文）`;
     console.log(
-      `右键菜单代码：已注入，标签 ${labels.length} 个，字典未覆盖 ${uncovered.length} 个${state}`
+      `右键菜单代码：已注入，标签 ${labels.length} 个（档案 ${profileLabel}），字典未覆盖 ${uncovered.length} 个${state}`
     );
   } else {
     console.log('右键菜单代码：未注入（产物是还原过的、或补丁是旧版工具打的）');
   }
+}
+
+// 2a. 档案锚点：对本地产物断言该版本档案声明的锚点次数（0 次 = 产物结构变了，多次 = 锚点不再唯一）。
+// 这是「档案与官方产物形态一致」的机器检查——补丁前发现比打出坏产物再排查便宜得多。
+function checkProfileAnchors(app, profile) {
+  const counts = {};
+  for (const f of TARGETS) {
+    const content = fs.readFileSync(path.join(app.appDir, f), 'utf8');
+    const fileCounts = versionProfile.assertAnchors(content, profile, { file: f });
+    for (const [id, n] of Object.entries(fileCounts)) counts[id] = n;
+  }
+  const ids = Object.keys(counts);
+  console.log(
+    ids.length > 0
+      ? `档案锚点：${ids.map((id) => `${id}=${counts[id]}`).join('、')} ✓`
+      : '档案锚点：该版本档案未声明锚点'
+  );
+  return true;
 }
 
 // 覆盖率报告：已汉化看「仍残留英文的条目」，未汉化看「两个文件均 0 命中」的条目
@@ -141,6 +165,11 @@ function main() {
     const version = args.version || versions[versions.length - 1];
     const app = locateApp({ explicitPath: args.explicitPath });
 
+    // 该版本的替换逻辑档案：字典是翻译资产、档案是「怎么替换」的版本档案，两者强对应。
+    // 缺档案/结构非法在这里直接失败（与字典缺失同样属于「该版本不可用」）。
+    const { profile, label: profileLabel } = versionProfile.loadProfile(version);
+    console.log(`档案：${profileLabel}（${versionProfile.describe(profile)}）`);
+
     let failed = false;
 
     // 1. 版本一致性
@@ -150,9 +179,19 @@ function main() {
     const entries = loadDict(version);
     const { perFile, keys } = checkHits(app, entries);
 
+    // 2a. 档案锚点：本地产物是否仍与该版本档案声明的锚点形态一致
+    try {
+      checkProfileAnchors(app, profile);
+    } catch (e) {
+      console.error('档案锚点：失败 ✗');
+      console.error(e.message);
+      if (e.hint) console.error(e.hint);
+      failed = true;
+    }
+
     // 2b. 右键菜单：标签由 Electron 运行时按 role 生成、产物里没有字面量，靠注入的代码造出来再由字典译掉
-    //（见 context-menu.js）。这里只看两件事：代码在不在、本平台这套标签字典覆盖得全不全。
-    checkContextMenu(app, entries);
+    //（见 context-menu.js）。标签表来自该版本档案。
+    checkContextMenu(app, entries, profile, profileLabel);
 
     // 已汉化判定：备份存在且与当前文件不一致（判据的 SSOT 在 common.isPatched）
     reportCoverage(keys, perFile, isPatched(app.appDir, version));
@@ -167,6 +206,7 @@ function main() {
     console.log('\n校验通过。');
   } catch (e) {
     console.error(`错误：${e.message}`);
+    if (e.hint) console.error(e.hint); // 与 patch / restore 一致：可读下一步（如缺档案怎么补）
     process.exit(1);
   }
 }

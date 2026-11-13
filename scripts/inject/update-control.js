@@ -11,6 +11,13 @@
 const BEGIN = '/*__GDZC_UPDATE_CONTROL_BEGIN__*/';
 const END = '/*__GDZC_UPDATE_CONTROL_END__*/';
 
+// 方法闸门锚点与注入点标记的**默认值**（= 当前最新版实测值）。生产路径（patch / restore 的按组
+// 重放）一律由调用方从该版本的替换逻辑档案（dictionaries/<版本>/patch.json）传入实测值，默认值
+// 只用于注入器单测与二阶段前的过渡调用方。引擎不在注入器里写死版本假设——本模块只负责「按给定
+// 锚点注入」。
+const DEFAULT_ANCHOR = 'async checkForUpdates(';
+const DEFAULT_MARKER = '\n//# sourceMappingURL=';
+
 // 生成注入的支撑代码。dictDir 写死进产物：运行时靠它扫「已支持版本上限」。
 // 只用 ES5 语法——这段字符串原样写进产物，不经过任何转译，用新语法等于赌对面 Electron 的
 // Node 版本（当前产物是 webpack 编译过的，注入位置在编译范围之外）。
@@ -102,24 +109,39 @@ ${END}
 // 已注入过（标记还在）则原样返回，changed=false——重复调用是安全的。
 // **换模式不在这里做**：要 guard ↔ off 互换，先还原成官方原文再按新模式打一遍，
 // 这样产物里永远只有一份注入块，不会出现两套 __gdzcAllowUpdate 抢着赋值。
-function inject(content, { dictDir, mode = 'guard', toolPath = null }) {
+//
+// anchor / expected / marker：锚点文本、期望出现次数、注入点标记——生产路径从该版本档案传入
+// （见 scripts/version-profile.js 的锚点断言）；默认值见文件头的过渡说明。次数不等于 expected
+// 时返回 changed=false + reason（调用方应先断锚点、再注入；这里是最后一道防线）。
+function inject(
+  content,
+  {
+    dictDir,
+    mode = 'guard',
+    toolPath = null,
+    anchor = DEFAULT_ANCHOR,
+    expected = 1,
+    marker = DEFAULT_MARKER,
+  } = {}
+) {
   if (content.includes(BEGIN)) return { content, changed: false, reason: '已注入过（标记已存在）' };
 
   // 支撑代码：锚点优先用文件末尾的 sourceMappingURL 注释（打包器生成的固定结构），
   // 没有就退回文件末尾——两处都在 IIFE 之外，等价。
   const block = buildInjection(dictDir, { mode, toolPath });
-  const marker = '\n//# sourceMappingURL=';
-  const at = content.lastIndexOf(marker);
+  const at = marker ? content.lastIndexOf(marker) : -1;
   const withSupport =
     at >= 0 ? `${content.slice(0, at + 1)}${block}${content.slice(at + 1)}` : `${content}\n${block}`;
 
-  // 方法闸门：锚点用 `async checkForUpdates(`。实测 3.6.6 正式版里 checkForUpdates 共出现
-  // 3 次（方法名、方法体内调 autoUpdater、IPC 处理器），**只有方法名那处带 async 前缀**，
-  // 所以这个锚点是唯一的。不唯一就宁可不动——插错地方会让应用起不来。
-  const anchor = 'async checkForUpdates(';
+  // 方法闸门：锚点由档案声明（当前版本实测 `async checkForUpdates(` 全文件唯一——checkForUpdates
+  // 共出现 3 次，只有方法名那处带 async 前缀）。次数不符就宁可不动——插错地方会让应用起不来。
   const occurrences = withSupport.split(anchor).length - 1;
-  if (occurrences !== 1) {
-    return { content, changed: false, reason: `锚点 ${JSON.stringify(anchor)} 出现 ${occurrences} 次（预期 1 次），产物结构可能变了` };
+  if (occurrences !== expected) {
+    return {
+      content,
+      changed: false,
+      reason: `锚点 ${JSON.stringify(anchor)} 出现 ${occurrences} 次（档案期望 ${expected} 次），产物结构可能变了`,
+    };
   }
   const mi = withSupport.indexOf(anchor);
   const braceAt = withSupport.indexOf('{', mi);
@@ -130,4 +152,4 @@ function inject(content, { dictDir, mode = 'guard', toolPath = null }) {
   return { content: out, changed: true, reason: '' };
 }
 
-module.exports = { inject, buildInjection, BEGIN, END };
+module.exports = { inject, buildInjection, BEGIN, END, DEFAULT_ANCHOR, DEFAULT_MARKER };

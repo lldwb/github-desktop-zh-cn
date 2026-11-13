@@ -27,7 +27,14 @@ const END = '/*__GDZC_CONTEXT_MENU_END__*/';
 // 否则替换落空、标签保持英文。Electron 的 editMenu 展开项实测为
 // undo / redo / (分隔线) / cut / copy / paste / delete / (分隔线) / selectall（Electron 44，win32）。
 // pasteAndMatchStyle 不收录：build-context-menu.ts 显式把它过滤掉了，收进来只会多一个永不生效的键。
-const LABELS = {
+//
+// **生产路径不用这份表**：每个版本的标签表由该版本的替换逻辑档案（dictionaries/<版本>/patch.json
+// 的 injections.context-menu.labels）提供，patch / restore / verify 一律显式传入。这里保留的
+// DEFAULT_LABELS 只是「当前最新版实测值」的过渡默认：
+//   - dict-auto 的注入字面量索引在二阶段接入档案前仍用它（那一份是翻译候选判据，不是最终注入）；
+//   - 注入器自身的单测用它当夹具基线。
+// 档案化完成后（二阶段）应删除本表与默认值，注入器只接受调用方给的标签表。
+const DEFAULT_LABELS = {
   win32: {
     undo: '&Undo',
     redo: '&Redo',
@@ -48,9 +55,9 @@ const LABELS = {
   },
 };
 
-// 该平台的标签表（darwin 之外的平台共用 win32 那套，与 build-default-menu 的 __DARWIN__ 三目一致）
+// 该平台的默认标签表（darwin 之外的平台共用 win32 那套，与 build-default-menu 的 __DARWIN__ 三目一致）
 function labelsFor(darwin) {
-  return darwin ? LABELS.darwin : LABELS.win32;
+  return darwin ? DEFAULT_LABELS.darwin : DEFAULT_LABELS.win32;
 }
 
 // 生成注入块的源码。只用 ES5——这段字符串原样写进产物、不经过任何转译，用新语法等于赌对面 Electron 的
@@ -63,10 +70,15 @@ function labelsFor(darwin) {
 // 写成字面量，就同样落在字典的匹配范围里——哪天字典收了 'copy' / 'delete' 这样的键，角色表的键会被译成
 // 中文，查表静默落空（标签保持英文、还不报错）。故角色名整体塞进一个字符串再 JSON.parse：这个字符串的
 // 内容是 `["undo","redo",…]`，任何字典键都不会与它整串相等。
-function buildInjection({ darwin = false } = {}) {
-  const table = labelsFor(darwin);
-  const roles = JSON.stringify(Object.keys(table));
-  const labels = Object.values(table)
+//
+// labels：{ role → 英文标签 }，由调用方给（生产路径来自该版本的替换逻辑档案）。缺标签表即抛错——
+// 不静默回退到「最新版」表，那正是本模块要消灭的全局假设。
+function buildInjection({ darwin = false, labels = labelsFor(darwin) } = {}) {
+  if (!labels || typeof labels !== 'object' || Object.keys(labels).length === 0) {
+    throw new Error('右键菜单注入缺少标签表（应由该版本的替换逻辑档案提供）');
+  }
+  const roles = JSON.stringify(Object.keys(labels));
+  const labelList = Object.values(labels)
     .map((v) => `'${v}'`)
     .join(', ');
   return `${BEGIN}
@@ -74,7 +86,7 @@ function buildInjection({ darwin = false } = {}) {
   try{
     var M=require('electron').Menu;
     if(!M||M.__gdzcContextMenu)return;
-    var R=JSON.parse('${roles}'),L=[${labels}];
+    var R=JSON.parse('${roles}'),L=[${labelList}];
     var orig=M.buildFromTemplate;
     M.buildFromTemplate=function(){
       var menu=orig.apply(this,arguments);
@@ -105,16 +117,20 @@ ${END}
 `;
 }
 
+// 注入点标记（产物末尾的 sourceMappingURL 注释）。**生产路径由调用方从档案传入**；默认值只是
+// 注入器单测与未接档案的旧调用方的过渡值，引擎（patch / restore）一律显式传档案里的锚点文本。
+const DEFAULT_MARKER = '\n//# sourceMappingURL=';
+
 // 往 main.js 注入右键菜单汉化。返回 { content, changed, reason }
 // 已注入过（首标记还在）则原样返回，changed=false——重复调用是安全的。
-function inject(content, { darwin = false } = {}) {
+// labels：标签表（生产路径来自该版本档案）；marker：注入点锚点文本（档案声明）。
+function inject(content, { darwin = false, labels = labelsFor(darwin), marker = DEFAULT_MARKER } = {}) {
   if (content.includes(BEGIN)) return { content, changed: false, reason: '已注入过（标记已存在）' };
 
   // 锚点与更新管控同处：文件末尾 sourceMappingURL 注释**之前**，也就是产物 IIFE 之外——
   // 那里 require 是原生 CommonJS，不受 webpack 运行时 __webpack_require__ 拦截。
-  const block = buildInjection({ darwin });
-  const marker = '\n//# sourceMappingURL=';
-  const at = content.lastIndexOf(marker);
+  const block = buildInjection({ darwin, labels });
+  const at = marker ? content.lastIndexOf(marker) : -1;
   const out =
     at >= 0 ? `${content.slice(0, at + 1)}${block}${content.slice(at + 1)}` : `${content}\n${block}`;
   return { content: out, changed: true, reason: '' };
@@ -132,4 +148,6 @@ function blockRange(content) {
   return { start, end: content[after] === '\n' ? after + 1 : after };
 }
 
-module.exports = { inject, buildInjection, labelsFor, blockRange, BEGIN, END };
+module.exports = {
+  inject, buildInjection, labelsFor, blockRange, BEGIN, END, DEFAULT_LABELS, DEFAULT_MARKER,
+};

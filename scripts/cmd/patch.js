@@ -9,6 +9,7 @@
 const fs = require('fs');
 const path = require('path');
 const common = require('../common.js');
+const versionProfile = require('../version-profile.js');
 const dictSync = require('../dict/dict-sync.js');
 const restart = require('./restart.js');
 const updateControl = require('../inject/update-control.js');
@@ -49,6 +50,8 @@ function printHelp() {
   console.log(`用法：node scripts/cmd/patch.js [选项]
 
 按 dictionaries/<版本>/zh-CN.json 替换安装目录中 main.js / renderer.js 的界面文本。
+注入策略与锚点来自同目录的 patch.json（该版本的替换逻辑档案）——缺档案或锚点与官方
+产物形态不符时直接拒绝，不会套用其它版本的替换逻辑。
 写回前自动备份原文件到「数据目录/tmp/backup/<版本>/」（源码态数据目录即仓库根）。
 本地没有该版本字典时会联网获取；汉化完成后重启 GitHub Desktop。
 
@@ -90,8 +93,9 @@ async function prepareDict(version, log) {
 }
 
 // 逐文件替换（干跑时只在内存里替换）、按需备份与写回，再报 0 命中清单。
+// menu：右键菜单注入策略参数（来自该版本档案；该版本未启用时为 null）。
 // 返回 { totalAll, perFile }。
-function replaceTargets(app, version, entries, alreadyPatched, args, log) {
+function replaceTargets(app, version, entries, alreadyPatched, args, log, menu) {
   let totalAll = 0;
   const perFile = {};
   for (const f of TARGETS) {
@@ -99,11 +103,16 @@ function replaceTargets(app, version, entries, alreadyPatched, args, log) {
     const raw = fs.readFileSync(file, 'utf8');
     // 右键菜单的标签由 Electron 运行时按 role 生成、产物里没有字面量，字典够不着——先注入一段
     // 「按 role 重打标签」的代码把字面量造出来，紧接着由下面的字典替换译掉（见 context-menu.js）。
+    // 标签表与注入点锚点都来自该版本档案（menu），不在注入器里写死「最新版」假设。
     // 只 main.js：菜单在 main 进程里拼（build-context-menu.ts）。干跑也注入（只在内存里），
     // 否则预览会少掉这批标签、与实际写盘结果对不上。
     let content = raw;
-    if (f === 'main.js') {
-      const inj = contextMenu.inject(raw, { darwin: process.platform === 'darwin' });
+    if (f === 'main.js' && menu) {
+      const inj = contextMenu.inject(raw, {
+        darwin: process.platform === 'darwin',
+        labels: menu.labels,
+        marker: menu.injectionPoint.text,
+      });
       content = inj.content;
       if (inj.changed) log('已注入右键菜单汉化代码（按 role 重打编辑菜单标签）：main.js');
     }
@@ -152,20 +161,33 @@ function replaceTargets(app, version, entries, alreadyPatched, args, log) {
 
 // 更新管控补丁组：与汉化同属「补丁」，但改的是逻辑不是文案：往 main.js 注入一道闸。
 // 只动 main.js——checkForUpdates 的方法体与 IPC 入口都在那里，renderer 侧只是调用方。
+// 锚点与注入点来自该版本档案并**先断言再注入**（次数不符直接抛错，不带着错的锚点写产物）。
 // 返回本轮是否真的注入了（干跑与「已是该形态」都不算）。
-function applyUpdateControl(app, args, log) {
+function applyUpdateControl(app, args, log, profile) {
   if (!args.updateControl) return false;
+  const mainFile = path.join(app.appDir, 'main.js');
+  const content = fs.readFileSync(mainFile, 'utf8');
+
+  // 该版本档案声明了这项注入才允许打（未声明/未启用 → 明确失败，不静默跳过）。
+  // strategy() 在未声明/未启用时抛出带原因与下一步的错误。
+  versionProfile.strategy(profile, 'update-control', { platform: process.platform });
+  // 锚点强校验：在「已注入右键菜单块、文案已替换」的 main.js 上做（两个锚点的计数都不受这些改动影响）。
+  versionProfile.assertAnchors(content, profile, { file: 'main.js', strategies: ['update-control'] });
+  const params = versionProfile.strategy(profile, 'update-control', { platform: process.platform });
+
   if (args.dryRun) {
-    log('\n（--dry-run：更新管控未注入）');
+    log('\n（--dry-run：更新管控未注入；锚点已按档案校验通过）');
     return false;
   }
-  const mainFile = path.join(app.appDir, 'main.js');
-  const r = updateControl.inject(fs.readFileSync(mainFile, 'utf8'), {
+  const r = updateControl.inject(content, {
     dictDir: path.join(common.dataRoot(), 'dictionaries'),
     mode: args.updateControl,
     // 「更新后自动汉化」只在打包态注入：源码态下工具就是仓库本身（npm run patch 即可），
     // 往产物里写死一个 node 路径，换台机器就指向不存在的东西了。
     toolPath: isPackaged() ? process.execPath : null,
+    anchor: params.methodAnchor.text,
+    expected: params.methodAnchor.expected,
+    marker: params.injectionPoint.text,
   });
   if (!r.changed) {
     log(`\n更新管控未注入：${r.reason}`);
@@ -212,6 +234,37 @@ function finalize(version, app, args, { totalAll, injected, downloaded }) {
 async function run(args = {}) {
   const log = args.quiet ? () => {} : console.log;
   const { version, app } = resolveVersion(args);
+
+  // 该版本的替换逻辑档案：缺档案 / 结构非法 / schema 不认识都在**联网与写盘之前**失败（快速、
+  // 可读、不产生任何副作用）。档案是「版本强对应」的一半，与字典成对存在。
+  const { profile, label: profileLabel } = versionProfile.loadProfile(version);
+  log(`替换逻辑档案：${profileLabel}（${versionProfile.describe(profile)}）`);
+
+  // i18n 注入策略（右键菜单汉化）来自该版本档案；未启用时只跳过注入，文案替换照常。
+  const menu = versionProfile.hasStrategy(profile, 'context-menu')
+    ? versionProfile.strategy(profile, 'context-menu', { platform: process.platform })
+    : null;
+  if (!menu) log('（该版本档案未启用右键菜单注入，跳过注入）');
+  // 写盘前的锚点强校验：0 次 = 产物结构变了，多次 = 锚点不再唯一，一律拒绝而不是照插。
+  if (menu) {
+    for (const f of TARGETS) {
+      versionProfile.assertAnchors(fs.readFileSync(path.join(app.appDir, f), 'utf8'), profile, {
+        file: f,
+        strategies: ['context-menu'],
+      });
+    }
+  }
+
+  // 更新管控请求的**写盘前预检**：未声明/未启用、锚点不符都在 i18n 写盘之前拒绝，
+  // 避免「文案已经改了一半、更新管控却打不上」的中间态。
+  if (args.updateControl) {
+    versionProfile.strategy(profile, 'update-control', { platform: process.platform });
+    versionProfile.assertAnchors(fs.readFileSync(path.join(app.appDir, 'main.js'), 'utf8'), profile, {
+      file: 'main.js',
+      strategies: ['update-control'],
+    });
+  }
+
   const { entries, downloaded } = await prepareDict(version, log);
   log(`目标版本：${app.version}（${app.appDir}）`);
 
@@ -219,8 +272,8 @@ async function run(args = {}) {
   // 判定为未汉化，0 命中条目才会作为「需人工核对」报出来，而不是被当成预期
   const alreadyPatched = isPatched(app.appDir, version);
 
-  const { totalAll } = replaceTargets(app, version, entries, alreadyPatched, args, log);
-  const injected = applyUpdateControl(app, args, log);
+  const { totalAll } = replaceTargets(app, version, entries, alreadyPatched, args, log, menu);
+  const injected = applyUpdateControl(app, args, log, profile);
   return finalize(version, app, args, { totalAll, injected, downloaded });
 }
 

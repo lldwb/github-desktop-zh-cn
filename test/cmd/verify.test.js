@@ -23,6 +23,7 @@ const { spawnSync } = require('child_process');
 const common = require('../../scripts/common');
 const contextMenu = require('../../scripts/inject/context-menu');
 const scratch = require('../fixtures/scratch');
+const profileFixture = require('../fixtures/profile');
 
 // 本文件专属的夹具版本名：与 test/dict/**（0.0.0-test）、patch / restore 的测试各自独立成目录，
 // tmp/backup/<版本>/ 的备份判定 likewise 互不干扰；名字非三段数字形态，不会进任何版本列表。
@@ -121,15 +122,17 @@ function makeApp({ main = MAIN_EN, renderer = RENDERER_EN, pkgVersion = VERSION 
   return { root, resourcesDir, appDir };
 }
 
-// 用例的前后清理 + 备好本地字典：字典与备份的残留先清一遍（幂等，防上次异常退出留下），
+// 用例的前后清理 + 备好本地字典与替换逻辑档案（幂等，防上次异常退出留下），
 // 结束后再清——断言失败也不会把夹具留在仓库里（scratch 约定，删除带门禁）。
-function prepare(t, app) {
+// 默认档案只启用右键菜单注入（夹具产物默认没有更新管控锚点）；需要的用例传 { updateControl: true }。
+function prepare(t, app, profileOptions = {}) {
   scratch.cleanup(VERSION);
   fs.rmSync(common.backupDir(VERSION), { recursive: true, force: true });
   scratch.isolate(t, VERSION);
   t.after(() => fs.rmSync(common.backupDir(VERSION), { recursive: true, force: true }));
   t.after(() => fs.rmSync(app.root, { recursive: true, force: true }));
   writeDict();
+  profileFixture.write(VERSION, profileOptions);
 }
 
 // 跑真 CLI 入口（子进程），args 即命令行参数
@@ -226,8 +229,9 @@ test('未知参数：报错退出 1（其余错误一律按 1，patch 的版本�
 // ============================ 边界 ============================
 
 test('0 命中：产物里没有字典键 → 0 命中清单格式，退出码 0', (t) => {
+  // 保留注入点锚点（两个注入块都要靠它定位；档案锚点校验先于命中率统计）
   const app = makeApp({
-    main: 'var config = { mode: "production", retries: 3 };\nconsole.log("ready");\n',
+    main: 'var config = { mode: "production", retries: 3 };\nconsole.log("ready");\n\n//# sourceMappingURL=main.js.map\n',
     renderer: 'var api = { endpoint: "/status" };\n',
   });
   prepare(t, app);
@@ -248,3 +252,48 @@ test('0 命中：产物里没有字典键 → 0 命中清单格式，退出码 0
     assert.ok(r.stdout.includes(`    - ${k}`), `清单里应有：${k}\n${r.stdout}`);
   }
 });
+
+// ============================ 档案（dictionaries/<版本>/patch.json） ============================
+
+test('缺档案：直接失败（字典与档案必须成对，不能用半对资源校验）', (t) => {
+  const app = makeApp();
+  prepare(t, app);
+  fs.rmSync(profileFixturePath(), { force: true }); // 只留字典
+
+  const r = runVerify(['--path', app.resourcesDir, '--version', VERSION]);
+  assert.strictEqual(r.status, 1);
+  assert.ok(r.stderr.includes('替换逻辑档案'), r.stderr);
+  assert.ok(r.stderr.includes('patch.json'), r.stderr);
+  assert.ok(r.stderr.includes('probe --version') || r.stderr.includes('同步字典'), r.stderr);
+});
+
+test('档案锚点 0 / 2 次：校验失败（产物形态与档案不一致）', (t) => {
+  // 0 次：没有注入点锚点
+  const zeroApp = makeApp({ main: ';(function () {\n  var x = 1;\n})();\n' });
+  prepare(t, zeroApp);
+  let r = runVerify(['--path', zeroApp.resourcesDir, '--version', VERSION]);
+  assert.strictEqual(r.status, 1);
+  assert.ok(r.stderr.includes('档案锚点：失败 ✗'), r.stderr);
+  assert.ok(r.stderr.includes('出现 0 次'), r.stderr);
+
+  // 2 次：注入点不再唯一
+  const twoApp = makeApp({ main: `${MAIN_EN}\n//# sourceMappingURL=extra.map\n` });
+  prepare(t, twoApp);
+  r = runVerify(['--path', twoApp.resourcesDir, '--version', VERSION]);
+  assert.strictEqual(r.status, 1);
+  assert.ok(r.stderr.includes('出现 2 次'), r.stderr);
+});
+
+test('档案声明更新管控：产物缺方法锚点 → 锚点校验失败（补丁前就暴露）', (t) => {
+  const app = makeApp(); // MAIN_EN 没有 async checkForUpdates(
+  prepare(t, app, { updateControl: true });
+
+  const r = runVerify(['--path', app.resourcesDir, '--version', VERSION]);
+  assert.strictEqual(r.status, 1);
+  assert.ok(r.stderr.includes('checkForUpdates'), r.stderr);
+});
+
+// 档案路径：与引擎同一把尺子（数据根/dictionaries/<版本>/patch.json），不自行拼路径。
+function profileFixturePath() {
+  return path.join(common.dataRoot(), 'dictionaries', VERSION, 'patch.json');
+}

@@ -974,6 +974,7 @@ module.exports = {
   remoteDictUrls,
   remoteDictListUrls,
   hasEmbeddedDict,
+  embeddedAsset,
   compareVersions,
   PLATFORM_SEGMENTS,
   SEGMENT_NAMES,
