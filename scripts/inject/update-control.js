@@ -31,7 +31,18 @@ const DEFAULT_MARKER = '\n//# sourceMappingURL=';
 // toolPath：工具可执行文件路径。给了才注入「更新后自动汉化」——**只有打包态才有意义**，
 // 源码态下工具就是仓库本身，用户自己跑 npm run patch 即可，写死一个 node 路径进产物
 // 反而会在换机器后指向不存在的东西。
-function buildInjection(dictDir, { mode = 'guard', toolPath = null } = {}) {
+//
+// profileFile：该版本替换逻辑档案的文件名（生产路径由调用方传 `versionProfile.PROFILE_FILE`）。
+// 给了才把「已支持版本上限」与「更新后自动汉化前置」判据改成**成对完整**（字典 + 档案都在）——
+// 数据根里可能只有旧版工具同步下来的 zh-CN.json，按字典-only 判会高估支持上限、放行更新到
+// 打不了补丁的版本。默认 null 保持旧行为（仅单测 / 过渡调用方）。
+function buildInjection(dictDir, { mode = 'guard', toolPath = null, profileFile = null } = {}) {
+  const pairCheck = profileFile
+    ? `if(!fs.existsSync(path.join(DICT_DIR,v,'zh-CN.json')))return;if(!fs.existsSync(path.join(DICT_DIR,v,${JSON.stringify(profileFile)})))return;`
+    : `if(!fs.existsSync(path.join(DICT_DIR,v,'zh-CN.json')))return;`;
+  const limitPairCheck = profileFile
+    ? `if(!fs.existsSync(path.join(DICT_DIR,names[i],'zh-CN.json')))continue;if(!fs.existsSync(path.join(DICT_DIR,names[i],${JSON.stringify(profileFile)})))continue;`
+    : `if(!fs.existsSync(path.join(DICT_DIR,names[i],'zh-CN.json')))continue;`;
   const allow =
     mode === 'off'
       ? 'return false;'
@@ -52,7 +63,7 @@ function buildInjection(dictDir, { mode = 'guard', toolPath = null } = {}) {
     function autoPatch(){
       try{
         var v=require('electron').app.getVersion();
-        if(!fs.existsSync(path.join(DICT_DIR,v,'zh-CN.json')))return;
+        ${pairCheck}
         var raw={};
         try{raw=JSON.parse(fs.readFileSync(path.join(DICT_DIR,'..','tmp','patch-state.json'),'utf8'))||{};}catch(e){}
         var groups=(raw[v]&&raw[v].groups)||[];
@@ -77,14 +88,15 @@ function buildInjection(dictDir, { mode = 'guard', toolPath = null } = {}) {
       for(var i=0;i<n;i++){var x=a[i]||0,y=b[i]||0;if(x!==y)return x-y;}
       return 0;
     }
-    // 已支持版本上限 = 字典目录里带 zh-CN.json 的最大版本号。
-    // 扫不到（目录被移走 / 权限不足 / 无字典）返回 null——**判断不了就放行**：
+    // 已支持版本上限 = 字典目录里**成对完整**（zh-CN.json + 替换逻辑档案）的最大版本号；
+    // 未传 profileFile 时退回旧口径（只看字典，仅单测/过渡调用方）。
+    // 扫不到（目录被移走 / 权限不足 / 无成对资源）返回 null——**判断不了就放行**：
     // 宁可让用户更新，也不要因为工具自己的问题把人锁死在旧版本上。
     function limit(){
       try{
         var names=fs.readdirSync(DICT_DIR),best=null;
         for(var i=0;i<names.length;i++){
-          if(!fs.existsSync(path.join(DICT_DIR,names[i],'zh-CN.json')))continue;
+          ${limitPairCheck}
           var parts=String(names[i]).split('.'),ok=parts.length>0;
           for(var j=0;j<parts.length;j++){if(!/^[0-9]+$/.test(parts[j])){ok=false;break;}}
           if(!ok)continue;
@@ -113,12 +125,15 @@ ${END}
 // anchor / expected / marker：锚点文本、期望出现次数、注入点标记——生产路径从该版本档案传入
 // （见 scripts/version-profile.js 的锚点断言）；默认值见文件头的过渡说明。次数不等于 expected
 // 时返回 changed=false + reason（调用方应先断锚点、再注入；这里是最后一道防线）。
+// profileFile：替换逻辑档案文件名（生产路径传 `versionProfile.PROFILE_FILE`），用于注入块里
+// 「成对完整」判据；默认 null 保持旧口径（仅单测/过渡）。
 function inject(
   content,
   {
     dictDir,
     mode = 'guard',
     toolPath = null,
+    profileFile = null,
     anchor = DEFAULT_ANCHOR,
     expected = 1,
     marker = DEFAULT_MARKER,
@@ -128,7 +143,7 @@ function inject(
 
   // 支撑代码：锚点优先用文件末尾的 sourceMappingURL 注释（打包器生成的固定结构），
   // 没有就退回文件末尾——两处都在 IIFE 之外，等价。
-  const block = buildInjection(dictDir, { mode, toolPath });
+  const block = buildInjection(dictDir, { mode, toolPath, profileFile });
   const at = marker ? content.lastIndexOf(marker) : -1;
   const withSupport =
     at >= 0 ? `${content.slice(0, at + 1)}${block}${content.slice(at + 1)}` : `${content}\n${block}`;

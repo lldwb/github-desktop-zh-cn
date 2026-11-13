@@ -548,3 +548,21 @@ test('探测：sourcemap 缺 sourcesContent → 拒绝（标签推导不瞎猜�
   fs.writeFileSync(mapFile, JSON.stringify(map), 'utf8');
   assert.throws(() => versionProfile.probeApp(w.appDir, w.meta), /sourcesContent/);
 });
+
+// ============================ 加固（独立验收 P6） ============================
+
+test('加固：启用策略引用的锚点必须声明在 main.js（注入器只改 main.js）', () => {
+  const raw = profileFixture.make(VERSION);
+  raw.anchors.injectionPoint.file = 'renderer.js';
+  assert.throws(
+    () => versionProfile.validateProfile(raw, { version: VERSION }),
+    /只对 main\.js 生效/
+  );
+});
+
+test('加固：anchorsFor 对未知策略名 fail-closed（不静默变成零断言）', () => {
+  const profile = profileFixture.make(VERSION);
+  assert.throws(() => versionProfile.anchorsFor(profile, ['mystery']), /未知策略名/);
+  // 已知但未启用的策略属正常跳过语义
+  assert.deepStrictEqual(versionProfile.anchorsFor(profile, ['update-control']), []);
+});

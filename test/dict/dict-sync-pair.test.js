@@ -258,3 +258,57 @@ test('syncLatest：成对覆盖；内容未变时不动文件（changed=false）
   assert.ok(fs.readFileSync(dictPath(), 'utf8').includes('新'));
   assert.match(fs.readFileSync(profilePath(), 'utf8'), /"methodAnchor"/);
 });
+
+// ============================ 加固：本地只有档案 → 只补字典（P5） ============================
+
+test('ensureDict：本地只有档案 → 联网只补字典（不覆盖用户档案）', async (t) => {
+  prepare(t);
+  writeFile(profilePath(), profileText()); // 半对：本地只有档案
+  const r = await dictSync.ensureDict(VERSION, {
+    fetchPair: async () => ({ dictText: dictText({ Remote: '远端' }), profileText: profileText(), url: 'stub' }),
+  });
+  assert.strictEqual(r.source, 'downloaded');
+  assert.deepStrictEqual(r.files, [dictPath()], '只应写缺失的字典');
+  assert.ok(fs.readFileSync(profilePath(), 'utf8').includes('"schemaVersion"'), '用户档案应保持');
+  assert.strictEqual(versionProfile.pairStatus(VERSION).paired, true);
+  assert.deepStrictEqual(fs.readdirSync(path.dirname(dictPath())).filter((f) => f.endsWith('.part')), []);
+});
+
+// ============================ 加固：字典内容校验（P7） ============================
+
+test('fetchPair：字典 _meta.version 与目标版本不一致 → 该源失败（不落盘）', async (t) => {
+  prepare(t);
+  const wrong = JSON.stringify({ _meta: { version: '9.9.9', formatVersion: 2 }, common: { a: 'b' }, windows: {}, macos: {}, linux: {}, groups: {} });
+  const fetch = fakeFetch({
+    'raw.githubusercontent.com': (url) => (url.endsWith('zh-CN.json') ? wrong : profileText()),
+    'cdn.jsdelivr.net': (url) => (url.endsWith('zh-CN.json') ? wrong : profileText()),
+    'gitee.com': (url) => (url.endsWith('zh-CN.json') ? wrong : profileText()),
+  });
+
+  await assert.rejects(dictSync.fetchPair(VERSION, { fetch }), (e) => {
+    assert.match(e.message, /字典校验失败/);
+    assert.match(e.message, /meta\/version-mismatch/);
+    return true;
+  });
+  // ensureDict 走 fetchPair 失败时不留半对
+  await assert.rejects(
+    dictSync.ensureDict(VERSION, { fetchPair: (v, o) => dictSync.fetchPair(v, { fetch }) }),
+    /字典校验失败/
+  );
+  assert.strictEqual(versionProfile.pairStatus(VERSION).paired, false);
+  const syncDir = path.dirname(dictPath());
+  if (fs.existsSync(syncDir)) {
+    assert.deepStrictEqual(fs.readdirSync(syncDir).filter((f) => f.endsWith('.part')), []);
+  }
+});
+
+test('fetchPair：字典 formatVersion 不是 2 → 该源失败', async (t) => {
+  prepare(t);
+  const oldFormat = JSON.stringify({ _meta: { version: VERSION, formatVersion: 1 }, common: { a: 'b' } });
+  const fetch = fakeFetch({
+    'raw.githubusercontent.com': (url) => (url.endsWith('zh-CN.json') ? oldFormat : profileText()),
+    'cdn.jsdelivr.net': (url) => (url.endsWith('zh-CN.json') ? oldFormat : profileText()),
+    'gitee.com': (url) => (url.endsWith('zh-CN.json') ? oldFormat : profileText()),
+  });
+  await assert.rejects(dictSync.fetchPair(VERSION, { fetch }), /meta\/format/);
+});

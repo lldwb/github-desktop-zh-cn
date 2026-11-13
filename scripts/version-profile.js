@@ -486,6 +486,24 @@ function validateProfile(raw, { version } = {}) {
     injections[name] = validateInjection(name, entry, anchors);
   }
 
+  // 加固（独立验收 P6）：两个注入器只操作 main.js（context-menu 只在 main.js 调用、
+  // update-control 只改 main.js）。启用策略引用的锚点若声明成 renderer.js，锚点断言会落在
+  // renderer.js 上、而注入器在 main.js 找不到锚点：context-menu 会静默追加到文件末尾、
+  // update-control 返回 changed:false 只记一行日志——注入落点错误且不报错。故这里直接拒绝。
+  for (const [name, entry] of Object.entries(injections)) {
+    if (!entry || entry.enabled === false) continue;
+    const def = STRATEGIES[name];
+    for (const param of def.params) {
+      const anchor = anchors[entry[param]];
+      if (anchor && anchor.file !== 'main.js') {
+        fail(
+          `档案 injections.${name}.${param} 引用的锚点 ${entry[param]} 声明在 ${anchor.file}，` +
+            `但该策略只对 main.js 生效（注入器不改其它文件）。请把锚点的 file 改为 main.js，或删除该策略。`
+        );
+      }
+    }
+  }
+
   const sourcemaps = validateSourcemaps(raw.sourcemaps);
   const evidence = validateEvidence(raw.evidence, { version, anchors, injections });
 
@@ -564,10 +582,14 @@ function anchorsFor(profile, strategies) {
   const names = strategies || Object.keys(profile.injections);
   const ids = new Set();
   for (const name of names) {
+    // fail-closed（独立验收 P6）：调用方传错策略名时不能静默变成「零断言」——那会让一次
+    // 本该校验锚点的操作悄悄跳过校验。已知但未启用的策略跳过属正常语义。
+    const def = STRATEGIES[name];
+    if (!def) {
+      fail(`anchorsFor 收到未知策略名：${JSON.stringify(name)}（可用：${Object.keys(STRATEGIES).join(' / ')}）`);
+    }
     const entry = profile.injections[name];
     if (!entry || entry.enabled === false) continue;
-    const def = STRATEGIES[name];
-    if (!def) continue;
     for (const param of def.params) {
       if (entry[param]) ids.add(entry[param]);
     }

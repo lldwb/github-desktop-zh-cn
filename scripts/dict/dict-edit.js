@@ -707,6 +707,7 @@ module.exports = {
   exportFlat,
   dictPath,
   groupIndex,
+  validateDoc,
   USAGE,
   main,
 };

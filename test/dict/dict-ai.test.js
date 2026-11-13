@@ -270,7 +270,7 @@ test('translateBatch：超时按传入毫秒生效，不落到默认值', async 
 
 // ============================ 失败归类（CI 注解/草稿 artifact 依赖） ============================
 
-test('classifyFailure：网关不可达 / 鉴权 / 格式 / 质量 / 未知各归各类，优先级稳定', () => {
+test('classifyFailure：各归各类；kind 取多数类（tie 时按优先级），format 覆盖响应结构不认识', () => {
   const rows = [
     { reason: '请求超时（20 秒无响应）：***' },
     { reason: '连接被拒绝：***' },
@@ -282,7 +282,15 @@ test('classifyFailure：网关不可达 / 鉴权 / 格式 / 质量 / 未知各�
   ];
   const r = dictAi.classifyFailure(rows);
   assert.deepStrictEqual(r.counts, { transport: 2, auth: 1, format: 1, quality: 2, other: 1 });
-  assert.strictEqual(r.kind, 'transport', 'transport 是最高优先级（网关不可达时其它原因多为连带）');
+  assert.strictEqual(r.kind, 'transport', 'transport 与 quality 各 2 条：tie 时按优先级取 transport');
+
+  // 多数类优先（独立验收 A2-3）：1 条网关错误混在 99 条质量失败里，应报质量差，而不是网关不可达
+  const mixed = [{ reason: '请求超时：***' }, ...Array.from({ length: 3 }, () => ({ reason: '译文为空' }))];
+  assert.strictEqual(dictAi.classifyFailure(mixed).kind, 'quality');
+  assert.deepStrictEqual(dictAi.classifyFailure(mixed).counts, { transport: 1, quality: 3 });
+
+  // 「响应结构不认识」是模型没按契约回（缺 choices），归 format
+  assert.strictEqual(dictAi.classifyFailure([{ reason: '响应结构不认识：{"error":"no choices"}' }]).kind, 'format');
 
   // 纯质量失败 → quality（dict-auto 据此映射 ai-quality；网络/鉴权类映射 ai-unreachable）
   assert.deepStrictEqual(dictAi.classifyFailure([{ reason: '译文里没有中文："hello"' }]).kind, 'quality');

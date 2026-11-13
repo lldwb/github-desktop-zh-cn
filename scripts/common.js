@@ -80,6 +80,13 @@ function isElectronPackaged() {
   return isElectron() && !process.defaultApp;
 }
 
+// 「更新后自动汉化」要写进产物的工具路径：**只有打包态才有意义**——源码态下工具就是仓库本身
+// （用户自己跑 npm run patch 即可），往产物里写死一个 node 路径，换台机器就指向不存在的东西。
+// patch 注入与 restore 按组重放共用这一处取值，避免两处各写一份导致打包态行为悄悄不一致。
+function packagedToolPath() {
+  return isPackaged() ? process.execPath : null;
+}
+
 function userDataDir() {
   if (process.platform === 'win32') {
     const appData = process.env.APPDATA || path.join(os.homedir(), 'AppData', 'Roaming');
@@ -942,6 +949,7 @@ module.exports = {
   dataRoot,
   isPackaged,
   isElectronPackaged,
+  packagedToolPath,
   configPath,
   readConfig,
   writeConfig,

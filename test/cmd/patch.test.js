@@ -31,6 +31,7 @@ const path = require('path');
 const common = require('../../scripts/common');
 const patch = require('../../scripts/cmd/patch');
 const versionProfile = require('../../scripts/version-profile');
+const dictSync = require('../../scripts/dict/dict-sync');
 const contextMenu = require('../../scripts/inject/context-menu');
 const updateControl = require('../../scripts/inject/update-control');
 const scratch = require('../fixtures/scratch');
@@ -333,23 +334,66 @@ test('0 命中：字典与产物零交集 → total=0，renderer 原样、main �
 // 锚点 0/2 次、未知策略、请求了档案里未启用的策略——一律**明确失败**，且失败发生在写盘之前
 // （不留下「文案改了一半」的中间态）。
 
-test('缺档案：联网与写盘之前拒绝，错误带可执行的下一步', async (t) => {
+// 临时替换 dictSync.ensureDict：用例要验证「先尝试成对补齐」的编排顺序，但必须离线可跑。
+// 返回恢复函数，调用方在 finally 里恢复（同进程其它用例共用同一模块实例）。
+function stubEnsureDict(fn) {
+  const orig = dictSync.ensureDict;
+  dictSync.ensureDict = fn;
+  return () => {
+    dictSync.ensureDict = orig;
+  };
+}
+
+test('缺档案：先尝试联网成对补齐；补齐失败则拒绝且不写盘/不建备份', async (t) => {
   const app = makeApp();
   prepare(t, app);
-  fs.rmSync(versionProfile.profileFile(VERSION)); // 只留字典，缺档案 → 不完整
+  fs.rmSync(versionProfile.profileFile(VERSION)); // 只留字典，缺档案 → 半对
+  const restore = stubEnsureDict(async () => {
+    throw new Error('联网成对获取失败（测试桩：离线）');
+  });
 
-  await assert.rejects(
-    patch.run({ version: VERSION, explicitPath: app.resourcesDir, quiet: true }),
-    (e) => {
-      assert.match(e.message, /替换逻辑档案/);
-      assert.match(e.message, /patch\.json/);
-      assert.ok(e.hint && e.hint.includes('version-profile.js probe'), e.hint);
-      return true;
-    }
-  );
+  try {
+    await assert.rejects(
+      patch.run({ version: VERSION, explicitPath: app.resourcesDir, quiet: true }),
+      (e) => {
+        assert.match(e.message, /联网成对获取失败/);
+        return true;
+      }
+    );
+  } finally {
+    restore();
+  }
   assert.strictEqual(fs.readFileSync(app.mainPath, 'utf8'), MAIN_EN, '拒绝时不该写盘');
   assert.strictEqual(fs.readFileSync(app.rendererPath, 'utf8'), RENDERER_EN);
   assert.strictEqual(common.backupExists(VERSION), false, '拒绝时不该建备份');
+});
+
+test('缺档案：联网成对补齐后继续汉化（不再直接拒绝）', async (t) => {
+  const app = makeApp();
+  prepare(t, app);
+  fs.rmSync(versionProfile.profileFile(VERSION)); // 半对：本地只有字典
+  // 模拟远端成对补齐：ensureDict 成功把档案补到本地后返回 downloaded
+  const restore = stubEnsureDict(async () => {
+    profileFixture.write(VERSION);
+    return {
+      source: 'downloaded',
+      path: common.dictFile(VERSION),
+      downloaded: true,
+      files: [versionProfile.profileFile(VERSION)],
+    };
+  });
+
+  try {
+    const r = await withPatchState(() =>
+      patch.run({ version: VERSION, explicitPath: app.resourcesDir, noRestart: true, quiet: true })
+    );
+    assert.strictEqual(r.downloaded, true, '返回值应告知发生了联网补齐');
+    assert.strictEqual(r.total, 5, '补齐档案后照常汉化');
+    assert.strictEqual(versionProfile.pairStatus(VERSION).paired, true, '补齐后本地应成对');
+    assert.ok(fs.readFileSync(app.mainPath, 'utf8').includes(contextMenu.BEGIN), '应注入右键菜单块');
+  } finally {
+    restore();
+  }
 });
 
 test('锚点 0 次：产物没有注入点 → 拒绝且不写盘', async (t) => {

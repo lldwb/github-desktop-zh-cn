@@ -5,8 +5,9 @@
 #     所以重复跑是安全的（幂等），不必担心「跑两次产出两份」；
 #   - workflow_dispatch：手动跑，versions 填版本列表即可**回填历史版本**（逗号分隔，脚本会
 #     按版本升序依次产出）。留空则同 schedule。目标版本已有字典时默认跳过——要重跑它，用
-#     on_exist 选 diff（照常产出但不写盘，只报与现有字典的逐键差异）或 overwrite（产出后
-#     覆盖，任一步失败则恢复原内容）。选 diff 时「提交」步骤必然空跑：磁盘上什么都没变。
+#     on_exist 选 diff（照常产出但**不写字典与档案**，只报与现有字典的逐键差异；仍会落
+#     tmp 待译草稿供 artifact）或 overwrite（产出后覆盖，任一步失败则恢复原内容）。选 diff 时
+#     「提交」步骤必然空跑：字典与档案都没变。
 #
 # 产出直接提交到仓库（dictionaries/<版本>/zh-CN.json），不是 Release 附件——字典要能被
 # patch 联网取、也要能被用户 git pull 到，放仓库里最直接；体积也只有几百 KB。
@@ -172,26 +173,44 @@ jobs:
 
       # 成对门禁：字典与替换逻辑档案必须成对入库。否则提交出去的是半对资源——引擎会拒绝打补丁，
       # 而下一轮定时任务又会因「已有字典」跳过，问题被永久固化（docs/agents/已知坑.md 有同类实证）。
-      - name: 校验字典与档案成对
+      # 成对门禁：字典与替换逻辑档案必须成对入库，且档案结构/证据自洽。否则提交出去的是半对
+      # 或坏档案——引擎会拒绝打补丁，而下一轮定时任务又会因「已有字典」跳过，问题被永久固化。
+      # 判据一律走 version-profile 的 SSOT（pairStatus / listPairVersions），不自己 existsSync
+      # 拼文件名；结构校验逐版本调离线 `version-profile.js validate`（与引擎加载同一套规则）。
+      - name: 校验字典与档案成对且结构合法
         id: pair
         run: |
           node -e '
-            const fs = require("fs"), path = require("path");
-            const root = "dictionaries";
-            const bad = [];
-            for (const version of fs.readdirSync(root)) {
-              if (!/^\d+\.\d+\.\d+$/.test(version)) continue;
-              const dir = path.join(root, version);
-              if (!fs.existsSync(dir)) continue;
-              const hasDict = fs.existsSync(path.join(dir, "zh-CN.json"));
-              const hasProfile = fs.existsSync(path.join(dir, "patch.json"));
-              if (hasDict !== hasProfile) bad.push(`${version}: 缺 ${hasDict ? "patch.json" : "zh-CN.json"}`);
+            const fs = require("fs");
+            const path = require("path");
+            const { spawnSync } = require("child_process");
+            const common = require("./scripts/common.js");
+            const vp = require("./scripts/version-profile.js");
+            const root = path.join(common.REPO_ROOT, "dictionaries");
+            const unpaired = [];
+            for (const name of fs.readdirSync(root)) {
+              if (!common.DICT_VERSION_RE.test(name)) continue;
+              if (!fs.statSync(path.join(root, name)).isDirectory()) continue;
+              const st = vp.pairStatus(name);
+              if (!st.paired) unpaired.push(name + ": 缺 " + st.missing.join(" 与 "));
             }
-            if (bad.length) {
-              console.log("::error title=字典与档案不成对::" + bad.join(" / "));
+            if (unpaired.length) {
+              console.log("::error title=字典与档案不成对::" + unpaired.join(" / "));
               process.exit(1);
             }
-            console.log("字典与档案成对校验通过");
+            const bad = [];
+            for (const version of vp.listPairVersions()) {
+              const r = spawnSync(process.execPath, ["scripts/version-profile.js", "validate", "--version", version], { encoding: "utf8" });
+              if (r.status !== 0) {
+                const lines = String(r.stderr || r.stdout).trim().split("\n");
+                bad.push(version + ": " + (lines[0] || "validate 失败"));
+              }
+            }
+            if (bad.length) {
+              console.log("::error title=替换逻辑档案校验失败::" + bad.join(" / "));
+              process.exit(1);
+            }
+            console.log("成对与档案结构校验通过：" + vp.listPairVersions().join(" / "));
           '
 
       - name: 提交
@@ -271,7 +290,7 @@ jobs:
                 else if (p.profileOnly) out.push(`补产档案 ${p.version}：已有字典，本轮只探测生成替换逻辑档案`);
                 else if (p.diffMode) out.push(`对比 ${p.version}（磁盘未改动）：新增 ${p.diff.addedCount} / 删除 ${p.diff.removedCount} / 译文变化 ${p.diff.changedCount} / 换段 ${p.diff.movedCount} / 组归属变化 ${p.diff.groupsChangedCount}`);
                 else if (p.ok) out.push(`成功 ${p.version}：common ${p.counts.common} / macos ${p.counts.macos}，新译 ${p.translated || 0}，无需翻译 ${p.echoed || 0}，未译 ${p.untranslated}${p.draftOnly ? "（--no-ai 草稿，未译未补齐）" : ""}${p.reasonDetail ? `（${p.reasonDetail}）` : ""}；档案 ${p.profile ? p.profile.anchors.length + " 个锚点" : "未产出"}`);
-                else out.push(`失败 ${p.version}${p.failureKind ? ` [${p.failureKind}]` : ""}：${p.reason}${p.reasonDetail ? `——${p.reasonDetail}` : ""}${p.pendingDraft ? `；待译草稿 ${p.pendingDraft}` : ""}`);
+                else out.push(`失败 ${p.version}${p.failureKind ? ` [${p.failureKind}]` : ""}：${p.reason}${p.reasonDetail ? `——${p.reasonDetail}` : ""}${p.failureCounts ? `（分类 ${Object.entries(p.failureCounts).map(([k, n]) => `${k} ${n}`).join(" / ")}）` : ""}${p.pendingDraft ? `；待译草稿 ${p.pendingDraft}` : ""}`);
               }
               console.log(out.join("\n"));
               require("fs").appendFileSync(process.env.GITHUB_STEP_SUMMARY, "## 字典与档案产出\n\n" + out.map((l) => "- " + l).join("\n") + "\n");

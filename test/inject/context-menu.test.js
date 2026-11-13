@@ -265,3 +265,23 @@ function dictVersions() {
     .readdirSync(root)
     .filter((v) => VERSION_RE.test(v) && fs.existsSync(path.join(root, v, 'zh-CN.json')));
 }
+
+// ============================ 加固：注入块按成对完整判「已支持上限」（P3） ============================
+
+test('updateControl.buildInjection：传 profileFile 时「支持上限/自动汉化前置」按成对完整判', () => {
+  // 只传 dictDir（旧口径）：块里只判 zh-CN.json
+  const legacy = updateControl.buildInjection('X:/dict', { mode: 'guard' });
+  assert.ok(!legacy.includes('patch.json'), '未传 profileFile 时不该出现档案文件名');
+
+  // 生产路径：由 patch / restore 传 versionProfile.PROFILE_FILE（并带 toolPath 才会生成 autoPatch 段）
+  const paired = updateControl.buildInjection('X:/dict', {
+    mode: 'guard',
+    profileFile: 'patch.json',
+    toolPath: 'X:/tool.exe',
+  });
+  assert.ok(paired.includes("'zh-CN.json'"), paired);
+  assert.ok(paired.includes('"patch.json"'), '应把成对判据写进注入块');
+  // limit() 与 autoPatch() 两处都要判档案（缺一处仍会高估上限 / 反复 spawn）
+  const occurrences = paired.split('"patch.json"').length - 1;
+  assert.ok(occurrences >= 2, `limit 与 autoPatch 两处都应判档案（实际 ${occurrences} 处）`);
+});

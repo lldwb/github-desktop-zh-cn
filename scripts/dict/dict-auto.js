@@ -808,6 +808,19 @@ async function buildOne(version, args, log) {
   }
   if (profileOnly) {
     // 迁移路径：字典已在，只把探测出的档案落盘（唯一写入口会先校验再原子写）。
+    // --dry-run 必须同样不写盘（与 buildOne 其余写盘路径一致）：只打印「将写入档案」并返回。
+    const summary = profileSummary(profile);
+    if (args.dryRun) {
+      log('  --dry-run：跳过写入（将补充替换逻辑档案，本次不落盘）');
+      return {
+        version,
+        ok: true,
+        profileOnly: true,
+        dryRun: true,
+        fetchedAt: new Date().toISOString(),
+        profile: summary,
+      };
+    }
     try {
       versionProfile.writeProfile(version, profile, { overwrite: true });
     } catch (e) {
@@ -819,7 +832,7 @@ async function buildOne(version, args, log) {
       ok: true,
       profileOnly: true,
       fetchedAt: new Date().toISOString(),
-      profile: profileSummary(profile),
+      profile: summary,
     };
   }
   // 右键菜单注入块会往 main.js 写一批标签字面量：它们在官方产物里不存在（标签由 Electron
@@ -1043,8 +1056,13 @@ async function main() {
       if (r.skipped) console.log(`跳过：${r.reason}`);
       else if (r.profileOnly) console.log(`${version}：已有字典，本轮只补产替换逻辑档案`);
       else if (!r.ok) {
-        // 注解带 title：网关不可达 / 质量差 / 探测失败等类别直接在运行摘要里可区分，不必翻日志
-        console.error(`::error title=${failureTitle(r)}::${version} 产出失败：${dictAi.failureText(r)}`);
+        // 注解带 title：网关不可达 / 质量差 / 探测失败等类别直接在运行摘要里可区分，不必翻日志。
+        // 同时带上 failureCounts 各类计数（独立验收 A2-3）：kind 是「多数类」，但混合原因时
+        // 只给标题会掩盖另一类，计数让人一眼看出是不是混了少量网关错误。
+        const counts = r.failureCounts
+          ? `（分类 ${Object.entries(r.failureCounts).map(([k, n]) => `${k} ${n}`).join(' / ')}）`
+          : '';
+        console.error(`::error title=${failureTitle(r)}::${version} 产出失败：${dictAi.failureText(r)}${counts}`);
       }
     }
   } catch (e) {
@@ -1098,6 +1116,7 @@ module.exports = {
   main, resolveIn, buildCandidates, toSegments,
   diffDicts, shapeDiff, parseArgs, withInjectedLiterals,
   probeProfile, profileSummary, writePendingDraft, draftFile, failureTitle,
+  buildOne, // 导出供单测：profileOnly 迁移路径的 --dry-run 不写盘（独立验收 P2）
   ON_EXIST, ON_EXIST_MODES, DIFF_LIMIT,
 };
 

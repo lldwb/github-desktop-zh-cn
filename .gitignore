@@ -10,6 +10,10 @@ app-asar-unpacked/
 patched/
 tmp/
 
+# agent / 架构图工具产物（非仓库内容）
+.ai/
+.archify/
+
 # 系统与编辑器
 Thumbs.db
 Desktop.ini

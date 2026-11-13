@@ -315,11 +315,16 @@ const FAILURE_PATTERNS = [
   ['transport', /连接(被重置|被拒绝|超时)|请求超时|超时|ECONN|ETIMEDOUT|EHOSTUNREACH|ENETUNREACH|ENOTFOUND|EAI_AGAIN|socket|DNS|fetch failed/i],
   ['auth', /HTTP\s*401|HTTP\s*403|鉴权|Unauthorized|Forbidden|API[_ ]?key|密钥|令牌/i],
   ['server', /HTTP\s*5\d\d|502|503|504|网关|服务端错误/i],
-  ['format', /不是合法 JSON|JSON|格式|返回为空/i],
+  // 「响应结构不认识」也是「模型没按契约回」（translateBatch 对缺 choices 的报错），归 format；
+  // 漏了它会落到 other，让 failureCounts.format 少计（独立验收 A2-3）。
+  ['format', /不是合法 JSON|JSON|格式|返回为空|响应结构不认识|choices/i],
   ['quality', /译文为空|占位符不一致|没有中文|译文里没有中文/i],
 ];
 
 // rows：失败条目（含 reason）。返回 { kind, counts }；空输入时 kind 为 null。
+// kind 取**多数类**（独立验收 A2-3）：混合失败时「1 条网关错误 + 99 条质量失败」应报质量差，
+// 而不是按优先级报网关不可达、把排查方向带偏；计数相同（tie）时按 order 的优先级取先者
+// （网关类更可能是根因，保留原来的保守取向）。
 function classifyFailure(rows) {
   const counts = {};
   for (const row of rows || []) {
@@ -329,7 +334,15 @@ function classifyFailure(rows) {
     counts[kind] = (counts[kind] || 0) + 1;
   }
   const order = ['transport', 'auth', 'server', 'format', 'quality', 'other'];
-  const kind = order.find((k) => counts[k] > 0) || null;
+  let kind = null;
+  let best = 0;
+  for (const candidate of order) {
+    const n = counts[candidate] || 0;
+    if (n > best) {
+      best = n;
+      kind = candidate;
+    }
+  }
   return { kind, counts };
 }
 

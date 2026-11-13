@@ -336,8 +336,10 @@ test('shapeDiff：每类截到上限，但总数照实报', () => {
 // ============================ 档案产出 / 失败分类 / 待译草稿 ============================
 
 const fs = require('node:fs');
+const os = require('node:os');
 const path = require('node:path');
 const profileFixture = require('../fixtures/profile');
+const versionProfile = require('../../scripts/version-profile');
 
 test('failureTitle：失败分类映射成 CI 注解标题，未知分类有兜底', () => {
   assert.strictEqual(dictAuto.failureTitle({ failureKind: 'ai-unreachable' }), 'AI 网关不可达');
@@ -395,4 +397,85 @@ test('profileSummary：给报告的档案摘要含锚点/启用策略/标签数�
   assert.deepStrictEqual(s.enabled.sort(), ['context-menu', 'update-control']);
   assert.deepStrictEqual(s.labels, { windows: 7, macos: 7 });
   assert.deepStrictEqual(s.platforms, []);
+});
+
+// ============================ 迁移路径的 --dry-run（独立验收 P2） ============================
+
+// 合成「官方产物」目录：两平台 app 目录（main.js/renderer.js/package.json/main.js.map），
+// 供 buildOne 的 --reuse 分支直接复用（不联网）。产物形态只需满足 probeApp 的测量要求。
+function makeReusableArtifacts(workRoot, version) {
+  const MENU = [
+    'const template = []',
+    "template.push({ label: __DARWIN__ ? 'Edit' : '&Edit', submenu: [",
+    "  { role: 'undo', label: __DARWIN__ ? 'Undo' : '&Undo' },",
+    "  { role: 'redo', label: __DARWIN__ ? 'Redo' : '&Redo' },",
+    "  { role: 'cut', label: __DARWIN__ ? 'Cut' : 'Cu&t' },",
+    "  { role: 'copy', label: __DARWIN__ ? 'Copy' : '&Copy' },",
+    "  { role: 'paste', label: __DARWIN__ ? 'Paste' : '&Paste' },",
+    "  { label: __DARWIN__ ? 'Select All' : 'Select &all', accelerator: 'CmdOrCtrl+A', click: emit('select-all') },",
+    '] })',
+  ].join('\n');
+  const LABELS = {
+    windows: ['&Undo', '&Redo', 'Cu&t', '&Copy', '&Paste', 'Select &all'],
+    macos: ['Undo', 'Redo', 'Cut', 'Copy', 'Paste', 'Select All'],
+  };
+  for (const platform of ['windows', 'macos']) {
+    const appDir = path.join(workRoot, `${platform}-x64`, 'app');
+    fs.mkdirSync(appDir, { recursive: true });
+    const main = [
+      ';(function(){',
+      ...LABELS[platform].map((l) => `  console.log('${l}');`),
+      '  class U { async checkForUpdates(a) { return a } }',
+      '})();',
+      '//# sourceMappingURL=main.js.map',
+      '',
+    ].join('\n');
+    fs.writeFileSync(path.join(appDir, 'main.js'), main, 'utf8');
+    fs.writeFileSync(path.join(appDir, 'renderer.js'), 'var x = 1;\n', 'utf8');
+    fs.writeFileSync(path.join(appDir, 'package.json'), JSON.stringify({ name: 'desktop', version }), 'utf8');
+    fs.writeFileSync(
+      path.join(appDir, 'main.js.map'),
+      JSON.stringify({
+        version: 3,
+        sources: ['webpack:///./app/src/main-process/menu/build-default-menu.ts'],
+        sourcesContent: [MENU],
+        names: [],
+        mappings: '',
+      }),
+      'utf8'
+    );
+  }
+}
+
+test('buildOne：迁移路径（有字典缺档案）在 --dry-run 下不写档案，非 dry-run 才写', async (t) => {
+  const version = '0.0.0-auto-migrate';
+  const work = fs.mkdtempSync(path.join(os.tmpdir(), 'ghd-auto-migrate-'));
+  const dictFile = common.dictFile(version);
+  fs.mkdirSync(path.dirname(dictFile), { recursive: true });
+  fs.writeFileSync(
+    dictFile,
+    `${JSON.stringify({ _meta: { version, formatVersion: 2 }, common: { '&Undo': '&撤销' }, windows: {}, macos: {}, linux: {}, groups: {} }, null, 2)}\n`,
+    'utf8'
+  );
+  t.after(() => {
+    fs.rmSync(work, { recursive: true, force: true });
+    fs.rmSync(path.dirname(dictFile), { recursive: true, force: true });
+  });
+  makeReusableArtifacts(path.join(work, version), version);
+  const baseArgs = { onExist: 'skip', reuse: true, work, arch: 'x64' };
+
+  const dry = await dictAuto.buildOne(version, { ...baseArgs, dryRun: true }, () => {});
+  assert.strictEqual(dry.ok, true);
+  assert.strictEqual(dry.profileOnly, true);
+  assert.strictEqual(dry.dryRun, true);
+  assert.strictEqual(fs.existsSync(versionProfile.profileFile(version)), false, '--dry-run 不该写档案');
+
+  const real = await dictAuto.buildOne(version, { ...baseArgs, dryRun: false }, () => {});
+  assert.strictEqual(real.ok, true);
+  assert.strictEqual(real.profileOnly, true);
+  const profileFile = versionProfile.profileFile(version);
+  assert.ok(fs.existsSync(profileFile), '非 dry-run 应补写档案');
+  assert.doesNotThrow(() =>
+    versionProfile.validateProfile(JSON.parse(fs.readFileSync(profileFile, 'utf8')), { version })
+  );
 });

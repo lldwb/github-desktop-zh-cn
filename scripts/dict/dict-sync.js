@@ -14,6 +14,7 @@ const path = require('path');
 const net = require('../net.js');
 const common = require('../common.js');
 const versionProfile = require('../version-profile.js');
+const dictEdit = require('./dict-edit.js');
 
 // —— 远程成对资源：同一套候选源，每个源同时取两份文件 ——
 // 字典与档案的候选地址各自由 common 的远程地址函数拼（地址 SSOT 在 common），这里只按序配对。
@@ -29,7 +30,9 @@ function pairSources(version) {
 }
 
 // 拉取并校验一对资源。opts.fetch 仅供单测注入（默认 net.get）；每个源必须两份都取到、
-// 字典能被 JSON.parse、档案能通过 version-profile 的结构校验，才算该源成功。
+// **字典通过 dict-edit.validateDoc**（_meta.version 与目标版本一致、formatVersion=2、条目合法）、
+// **档案通过 version-profile.validateProfile**，才算该源成功——只做 JSON.parse 会把别的版本/
+// 旧格式的字典写进 `<版本>/zh-CN.json`，patch 时替换出错误文案（独立验收 P7）。
 // 全部源失败时抛错：逐源列出「缺哪一份 / 哪份校验失败」，调用方直接展示给用户。
 async function fetchPair(version, opts = {}) {
   const fetchText = opts.fetch || ((url) => net.get(url, { timeout: 15000 }));
@@ -51,11 +54,21 @@ async function fetchPair(version, opts = {}) {
       }
     }
     if (broken) continue;
-    // 先校验字典（错页/半截内容不落盘），再校验档案并取规范化结果（写盘/比对都用这份）。
+    // 先校验字典（错页 / 半截内容 / 版本错配都不落盘；复用 dict-edit 的纯校验，与写入口同源）。
+    let dictDoc;
     try {
-      JSON.parse(texts.dict);
+      dictDoc = JSON.parse(texts.dict);
     } catch (e) {
       failures.push(`${source.label} 的字典不是合法 JSON：${e.message}`);
+      continue;
+    }
+    const dictCheck = dictEdit.validateDoc(dictDoc, version);
+    if (dictCheck.errors.length > 0) {
+      const detail = dictCheck.errors
+        .slice(0, 3)
+        .map((x) => `${x.code}${x.key ? `(${x.key})` : ''}：${x.detail}`)
+        .join('；');
+      failures.push(`${source.label} 的字典校验失败：${detail}`);
       continue;
     }
     let profile;

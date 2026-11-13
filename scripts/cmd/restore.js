@@ -23,6 +23,7 @@ const {
   applyDictInStrings,
   checkSyntax,
   isPackaged,
+  packagedToolPath,
   PATCH_GROUPS,
   PATCH_GROUP_LABELS,
   getPatchGroups,
@@ -119,6 +120,11 @@ async function restoreGroups(app, version, removeGroups, log) {
     const r = updateControl.inject(content, {
       dictDir: path.join(dataRoot(), 'dictionaries'),
       mode,
+      // 与 patch 注入同一套取值（含打包态「更新后自动汉化」的工具路径）——两处各写一份会让
+      // 「按组还原重放」在打包态静默丢掉 autoPatch 能力（独立验收 P4）。
+      toolPath: packagedToolPath(),
+      // 注入块里的「支持上限 / 更新后自动汉化前置」按成对完整判（与 patch 一致）。
+      profileFile: versionProfile.PROFILE_FILE,
       anchor: params.methodAnchor.text,
       expected: params.methodAnchor.expected,
       marker: params.injectionPoint.text,

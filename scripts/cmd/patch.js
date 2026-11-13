@@ -27,6 +27,7 @@ const {
   backupDir,
   isPatched,
   isPackaged,
+  packagedToolPath,
   applyDictInStrings,
   TARGETS,
 } = common;
@@ -186,8 +187,12 @@ function applyUpdateControl(app, args, log, profile) {
     dictDir: path.join(common.dataRoot(), 'dictionaries'),
     mode: args.updateControl,
     // 「更新后自动汉化」只在打包态注入：源码态下工具就是仓库本身（npm run patch 即可），
-    // 往产物里写死一个 node 路径，换台机器就指向不存在的东西了。
-    toolPath: isPackaged() ? process.execPath : null,
+    // 往产物里写死一个 node 路径，换台机器就指向不存在的东西了。取值与 restore 的按组重放共用
+    // 同一个 helper，避免两处各写一份、打包态行为悄悄不一致。
+    toolPath: packagedToolPath(),
+    // 注入块里的「支持上限 / 更新后自动汉化前置」按**成对完整**判（字典 + 档案都在），
+    // 否则字典-only 的更高版本会被误判成「工具已支持」而放行更新。
+    profileFile: versionProfile.PROFILE_FILE,
     anchor: params.methodAnchor.text,
     expected: params.methodAnchor.expected,
     marker: params.injectionPoint.text,
@@ -238,8 +243,14 @@ async function run(args = {}) {
   const log = args.quiet ? () => {} : console.log;
   const { version, app } = resolveVersion(args);
 
-  // 该版本的替换逻辑档案：缺档案 / 结构非法 / schema 不认识都在**联网与写盘之前**失败（快速、
-  // 可读、不产生任何副作用）。档案是「版本强对应」的一半，与字典成对存在。
+  // 1) 成对资源先就位（**联网可能发生，但在任何写盘/备份之前**）：本地成对 → 不联网；只有一半
+  //    → 只补缺的那份（dict-sync.ensureDict 的成对语义）。联网失败照旧抛错拒绝，不静默降级。
+  //    必须先于 loadProfile：否则「本地有字典、缺档案」会直接报缺档案，走不到联网补齐——
+  //    与 CLI/GUI 的「将联网成对获取」提示矛盾（独立验收 P1）。
+  const { entries, downloaded } = await prepareDict(version, log);
+
+  // 2) 该版本的替换逻辑档案：联网补齐后仍缺 / 结构非法 / schema 不认识 → 明确拒绝（可读下一步）。
+  //    档案是「版本强对应」的一半，与字典成对存在。
   const { profile, label: profileLabel } = versionProfile.loadProfile(version);
   log(`替换逻辑档案：${profileLabel}（${versionProfile.describe(profile)}）`);
 
@@ -268,7 +279,6 @@ async function run(args = {}) {
     });
   }
 
-  const { entries, downloaded } = await prepareDict(version, log);
   log(`目标版本：${app.version}（${app.appDir}）`);
 
   // 「已汉化」判定必须在写回之前做：首次汉化时备份与当前文件相同（都是官方原版），
