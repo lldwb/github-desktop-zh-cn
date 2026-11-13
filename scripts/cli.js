@@ -10,6 +10,8 @@ const {
   dictLabel, backupDir, backupExists, isPatched, isPackaged, dataRoot, writeConfig,
   getPatchGroups, resolveTarget,
 } = require('./common');
+// 本地「有没有字典」的成对口径：字典 + 替换逻辑档案都在（见 version-profile.listPairVersions）
+const versionProfile = require('./version-profile.js');
 const dictSync = require('./dict/dict-sync.js');
 
 // 「关于」里展示的两条项目地址（SSOT 在 common.js，与 GUI 的「关于」窗口同源）
@@ -112,8 +114,9 @@ function printStatus(state) {
     return;
   }
   const { app } = state;
-  const versions = listDictVersions();
-  const matched = versions.includes(app.version);
+  // 本地可用口径 = 字典 + 替换逻辑档案**成对完整**（引擎对不成对的版本会明确拒绝）
+  const pairVersions = versionProfile.listPairVersions();
+  const matched = pairVersions.includes(app.version);
   console.log(` 安装位置：${app.appDir}`);
   console.log(` 应用版本：${app.version}`);
   if (matched) {
@@ -124,8 +127,12 @@ function printStatus(state) {
       count = `（字典读取失败：${e.message}）`;
     }
     console.log(` 字典版本：${app.version}${count}`);
+  } else if (listDictVersions().includes(app.version)) {
+    // 有字典、缺替换逻辑档案：不能写成「无对应字典」——缺的是档案，提示去同步成对获取
+    console.log(` 字典版本：${app.version} 的字典在本地，但缺替换逻辑档案（点「7) 同步字典」成对获取）`);
   } else {
-    console.log(` 字典版本：无 ${app.version} 对应字典${versions.length ? `（现有：${versions.join(' / ')}）` : ''}`);
+    const others = pairVersions.length ? `（现有成对版本：${pairVersions.join(' / ')}）` : '';
+    console.log(` 字典版本：无 ${app.version} 对应字典${others}`);
   }
   const patched = isPatched(app.appDir, app.version);
   console.log(` 当前状态：${patched ? '已汉化' : '未汉化（官方原版）'}`);
@@ -145,9 +152,16 @@ async function doPatch(rl, state) {
     return;
   }
   const version = state.app.version;
-  // 本地（含内嵌）没有对应字典时**不中止**：交给 patch 联网取，取不到再报错
-  const local = listDictVersions().includes(version);
-  const tip = local ? '' : `（本地无 ${version} 字典，将联网获取）`;
+  // 本地**不成对**（缺字典或缺替换逻辑档案）时**不中止**：交给 patch 联网成对取，取不到再报错。
+  // 缺哪份说哪份——老用户数据根常见「有字典、缺档案」，笼统说「本地无字典」会误导。
+  const pair = versionProfile.pairStatus(version);
+  let tip = '';
+  if (!pair.paired) {
+    const missing = [];
+    if (!pair.dict) missing.push('字典');
+    if (!pair.profile) missing.push('替换逻辑档案');
+    tip = `（本地缺${missing.join('与')}，将联网成对获取）`;
+  }
   if (!(await confirm(rl, `\n 即将汉化 GitHub Desktop ${version}${tip}（原文件会先自动备份），继续？[Y/n] `))) {
     console.log(' 已取消。');
     return;
@@ -236,8 +250,8 @@ async function doUpdateControl(rl, state) {
   }
 }
 
-// 同步字典：拉当前安装版本的最新字典并覆盖本地（原「检查更新」里的一半，现在独立成项）。
-// 只有主动点才走这里——汉化时缺字典由 patch 自己联网取，那条路不受影响。
+// 同步字典与替换逻辑档案（成对）：拉当前安装版本的最新资源并覆盖本地（原「检查更新」里的一半，
+// 现在独立成项）。只有主动点才走这里——汉化时缺资源由 patch 自己联网成对取，那条路不受影响。
 async function doSyncDict(state) {
   console.log('');
   if (state.error) {
@@ -247,9 +261,13 @@ async function doSyncDict(state) {
   const version = state.app.version;
   try {
     const r = await require('./dict/dict-sync.js').syncLatest(version);
-    console.log(r.changed ? ` 字典已更新：${version}` : ` 字典已是最新（${version}）。`);
+    console.log(
+      r.changed
+        ? ` 字典与替换逻辑档案已更新：${version}`
+        : ` 字典与替换逻辑档案已是最新（${version}）。`
+    );
   } catch (e) {
-    console.log(` 更新字典失败：${e.message}`);
+    console.log(` 同步字典与替换逻辑档案失败：${e.message}`);
   }
 }
 
@@ -288,10 +306,16 @@ async function showDetail(state) {
   console.log('');
   console.log(` 数据目录：${dataRoot()}${isPackaged() ? '（可执行文件所在目录）' : '（仓库根目录）'}`);
   console.log(` 配置文件：${path.join(dataRoot(), 'config.json')}`);
+  // 可用口径 = 成对完整；只有字典的版本单独列出，说明缺的是替换逻辑档案
   const versions = listDictVersions();
-  console.log(` 可用字典：${versions.length ? versions.join(' / ') : '（无）'}`);
-  if (versions.length) {
-    const latest = versions[versions.length - 1];
+  const pairVersions = versionProfile.listPairVersions();
+  const dictOnly = versions.filter((v) => !pairVersions.includes(v));
+  console.log(` 可用字典（成对）：${pairVersions.length ? pairVersions.join(' / ') : '（无）'}`);
+  if (dictOnly.length) {
+    console.log(` 缺替换逻辑档案：${dictOnly.join(' / ')}（点「7) 同步字典」成对获取后可用）`);
+  }
+  if (pairVersions.length) {
+    const latest = pairVersions[pairVersions.length - 1];
     console.log(` 字典文件：${dictLabel(latest)}`);
   }
   if (state.error) {
@@ -334,15 +358,15 @@ async function downloadAndSwitch(rl) {
   let list;
   try {
     list = await mod.listDownloadable();
-    // hasDict 是「本地或远端有字典」：远端已有、本地还没下载的版本也算有——
-    // 装上之后 install() 会自动把字典取到本地，故不再按纯本地口径过滤掉它们。
+    // hasDict 是「本地成对完整或远端有字典目录」：远端已有、本地还没成对下载的版本也算有——
+    // 装上之后 install() 会把字典与替换逻辑档案成对取到本地，故不再按纯本地口径过滤掉它们。
     rows = list.versions.filter((v) => v.hasDict && !v.installed);
   } catch (e) {
     console.log(` 取列表失败：${e.message}`);
     return resolveTarget();
   }
   if (!list.remoteDict.ok) {
-    // 降级说明：远端字典列表取不到时按本地判断，别让人以为「远端确实没字典」
+    // 降级说明：远端字典目录列表取不到时按本地判断，别让人以为「远端确实没字典」
     console.log(` 注意：${list.remoteDict.error}。`);
     for (const f of list.remoteDict.failures) console.log(`   ${f}`);
   }
@@ -381,10 +405,10 @@ async function downloadAndSwitch(rl) {
     });
     console.log(`\n\n 已安装 ${r.version}：${r.appDir}`);
     setTargetVersion(r.version);
-    // 安装时已由 install() 预取字典，这里把结果说清（失败不判安装失败，版本本身已就绪）
+    // 安装时已由 install() 成对预取字典与替换逻辑档案，这里把结果说清（失败不判安装失败，版本本身已就绪）
     if (r.dict && !r.dict.ok) {
       console.log(` 注意：${r.dict.error}`);
-      console.log(' （版本已就绪；回到菜单选 1) 汉化时还会再尝试获取字典。）');
+      console.log(' （版本已就绪；回到菜单选 1) 汉化时还会再尝试成对获取字典与替换逻辑档案。）');
     } else if (r.dict && r.dict.message) {
       console.log(` ${r.dict.message}`);
     }
@@ -397,22 +421,25 @@ async function downloadAndSwitch(rl) {
 }
 
 // 安装位置 / 切换版本：本机装了多个 GitHub Desktop 时（官方升级后旧目录会留着）先列出来让用户挑，
-// 默认只列有汉化字典的版本；本机没有的版本可以下载安装（d）；也可以照旧手动粘一个目录。
+// 默认只列成对资源齐全（字典 + 替换逻辑档案）的版本；本机没有的版本可以下载安装（d）；也可以照旧手动粘一个目录。
 // 三条路写的都是同一个配置字段，等价。
 async function setPath(rl) {
   const installed = listInstalledVersions();
-  const versions = listDictVersions();
-  const withDict = installed.filter((x) => versions.includes(x.version));
+  // 本地可用口径 = 字典 + 替换逻辑档案**成对完整**：只有字典没有档案时引擎会拒绝，不能当成有汉化。
+  const pairVersions = versionProfile.listPairVersions();
+  const withDict = installed.filter((x) => pairVersions.includes(x.version));
   // 默认只列有汉化的；一个都没有时退回全列，免得出现「有版本可选却一个都不列」的空列表
   const list = installed.length > 1 && withDict.length ? withDict : installed;
 
   console.log('');
   if (installed.length > 1) {
-    console.log(' 本机检测到多个 GitHub Desktop（默认只列有汉化字典的版本）：');
+    console.log(' 本机检测到多个 GitHub Desktop（默认只列成对资源齐全的版本）：');
     list.forEach((x, i) => {
-      // 这里只看本地字典：进菜单不联网（本文件既有约定，别让进菜单等一次网络往返）。
-      // 远端已有、本地还没下载的版本（如 3.6.7）选中切换时会自动下载字典，见下面的预取。
-      const tag = versions.includes(x.version) ? '' : '（本地无字典；远端若已有，切换时会自动下载）';
+      // 这里只看本地成对：进菜单不联网（本文件既有约定，别让进菜单等一次网络往返）。
+      // 远端已有、本地还没成对的版本（如 3.6.7）选中切换时会成对下载，见下面的预取。
+      const tag = pairVersions.includes(x.version)
+        ? ''
+        : '（本地缺字典或替换逻辑档案；远端若已有，切换时会成对下载）';
       console.log(`  ${i + 1}) ${x.version}${tag}  ${x.resourcesDir}`);
     });
   } else if (installed.length === 1) {
@@ -430,13 +457,13 @@ async function setPath(rl) {
     const hit = list[idx - 1];
     setTargetVersion(hit.version);
     console.log(`\n 已切换到 GitHub Desktop ${hit.version}（${hit.resourcesDir}）`);
-    // 切过去顺便把该版本字典准备好：本地缺就联网取（远端有、本地还没有的版本在这一步落盘）。
-    // 失败不阻止切换——版本已是用户选定的目标，字典取不到不该把切换判失败；原因明说，
+    // 切过去顺便把该版本的字典与替换逻辑档案准备好：本地缺就联网成对取（远端有、本地还没有的版本
+    // 在这一步落盘）。失败不阻止切换——版本已是用户选定的目标，资源取不到不该把切换判失败；原因明说，
     // 之后「汉化」时 patch 的 ensureDict 还会再兜底一次（与 GUI 的 setVersion 同一套语义）。
     const dict = await dictSync.prefetchDict(hit.version);
     if (!dict.ok) {
       console.log(` 注意：${dict.error}`);
-      console.log(' （之后选 1) 汉化时还会再尝试获取字典。）');
+      console.log(' （之后选 1) 汉化时还会再尝试成对获取字典与替换逻辑档案。）');
     } else if (dict.message) {
       console.log(` ${dict.message}`);
     }

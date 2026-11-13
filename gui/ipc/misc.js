@@ -7,6 +7,7 @@ const path = require('path');
 const { dialog, shell } = require('electron');
 
 const common = require('../../scripts/common.js');
+const versionProfile = require('../../scripts/version-profile.js');
 const dictPrompt = require('../../scripts/dict/dict-prompt.js');
 const PKG = require('../../package.json');
 
@@ -23,17 +24,24 @@ function installRoot(resourcesDir) {
 }
 
 // 「切换版本」窗口的数据源：本机已安装的 GitHub Desktop——Windows 上可能不止一个
-// （官方升级后旧的 app-<版本> 目录会留着）。`hasDict` 是**本地口径**（数据根外部字典 + 内嵌资源）：
+// （官方升级后旧的 app-<版本> 目录会留着）。`hasDict` 是**本地成对口径**：字典（zh-CN.json）与
+// 替换逻辑档案（patch.json）都在才算可用（version-profile.listPairVersions()）——引擎对不成对的版本
+// 会明确拒绝，界面若按「只有字典」标成可用，用户点了汉化才报错。
 // 启动时的状态查询不联网（进工具不该等一次网络往返）；渲染层拿到 `downloadable` 带回的远端字典
-// 列表后会叠加出三态（local / remote / none），据此决定默认视图与「字典待下载」标签。
+// 目录列表后会叠加出三态（local / remote / none），据此决定默认视图与「字典待下载」标签。
+// 远端目录列表证明不了档案存在，故显示阶段只按本地成对判断，真正下载时由 dict-sync 成对获取并校验。
+// `profileMissing` 标「本地有字典、缺替换逻辑档案」的版本：不能当成可用，也不能在默认视图里被隐藏，
+// 要用单独标签提示用户同步（否则用户看不出为什么汉化会被拒绝）。
 // `custom` 标记「不在自动探测范围内、由「选择」手动指定」的目录。
 // 当前目标若不在已安装列表里（用「选择」指到了别处），补一条出来——否则列表里没有它，
 // 就看不出来「现在正在用的是哪个」。
-function installedForPicker(target, dictVersions) {
+function installedForPicker(target, pairVersions, dictVersions) {
+  const profileMissing = (version) => dictVersions.includes(version) && !pairVersions.includes(version);
   const list = common.listInstalledVersions().map((x) => ({
     version: x.version,
     resourcesDir: x.resourcesDir,
-    hasDict: dictVersions.includes(x.version),
+    hasDict: pairVersions.includes(x.version),
+    profileMissing: profileMissing(x.version),
     current: false,
     custom: false,
   }));
@@ -46,7 +54,8 @@ function installedForPicker(target, dictVersions) {
       list.push({
         version: cur.version,
         resourcesDir: cur.resourcesDir,
-        hasDict: dictVersions.includes(cur.version),
+        hasDict: pairVersions.includes(cur.version),
+        profileMissing: profileMissing(cur.version),
         current: true,
         custom: true,
       });
@@ -55,10 +64,13 @@ function installedForPicker(target, dictVersions) {
   return list.sort((a, b) => common.compareVersions(a.version, b.version));
 }
 
-// 窗口状态：安装位置、版本、字典、是否已汉化、备份。字段全部取自既有 common API，不新增业务判定。
+// 窗口状态：安装位置、版本、字典、是否已汉化、备份。字段全部取自既有 common / version-profile API，
+// 不新增业务判定。字典有两个口径：dictVersions（本地有字典，原义）与 pairVersions（成对完整，可用口径）；
+// dict.matched 表示成对完整、dict.profileMissing 表示本地有字典缺档案（渲染层据此提示）。
 function collectState() {
   const target = common.resolveTarget();
-  const versions = common.listDictVersions();
+  const dictVersions = common.listDictVersions();
+  const pairVersions = versionProfile.listPairVersions();
   const base = {
     ok: !target.error,
     error: target.error || null,
@@ -69,15 +81,19 @@ function collectState() {
     license: PKG.license,
     repoUrl: URLS.repo,
     mirrorUrl: URLS.mirror,
-    dictVersions: versions,
-    installed: installedForPicker(target, versions),
+    dictVersions,
+    pairVersions,
+    installed: installedForPicker(target, pairVersions, dictVersions),
   };
   if (target.error) return base;
 
   const { app: found } = target;
   const version = found.version;
-  const matched = versions.includes(version);
-  const dict = { version, matched, count: null, source: null, error: null };
+  // matched 是**成对完整**（能直接汉化）；profileMissing 是「本地有字典、缺替换逻辑档案」——
+  // 后者不能算可用，但要让界面能说清缺的是什么（引擎会按成对语义拒绝）。
+  const matched = pairVersions.includes(version);
+  const profileMissing = !matched && dictVersions.includes(version);
+  const dict = { version, matched, profileMissing, count: null, source: null, error: null };
   if (matched) {
     try {
       dict.count = common.loadDict(version).size;

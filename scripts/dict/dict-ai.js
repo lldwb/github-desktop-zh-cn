@@ -302,8 +302,40 @@ function collapseReasons(rows, secrets, limit = 3) {
 // 看的人不知道是地址错、鉴权错还是模型不听话——三种的处理方式完全不同。
 const failureText = (r) => (r.reasonDetail ? `${r.reason}——${r.reasonDetail}` : r.reason);
 
+// —— 失败归类（给 CI 的注解 / artifact 分类用）——
+// 为什么需要：网关从 runner 不可达时，逐条失败原因会以「请求超时 / 连接被拒绝 / HTTP 401」混进
+// 「未译 100% 超过上限」这句结论里，与「翻译质量差（占位符不一致 / 没有中文）」长得一模一样——
+// 两者的处理方式完全不同（一个查网关/凭据，一个改提示词/换模型），必须能机器区分。
+//
+// 只做**协议层**的归类：输入是 translateAll 产出的失败行（{ reason }），输出 kind + 各类计数。
+// 与字典领域零耦合：不认识字典、产物与分组。
+// kind 取值：transport（网络/超时/DNS）> auth（鉴权）> server（5xx/网关错误）>
+//           format（模型没按契约回）> quality（译文本身不合格）> other。
+const FAILURE_PATTERNS = [
+  ['transport', /连接(被重置|被拒绝|超时)|请求超时|超时|ECONN|ETIMEDOUT|EHOSTUNREACH|ENETUNREACH|ENOTFOUND|EAI_AGAIN|socket|DNS|fetch failed/i],
+  ['auth', /HTTP\s*401|HTTP\s*403|鉴权|Unauthorized|Forbidden|API[_ ]?key|密钥|令牌/i],
+  ['server', /HTTP\s*5\d\d|502|503|504|网关|服务端错误/i],
+  ['format', /不是合法 JSON|JSON|格式|返回为空/i],
+  ['quality', /译文为空|占位符不一致|没有中文|译文里没有中文/i],
+];
+
+// rows：失败条目（含 reason）。返回 { kind, counts }；空输入时 kind 为 null。
+function classifyFailure(rows) {
+  const counts = {};
+  for (const row of rows || []) {
+    const reason = String((row && row.reason) || '');
+    const hit = FAILURE_PATTERNS.find(([, re]) => re.test(reason));
+    const kind = hit ? hit[0] : 'other';
+    counts[kind] = (counts[kind] || 0) + 1;
+  }
+  const order = ['transport', 'auth', 'server', 'format', 'quality', 'other'];
+  const kind = order.find((k) => counts[k] > 0) || null;
+  return { kind, counts };
+}
+
 module.exports = {
   resolveTimeout, resolveEffort, assertBaseUrl, placeholdersOf, rejectReason, isEcho,
   buildExamples, translateBatch, translateAll, redact, collapseReasons, failureText,
+  classifyFailure,
   AI_EFFORT, AI_TIMEOUT,
 };

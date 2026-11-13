@@ -267,3 +267,25 @@ test('translateBatch：超时按传入毫秒生效，不落到默认值', async 
   );
   assert.ok(Date.now() - t < 5000, '不该退化成默认的 20 秒');
 });
+
+// ============================ 失败归类（CI 注解/草稿 artifact 依赖） ============================
+
+test('classifyFailure：网关不可达 / 鉴权 / 格式 / 质量 / 未知各归各类，优先级稳定', () => {
+  const rows = [
+    { reason: '请求超时（20 秒无响应）：***' },
+    { reason: '连接被拒绝：***' },
+    { reason: 'HTTP 401：***' },
+    { reason: '模型返回的不是合法 JSON（Unexpected token）：…' },
+    { reason: '占位符不一致（原文 {{n}}，译文 无）' },
+    { reason: '译文为空' },
+    { reason: '莫名其妙的原因' },
+  ];
+  const r = dictAi.classifyFailure(rows);
+  assert.deepStrictEqual(r.counts, { transport: 2, auth: 1, format: 1, quality: 2, other: 1 });
+  assert.strictEqual(r.kind, 'transport', 'transport 是最高优先级（网关不可达时其它原因多为连带）');
+
+  // 纯质量失败 → quality（dict-auto 据此映射 ai-quality；网络/鉴权类映射 ai-unreachable）
+  assert.deepStrictEqual(dictAi.classifyFailure([{ reason: '译文里没有中文："hello"' }]).kind, 'quality');
+  // 空输入：没有 kind，不误报
+  assert.deepStrictEqual(dictAi.classifyFailure([]), { kind: null, counts: {} });
+});

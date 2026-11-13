@@ -30,6 +30,7 @@
 const fs = require('fs');
 const path = require('path');
 const common = require('../common');
+const versionProfile = require('../version-profile');
 const dictAi = require('./dict-ai');
 const dictEdit = require('./dict-edit');
 const dictGroups = require('./dict-groups');
@@ -209,8 +210,16 @@ function literalIndex(appDir) {
 // 的提交步骤没设测试门禁被提交上了 main——此后每次定时任务 checkout 到它都会再红一遍。
 //
 // 只并 main.js 的文件归属（注入目标就是它）；两平台各并自己那套标签（darwin 那套不带 &）。
+// 标签表现在由**该版本的替换逻辑档案**提供（dictionaries/<版本>/patch.json 的
+// injections.context-menu.labels）：版本升级时官方可能改标签文案，按档案取才不会漏/多。
+// 兼容入参：darwinOrLabels 为布尔时退回注入器的过渡默认表（仅为既有单测与「档案尚不可用」
+// 的历史调用保留；生产路径（buildOne）一律传档案标签表）。
 // 更新管控（scripts/inject/update-control.js）的注入块里没有界面文案、只有路径与判定代码，故不并。
-function withInjectedLiterals(idx, darwin) {
+function withInjectedLiterals(idx, darwinOrLabels) {
+  const labels =
+    typeof darwinOrLabels === 'object' && darwinOrLabels !== null
+      ? darwinOrLabels
+      : contextMenu.labelsFor(!!darwinOrLabels);
   const add = (text) => {
     if (!idx.exact.has(text)) idx.exact.set(text, new Set());
     idx.exact.get(text).add('main.js');
@@ -218,7 +227,7 @@ function withInjectedLiterals(idx, darwin) {
     if (!idx.lower.has(lk)) idx.lower.set(lk, new Set());
     idx.lower.get(lk).add(text);
   };
-  for (const l of common.stringLiterals(contextMenu.buildInjection({ darwin }))) add(l.content);
+  for (const l of common.stringLiterals(contextMenu.buildInjection({ labels }))) add(l.content);
   return idx;
 }
 
@@ -490,6 +499,100 @@ function restoreDict(dictFile, previous) {
   return '已删除刚产出的字典';
 }
 
+// ============================ 替换逻辑档案（patch.json） ============================
+
+// 由本轮已取到的两平台产物目录，内存里生成该版本的替换逻辑档案（不联网、不落盘）。
+// 复用 version-profile 的 probeApp / buildProfile：与 CLI `probe` 是**同一套测量与生成逻辑**，
+// 产出物必然能被引擎加载（buildProfile 生成即校验）。
+// 失败（产物结构变了 / 两平台不一致 / sourcemap 缺 sourcesContent …）直接抛错，由调用方记成
+// `profile-probe` 失败——绝不生成猜测档案、也绝不只产字典不产档案。
+function probeProfile(version, args, appDirs) {
+  const measurements = {};
+  for (const platform of PLATFORMS) {
+    const spec = releaseAssets.PLATFORM_SPECS[platform];
+    if (!spec) throw new Error(`release-assets 不认识平台 ${platform}`);
+    const meta = {
+      platform,
+      version,
+      arch: args.arch,
+      assetName: spec.asset(version, args.arch),
+      appDirInArchive: spec.appDir,
+    };
+    measurements[platform] = versionProfile.probeApp(appDirs[platform], meta);
+  }
+  return versionProfile.buildProfile(version, {
+    measurements,
+    generator: `scripts/dict/dict-auto.js --version ${version}`,
+  });
+}
+
+// 档案写盘走唯一写入口；失败时把字典与档案**一起**回滚（半对比没产出更糟：本地看似有资源、
+// 引擎却拒绝，且「已存在」判断会让后续同步不再重试）。
+function restorePair(dictFile, previousDict, profileFile, previousProfile) {
+  const parts = [];
+  parts.push(restoreDict(dictFile, previousDict));
+  if (previousProfile !== null && previousProfile !== undefined) {
+    fs.writeFileSync(profileFile, previousProfile, 'utf8');
+    parts.push('已恢复原有替换逻辑档案');
+  } else {
+    fs.rmSync(profileFile, { force: true });
+    parts.push('已删除刚产出的替换逻辑档案');
+  }
+  return parts.join('、');
+}
+
+// —— 待译草稿（CI artifact：失败时人工补译/排查的输入）——
+// 无论成败都在有新增候选时写一份：AI 卡死 / 超时的情况下进程可能来不及走失败分支，
+// 先落草稿保证「待译的是什么」不丢；翻译结束后再写一次，补上每条的真实失败原因。
+function draftFile(version) {
+  return path.join(common.getTmpDir(), `dict-auto-pending-${version}.json`);
+}
+
+function writePendingDraft(version, report, pending, log) {
+  const file = draftFile(version);
+  if (!pending || pending.length === 0) {
+    fs.rmSync(file, { force: true }); // 清掉可能残留的上轮草稿，避免 artifact 里混入旧版本
+    return null;
+  }
+  const rows = (report.untranslatedRows || []).map((r) => ({ text: r.text, reason: r.reason }));
+  const reasons = new Map(rows.map((r) => [r.text, r.reason]));
+  const draft = {
+    version,
+    fetchedAt: report.fetchedAt,
+    failureKind: report.failureKind || null,
+    reason: report.reason || null,
+    untranslated: report.untranslated || 0,
+    untranslatedRows: rows,
+    candidates: pending.map((item) => ({
+      text: item.text,
+      source: item.source || null,
+      targets: item.targets || [],
+      reason: reasons.get(item.text) || null,
+    })),
+  };
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(file, `${JSON.stringify(draft, null, 2)}\n`, 'utf8');
+  report.pendingDraft = path.relative(common.REPO_ROOT, file);
+  if (log) log(`  待译草稿：${report.pendingDraft}（${pending.length} 条）`);
+  return file;
+}
+
+// 失败分类 → CI 注解标题（GitHub Actions 的 `::error title=…::` 会显示在运行摘要的注解栏，
+// 不用翻日志就能区分「网关不可达 / 质量差 / 探测失败 / 产物取不到」）。
+const FAILURE_TITLES = {
+  'ai-unreachable': 'AI 网关不可达',
+  'ai-quality': '翻译质量不达标',
+  'product-fetch': '官方产物获取失败',
+  'profile-probe': '替换逻辑档案探测失败',
+  'dry-run-threshold': '干跑校验未达标',
+  'dict-validate': '字典校验未通过',
+  'dict-write': '字典/档案写入失败',
+  'groups-infer': '组名推断失败',
+};
+function failureTitle(report) {
+  return FAILURE_TITLES[report.failureKind] || '字典产出未通过';
+}
+
 // 第 1 步：两个平台的产物取齐并各建一份字面量索引。--reuse 时复用 --work 下已提取的产物。
 async function fetchAppIndexes(version, args, workRoot, log) {
   const appDirs = {};
@@ -505,8 +608,10 @@ async function fetchAppIndexes(version, args, workRoot, log) {
       await releaseAssets.fetchApp(version, { platform, arch: args.arch, out, log });
     }
     appDirs[platform] = appDir;
-    indexes[platform] = withInjectedLiterals(literalIndex(appDir), platform === 'macos');
-    log(`  ${platform}：产物字面量索引 ${indexes[platform].exact.size} 条（含注入块标签）`);
+    // 注入块标签先不并入：标签表来自该版本的替换逻辑档案，而档案要在产物取齐后才能探测生成
+    //（见 buildOne 第 2 步）。先建纯产物索引，档案生成后再用档案里的标签补齐。
+    indexes[platform] = literalIndex(appDir);
+    log(`  ${platform}：产物字面量索引 ${indexes[platform].exact.size} 条`);
   }
   return { appDirs, indexes };
 }
@@ -613,20 +718,38 @@ function recordChecks(report, appDirs, version, segments, indexes, log) {
   else if (low) report.reason = `${low} 平台生效比例 ${(checks[low].rate * 100).toFixed(1)}% 低于阈值 ${MIN_HIT_RATE * 100}%`;
 }
 
+// 档案信息的摘要（进报告/日志，别把整份证据塞进 CI 报告）。
+function profileSummary(profile) {
+  const menu = profile.injections['context-menu'];
+  return {
+    schemaVersion: profile.schemaVersion,
+    anchors: Object.keys(profile.anchors),
+    enabled: Object.keys(profile.injections).filter((n) => profile.injections[n].enabled !== false),
+    labels: menu && menu.enabled ? { windows: Object.keys(menu.labels.windows).length, macos: Object.keys(menu.labels.macos).length } : null,
+    platforms: Object.keys((profile.evidence && profile.evidence.platforms) || {}),
+  };
+}
+
 async function buildOne(version, args, log) {
   const dictFile = common.dictFile(version);
+  const profileFile = versionProfile.profileFile(version);
   const mode = args.onExist || ON_EXIST;
   // 覆盖模式失败时要把原有的那份放回去，所以先把字节读进内存。diff 模式不写盘，用不上它。
   const previous = fs.existsSync(dictFile) ? fs.readFileSync(dictFile, 'utf8') : null;
+  const previousProfile = fs.existsSync(profileFile) ? fs.readFileSync(profileFile, 'utf8') : null;
 
-  if (previous !== null && mode === 'skip') {
+  // skip 的判据是**成对**：字典与替换逻辑档案都在才跳过。只有字典没有档案的版本必须继续走
+  // 「只探测生成档案」的迁移路径——否则存量版本永远补不上档案（引擎会拒绝），定时任务每天白跑。
+  if (previous !== null && previousProfile !== null && mode === 'skip') {
     return {
       version,
       ok: true,
       skipped: true,
-      reason: `已有字典 ${dictFile}，跳过（--on-exist=diff 只对比、=overwrite 覆盖）`,
+      reason: '已有字典与替换逻辑档案，跳过（--on-exist=diff 只对比、=overwrite 覆盖）',
     };
   }
+  // 「已有字典、缺档案」+ skip：只补档案（不重跑 AI、不动字典——省 tokens 也不改用户已有字典）。
+  const profileOnly = previous !== null && previousProfile === null && mode === 'skip';
 
   // diff 要拿磁盘上那份逐键对比，读不了就没得比。这道校验放在最前面而不是第 7 步：
   // 「读不了」这件事一开始就知道，没道理等产物下载完、AI 也调完才报——那是白烧几分钟
@@ -635,26 +758,89 @@ async function buildOne(version, args, log) {
     try {
       dictEdit.read(version);
     } catch (e) {
-      return { version, ok: false, reason: `磁盘上的字典读不了，无法对比：${e.message}` };
+      return { version, ok: false, failureKind: 'dict-validate', reason: `磁盘上的字典读不了，无法对比：${e.message}` };
     }
   }
 
   const workRoot = path.join(args.work, version);
   log(`\n=== ${version} ===`);
-  if (previous !== null) {
+  if (profileOnly) log('已有字典但缺替换逻辑档案：本轮只探测生成档案（不重跑 AI、不改字典）');
+  else if (previous !== null) {
     log(
       mode === 'diff'
         ? '已有字典，diff 模式：照常产出并与磁盘上那份逐键对比，全程不写盘'
         : '已有字典，overwrite 模式：产出后整体覆盖（任一步失败则恢复原内容）'
     );
   }
-  log('1/7 取产物与索引');
-  const { appDirs, indexes } = await fetchAppIndexes(version, args, workRoot, log);
+  log('1/8 取产物与索引');
+  let appDirs;
+  let indexes;
+  try {
+    ({ appDirs, indexes } = await fetchAppIndexes(version, args, workRoot, log));
+  } catch (e) {
+    // 官方产物取不到（404 / Range 不支持 / 网络）→ 分类为 product-fetch，CI 注解直接指路
+    return {
+      version,
+      ok: false,
+      failureKind: 'product-fetch',
+      fetchedAt: new Date().toISOString(),
+      reason: `官方产物获取失败：${e.message}`,
+    };
+  }
 
-  log('2/7 提取官方新增文案候选');
+  log('2/8 探测替换逻辑档案');
+  let profile;
+  try {
+    // 与 CLI `probe` 同一套测量/生成逻辑（probeApp + buildProfile，生成即校验）。
+    profile = probeProfile(version, args, appDirs);
+    log(
+      `  档案：${versionProfile.describe(profile)}；` +
+        `锚点 ${Object.keys(profile.anchors).join(' / ')}`
+    );
+  } catch (e) {
+    return {
+      version,
+      ok: false,
+      failureKind: 'profile-probe',
+      fetchedAt: new Date().toISOString(),
+      reason: `替换逻辑档案探测失败：${e.message}`,
+    };
+  }
+  if (profileOnly) {
+    // 迁移路径：字典已在，只把探测出的档案落盘（唯一写入口会先校验再原子写）。
+    try {
+      versionProfile.writeProfile(version, profile, { overwrite: true });
+    } catch (e) {
+      return { version, ok: false, failureKind: 'profile-probe', reason: `替换逻辑档案写入失败：${e.message}` };
+    }
+    log(`  已补充替换逻辑档案：${profileFile}`);
+    return {
+      version,
+      ok: true,
+      profileOnly: true,
+      fetchedAt: new Date().toISOString(),
+      profile: profileSummary(profile),
+    };
+  }
+  // 右键菜单注入块会往 main.js 写一批标签字面量：它们在官方产物里不存在（标签由 Electron
+  // 运行时按 role 生成），但 patch 之后就是产物真实形态。按**该版本档案的标签表**并进索引，
+  // 否则继承判据会把这些键误判成「官方已删除」（实测 3.6.7 因此丢过 main.js|Delete）。
+  if (versionProfile.hasStrategy(profile, 'context-menu')) {
+    for (const platform of PLATFORMS) {
+      const labels = versionProfile.strategy(profile, 'context-menu', {
+        platform: platform === 'macos' ? 'darwin' : 'win32',
+      }).labels;
+      withInjectedLiterals(indexes[platform], labels);
+    }
+    log('  注入块标签已按档案标签表并入产物索引');
+  } else {
+    log('  该版本档案未启用右键菜单注入：不并入注入块标签');
+  }
+
+  log('3/8 提取官方新增文案候选');
   const jsxFound = collectJsxCandidates(appDirs, log);
 
-  log('3/7 以历史字典为锚核对新产物');
+  log('4/8 以历史字典为锚核对新产物');
   // 重跑已有版本时把自己也算作继承来源——它的译文正是最该保住的东西。排除自己的话产出会
   // 退化成「从零翻译」：实测重跑 3.6.6 时继承 0 条、产出只剩 140 条，overwrite 会把原有
   // 1963 条的好字典换成这份残缺品，diff 也会把「继承不到」误报成「删除 1833 条」。
@@ -668,13 +854,18 @@ async function buildOne(version, args, log) {
   );
 
   const report = baseReport(version, versions, stats);
+  report.profile = profileSummary(profile);
+  // 先落一版待译草稿：AI 若卡死/超时，进程可能来不及走失败分支——「待译的是什么」必须不丢。
+  // 翻译结束后会再写一次，补上每条的真实失败原因。
+  writePendingDraft(version, report, pending, log);
 
-  log('4/7 AI 翻译新增条目');
+  log('5/8 AI 翻译新增条目');
   if (pending.length) {
     if (args.noAi) {
       log('  --no-ai：跳过翻译，未译条目不计入字典');
       report.untranslated = pending.length;
       report.untranslatedRows = pending.map((it) => ({ text: it.text, reason: '--no-ai' }));
+      report.draftOnly = true; // 缺译字典不是可发布产物；CI 据此提示（--no-ai 只用于离线排查/回填预检）
     } else {
       const { cfg, secrets } = aiConfig(args, table);
       log(
@@ -688,9 +879,17 @@ async function buildOne(version, args, log) {
     // --no-ai 是「明说这次不译」，不适用该门槛。
     const rate = report.untranslated / pending.length;
     if (!args.noAi && rate > MAX_UNTRANSLATED_RATE) {
+      // 失败分类：网关不可达 / 鉴权 / 5xx / 模型没按契约回 → ai-unreachable；
+      // 占位符不一致 / 空译 / 无中文 → ai-quality。两类处理方式完全不同，CI 注解按它分标题。
+      const cls = dictAi.classifyFailure(report.untranslatedRows);
+      report.failureKind = cls.kind === 'quality' ? 'ai-quality' : 'ai-unreachable';
+      report.failureCounts = cls.counts;
       report.reason = `未译 ${report.untranslated}/${pending.length} 条（${(rate * 100).toFixed(0)}%）超过上限 ${MAX_UNTRANSLATED_RATE * 100}%`;
+      writePendingDraft(version, report, pending, log);
       return report;
     }
+    // 翻译结束（含部分失败）：重写草稿，带上每条的真实原因。
+    writePendingDraft(version, report, pending, log);
   } else {
     log('  无新增条目');
   }
@@ -702,18 +901,21 @@ async function buildOne(version, args, log) {
     skippedNoTranslation: skipped.length,
   };
   log(
-    `5/7 分段结果：common ${report.counts.common} 条 / macos ${report.counts.macos} 条` +
+    `6/8 分段结果：common ${report.counts.common} 条 / macos ${report.counts.macos} 条` +
       `${skipped.length ? `（因无译文未写入 ${skipped.length} 条）` : ''}`
   );
 
-  log('6/7 干跑校验');
+  log('7/8 干跑校验');
   recordChecks(report, appDirs, version, segments, indexes, log);
-  if (report.reason && !args.dryRun) {
+  // reason 存在即失败（包括 --dry-run）：干跑的意义就是提前暴露不达标，不能因为「没写盘」就报绿。
+  if (report.reason) {
+    report.failureKind = report.failureKind || 'dry-run-threshold';
     report.droppedKeys = dropped.slice(0, 100);
+    writePendingDraft(version, report, pending, log);
     return report;
   }
 
-  log('7/7 推断组名并写入');
+  log('8/8 推断组名并写入');
   // 键集从内存里的 segments 取，而不是让 infer 去读磁盘上的字典——写入前磁盘上还是旧字典
   // （overwrite 模式）或根本没有（新版本），读它会拿错键集。顺带让 diff 模式能在不写盘的前提下推断。
   let groups;
@@ -724,7 +926,9 @@ async function buildOne(version, args, log) {
       keys: common.SEGMENT_NAMES.flatMap((s) => Object.keys(segments[s] || {})),
     }));
   } catch (e) {
+    report.failureKind = 'groups-infer';
     report.reason = `组名推断失败：${e.message}`;
+    writePendingDraft(version, report, pending, log);
     return report;
   }
   report.groups = Object.keys(groups).length;
@@ -744,15 +948,15 @@ async function buildOne(version, args, log) {
   }
 
   if (args.dryRun) {
-    log('  --dry-run：跳过写入');
+    log('  --dry-run：跳过写入（字典与档案都不落盘；档案已在内存中通过生成校验）');
     report.ok = true;
     report.dryRun = true;
     return report;
   }
 
-  // 写入之后任一环节失败，就把字典恢复成本次产出之前的样子——否则下次重跑会因为「已有字典」
-  // 而跳过，把一次失败的产出永久固化下来（回填时尤其要紧）；覆盖模式下更要紧，直接删掉
-  // 会把原有的那份一起弄丢。
+  // 写入之后任一环节失败，就把字典与档案**一起**恢复成本次产出之前的样子——否则下次重跑会
+  // 因为「已有字典」而跳过，把一次失败的产出永久固化下来（回填时尤其要紧）；覆盖模式下更要紧，
+  // 直接删掉会把原有的那份一起弄丢。半对残留比没产出更糟：本地看似有资源、引擎却拒绝。
   let written = false;
   try {
     const w = dictEdit.create(
@@ -779,20 +983,29 @@ async function buildOne(version, args, log) {
     log(`  已写入 ${w.file}`);
     const r = dictEdit.regroup(version, { groups });
     for (const warn of r.warnings) log(`  [提示] ${warn.code}：${warn.detail}`);
+    // 档案与字典**同轮**落盘：走唯一写入口（写前整份校验、.part 原子替换）。任一失败由下面的
+    // catch 把两份一起回滚，绝不留下「字典有了、档案没有」的半对状态。
+    versionProfile.writeProfile(version, profile, { overwrite: true });
+    log(`  已写入替换逻辑档案 ${profileFile}`);
   } catch (e) {
-    if (written) log(`  写入后出错，${restoreDict(dictFile, previous)}：${e.message}`);
+    if (written) log(`  写入后出错，${restorePair(dictFile, previous, profileFile, previousProfile)}：${e.message}`);
+    report.failureKind = 'dict-write';
     report.reason = e.message;
+    writePendingDraft(version, report, pending, log);
     return report;
   }
 
   const v = dictEdit.validate(version);
   if (v.errors.length) {
-    log(`  校验未通过，${restoreDict(dictFile, previous)}`);
+    log(`  校验未通过，${restorePair(dictFile, previous, profileFile, previousProfile)}`);
+    report.failureKind = 'dict-validate';
     report.reason = `字典校验未通过：${v.errors.map((e) => `${e.code}${e.key ? `(${e.key})` : ''}`).join(' / ')}`;
+    writePendingDraft(version, report, pending, log);
     return report;
   }
   report.warnings = v.warnings.map((x) => `${x.code}：${x.detail}`);
   report.droppedKeys = dropped.slice(0, 100);
+  report.profile = profileSummary(profile);
   report.ok = true;
   return report;
 }
@@ -828,7 +1041,11 @@ async function main() {
       }
       reports.push(r);
       if (r.skipped) console.log(`跳过：${r.reason}`);
-      else if (!r.ok) console.error(`::error::${version} 产出失败：${dictAi.failureText(r)}`);
+      else if (r.profileOnly) console.log(`${version}：已有字典，本轮只补产替换逻辑档案`);
+      else if (!r.ok) {
+        // 注解带 title：网关不可达 / 质量差 / 探测失败等类别直接在运行摘要里可区分，不必翻日志
+        console.error(`::error title=${failureTitle(r)}::${version} 产出失败：${dictAi.failureText(r)}`);
+      }
     }
   } catch (e) {
     console.error(`错误：${e.message}`);
@@ -838,18 +1055,23 @@ async function main() {
 
   const failed = reports.filter((r) => !r.ok);
   const diffed = reports.filter((r) => r.ok && r.diffMode);
-  const produced = reports.filter((r) => r.ok && !r.skipped && !r.diffMode);
+  const profileFilled = reports.filter((r) => r.ok && r.profileOnly);
+  const produced = reports.filter((r) => r.ok && !r.skipped && !r.diffMode && !r.profileOnly);
   const skipped = reports.filter((r) => r.skipped);
   console.log(
     `\n产出 ${produced.length} 个版本${diffed.length ? `，对比 ${diffed.length} 个` : ''}` +
+      `${profileFilled.length ? `，补档案 ${profileFilled.length} 个` : ''}` +
       `${failed.length ? `，失败 ${failed.length} 个` : ''}${skipped.length ? `，跳过 ${skipped.length} 个` : ''}`
   );
   for (const r of produced) {
     console.log(
       `  ${r.version}：common ${r.counts.common} / macos ${r.counts.macos} 条，续用旧译文 ${r.inherited}` +
         `（其中 ${r.variant} 条官方改了大小写），新译 ${r.translated || 0}，未译 ${r.untranslated}，` +
-        `官方已删除 ${r.dropped}`
+        `官方已删除 ${r.dropped}；档案 ${r.profile ? `${r.profile.anchors.length} 个锚点` : '（无）'}`
     );
+  }
+  for (const r of profileFilled) {
+    console.log(`  ${r.version}：已有字典，本轮补产替换逻辑档案（${r.profile.anchors.length} 个锚点）`);
   }
   for (const r of diffed) {
     const c = r.diff;
@@ -875,6 +1097,7 @@ function writeReport(file, data) {
 module.exports = {
   main, resolveIn, buildCandidates, toSegments,
   diffDicts, shapeDiff, parseArgs, withInjectedLiterals,
+  probeProfile, profileSummary, writePendingDraft, draftFile, failureTitle,
   ON_EXIST, ON_EXIST_MODES, DIFF_LIMIT,
 };
 

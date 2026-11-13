@@ -12,6 +12,7 @@
 const fs = require('fs');
 const path = require('path');
 const common = require('../common.js');
+const versionProfile = require('../version-profile.js');
 const net = require('../net.js');
 const update = require('../update.js');
 const releaseAssets = require('../dict/release-assets.js');
@@ -46,31 +47,52 @@ function checkSpace(dir, pkgBytes) {
   return { free, need };
 }
 
-// 可下载的版本：官方列表（有产物的正式版） × 本机是否已装 × **本地或远端**是否有字典。
+// 可下载的版本：官方列表（有产物的正式版） × 本机是否已装 × **本地成对完整或远端有目录**。
 //
-// 「有字典」的口径 2026-09-23 从「本地有」放宽为「本地或远端有」：打包产物只内嵌构建时的最新
-// 字典，之后新产出的字典（如 3.6.7）远端 main 上已有、本地数据根没有——只看本地会把「装完
-// 就能直接汉化」的版本标成「无字典」（用户报的就是这个）。故取官方列表时顺带取一次远端字典
-// **目录列表**（只取列表、**不下载任何字典文件**），两者取并集；远端列表取不到时降级为本地
-// 判断，原因随 remoteDict 带回给界面提示。
+// 「本地可用」的口径是**成对**：字典（zh-CN.json）与替换逻辑档案（patch.json）都在才算可用
+// （version-profile.listPairVersions()）。只有一半时引擎会明确拒绝汉化，所以不能算可用——
+// 界面若标成「本地有字典」，用户装完点汉化才报错。
+//
+// 远端列表是**字典目录列表**（只取目录名、不下载任何文件）：它证明不了 patch.json 存在，
+// 故只用于显示阶段标「字典待下载」；真正下载发生在切换 / 安装动作里，由 dict-sync 成对获取并强校验。
+// 远端列表取不到时降级为本地判断，原因随 remoteDict 带回给界面提示。
 //
 // 字段语义（三态必须可区分，别把「远端也没有」也放宽）：
-//   dictLocal  本地数据根 / 内嵌有该版本字典——装完立刻可汉化；
-//   dictRemote 远端仓库有该版本字典——切换 / 安装时会由 dict-sync.prefetchDict 自动下载；
-//   dictState  'local' | 'remote' | 'none' 三态，界面文案直接按它选（标签判定可单测，不散在渲染层）；
-//   hasDict    dictState !== 'none'——决定它出不出现在默认视图（「只列有汉化的版本」）；
-// 三者都在「本地无、远端无」时为 none——**不能放宽成有字典**。
+//   dictLocal      本地**成对完整**（字典 + 替换逻辑档案都在）——装完立刻可汉化；
+//   dictRemote     远端有该版本字典目录——切换 / 安装时会由 dict-sync 成对下载并校验；
+//   dictState      'local' | 'remote' | 'none' 三态，界面文案直接按它选（标签判定可单测，不散在渲染层）；
+//   hasDict        dictState !== 'none'——决定它出不出现在默认视图（「只列有汉化的版本」）；
+//   profileLocal   本地有该版本替换逻辑档案（与 dictLocal 同口径；成对是主判据，见 profileMissing）；
+//   profileMissing 本地**有字典但缺替换逻辑档案**——界面据此提示「缺替换逻辑档案」而不是「无字典」。
+//                  只有能读到「本地有字典」集合时才可能为 true（下面的注入说明）。
+// 三类资源都没有时为 none——**不能放宽成有字典**。
 // 这里一律返回全量，GUI 的「显示没汉化的版本」勾选才有东西可展开。
 //
 // opts 是**依赖注入点**（生产调用方一律不传）：
 //   opts.listVersions     官方 Release 版本列表来源，默认 releaseAssets.listVersions
-//   opts.remoteDict       远端字典列表结果（或 Promise），默认 dictSync.remoteDictVersions()
-//   opts.dictVersions     本地已有字典的版本号数组，默认 common.listDictVersions()
+//   opts.remoteDict       远端字典目录列表结果（或 Promise），默认 dictSync.remoteDictVersions()
+//   opts.pairVersions     本地**成对完整**的版本号数组，默认 versionProfile.listPairVersions()
+//   opts.dictVersions     **兼容/测试入口**：只表示「本地有字典」的旧口径。仅在调用方**没有**给
+//                         pairVersions 时生效（此时无法判断档案，行为与改造前一致）；两参都给时
+//                         以 pairVersions 为准。生产路径不传。
 // 注入点的用途是让单测**不依赖运行环境**：仓库 checkout 的内容会变（例如 CI 上仓库自带
-// dictionaries/3.6.7、开发者本机可能没有），测试若直读 listDictVersions()，同一份代码在不同
-// checkout 上会得出不同结果，测试就变成了「环境断言」而不是「行为断言」。
+// dictionaries/3.6.7、开发者本机可能没有），测试若直读本机字典列表，同一份代码在不同 checkout
+// 上会得出不同结果，测试就变成了「环境断言」而不是「行为断言」。
 async function listDownloadable(opts = {}) {
-  const dictVersions = opts.dictVersions || common.listDictVersions();
+  // 注入解析：pairVersions 优先；没给时退回旧的 dictVersions（兼容）；都没给才读本机成对列表。
+  const injectedPair = Array.isArray(opts.pairVersions);
+  const pairVersions = injectedPair
+    ? opts.pairVersions
+    : Array.isArray(opts.dictVersions)
+      ? opts.dictVersions // 兼容分支：旧签名把「字典存在」当本地可用（仅测试/兼容入口）
+      : versionProfile.listPairVersions();
+  // 「本地有字典」集合只用于 profileMissing 判定；显式注入 pairVersions 又没给 dictVersions 时
+  // 不读本机（否则测试会变成环境断言），此时 profileMissing 恒为 false。
+  const dictVersions = Array.isArray(opts.dictVersions)
+    ? opts.dictVersions
+    : injectedPair
+      ? null
+      : common.listDictVersions();
   const installed = new Set(common.listInstalledVersions().map((x) => x.version));
   const listVersions = opts.listVersions || releaseAssets.listVersions; // 注入点：单测不真打网络
   // 两个网络请求互不依赖，并行取；远端字典列表失败**不影响**官方版本列表（各自降级）
@@ -84,7 +106,7 @@ async function listDownloadable(opts = {}) {
     platform,
     arch,
     installable: platform === 'windows',
-    // 远端字典列表的状态原样带出：界面据此提示「未能获取远端字典列表」并降级本地判断
+    // 远端字典目录列表的状态原样带出：界面据此提示「未能获取远端字典列表」并降级本地判断
     remoteDict: {
       ok: !!(remote && remote.ok),
       versions: remoteVersions,
@@ -92,7 +114,7 @@ async function listDownloadable(opts = {}) {
       failures: (remote && remote.failures) || [],
     },
     versions: versions.map((v) => {
-      const dictLocal = dictVersions.includes(v.version);
+      const dictLocal = pairVersions.includes(v.version);
       const dictRemote = remoteVersions.includes(v.version);
       const dictState = dictLocal ? 'local' : dictRemote ? 'remote' : 'none';
       return {
@@ -104,16 +126,21 @@ async function listDownloadable(opts = {}) {
         dictLocal,
         dictRemote,
         dictState,
+        // 档案可见性：成对即档案也在（profileLocal 与 dictLocal 同值）；「只有档案没有字典」
+        // 的版本没有观测入口（成对是主判据），不单列。
+        profileLocal: dictLocal,
+        profileMissing: dictVersions !== null && dictVersions.includes(v.version) && !dictLocal,
       };
     }),
   };
 }
 
 // 下载并安装指定版本。返回 { version, appDir, bytes, files, dict }；已装且未 force 时
-// 返回 { skipped: true, dict }（同样会补字典——「安装」的意图就是「切过去就能汉化」）。
+// 返回 { skipped: true, dict }（同样会**成对补齐**字典与替换逻辑档案——「安装」的意图就是
+// 「切过去就能汉化」）。
 // `opts.from` 指定本地安装包时跳过下载（离线 / 自备包——也是下载通道不通时的降级路径）。
-// `dict` 是 dict-sync.prefetchDict 的结果：装完顺手把该版本字典取到本地，**失败不回滚安装**
-// （版本已铺好可正常使用），调用方按 { ok:false, error } 明说原因，降级策略见 prefetchDict。
+// `dict` 是 dict-sync.prefetchDict 的结果：装完顺手把该版本的字典与替换逻辑档案成对取到本地，
+// **失败不回滚安装**（版本已铺好可正常使用），调用方按 { ok:false, error } 明说原因。
 // `opts.dict === false` 可关掉这一步（只在测试与「只想铺版本」的场景用）。
 //
 // 失败语义：**任一步失败都不留半个 app-<版本> 目录**——先铺到 `app-<版本>.part`，必需文件齐了
@@ -203,8 +230,8 @@ async function install(version, opts = {}) {
   fs.renameSync(staging, dest);
   // 安装包只在是下载来的、且放在临时目录时才删；用户自己给的本地包不动
   if (!opts.from) fs.rmSync(pkg, { force: true });
-  // 装完顺手把该版本字典取到本地：装这个版本的目的就是「切过去就能汉化」。
-  // 字典取不到**不回滚安装**（版本已铺好、可正常使用），原因随返回值带回给调用方明说。
+  // 装完顺手把该版本的字典与替换逻辑档案**成对**取到本地：装这个版本的目的就是「切过去就能汉化」。
+  // 任一份取不到**不回滚安装**（版本已铺好、可正常使用），原因随返回值带回给调用方明说。
   const dict = opts.dict === false ? null : await dictSync.prefetchDict(version);
   return { version, appDir: dest, bytes, files: r.written, dict };
 }
@@ -232,7 +259,7 @@ function printHelp() {
 装出来的目录与官方安装同形，可被 locateApp 直接识别，与已装版本并存。
 
   <版本>          要安装的版本，如 3.6.4
-  --list          列出可下载的版本（只列本地或远端已有字典的；远端有而本地没有的标「字典待下载」）
+  --list          列出可下载的版本（只列本地成对完整或远端有字典目录的；远端有而本地没有的标「字典待下载」）
   --force         已装也重新下载覆盖
   --from <文件>   用本地安装包（跳过下载；下载通道不通时的降级路径）
   -h, --help      显示本帮助
@@ -250,7 +277,7 @@ async function main() {
   if (args.list) {
     const r = await listDownloadable();
     const rows = r.versions.filter((v) => v.hasDict);
-    console.log(`可下载版本（${r.platform}-${r.arch}，只列有汉化字典的）：`);
+    console.log(`可下载版本（${r.platform}-${r.arch}，只列本地成对或远端有字典目录的）：`);
     for (const v of rows) {
       const tags = [];
       if (v.installed) tags.push('（已安装）');
@@ -294,13 +321,13 @@ async function main() {
   printDictResult(r.dict);
 }
 
-// 安装后的字典预取结果：下载成功说一句；失败**明确提示但不判安装失败**（版本已就绪）。
-// 降级策略见 dict-sync.prefetchDict 的注释（切换 / 安装成功 + 提示失败，不拒绝）。
+// 安装后的资源预取结果（字典 + 替换逻辑档案成对）：下载成功说一句；失败**明确提示但不判安装失败**
+// （版本已就绪）。降级策略见 dict-sync.prefetchDict 的注释（切换 / 安装成功 + 提示失败，不拒绝）。
 function printDictResult(dict) {
   if (!dict) return;
   if (!dict.ok) {
     console.log(` 注意：${dict.error}`);
-    console.log(' 版本本身已就绪；之后点「汉化」时还会再尝试获取字典。');
+    console.log(' 版本本身已就绪；之后点「汉化」时还会再尝试成对获取字典与替换逻辑档案。');
   } else if (dict.message) {
     console.log(` ${dict.message}`);
   }

@@ -10,6 +10,7 @@ const { app, BrowserWindow, ipcMain, dialog, Menu } = require('electron');
 
 const common = require('../scripts/common.js');
 const update = require('../scripts/update.js');
+const versionProfile = require('../scripts/version-profile.js');
 
 // IPC 处理器按域分组：汉化还原组 / 版本切换组 / 更新组 / 杂项组（归属见各文件头）。
 // 四份都以**字面量 require** 引入——依赖靠静态扫描收集，动态写法收不到。
@@ -179,22 +180,30 @@ async function runSmokeTest(win) {
 
 let mainWindow = null;
 
-// 内置字典的播种：字典随包放在应用的 resources/dictionaries（electron-builder 的 extraResources），
-// 而数据根与它未必同处一地——Windows 的 zip 解压后就在旁边、NSIS 装到用户目录也可写，但 macOS 的数据根
-// 恒在用户数据目录（.app 包内不可写，见 common.dataRoot），Linux 的 AppImage 又挂在只读临时目录，
-// 两者都取不到旁边那份。首次运行时把数据根里缺的版本复制过去即可，此后一切照旧（外部字典优先）。
-// 只补缺失的版本：用户自己替换过、或在线更新过的字典不会被覆盖。
+// 内置资源的播种：**字典（zh-CN.json）与替换逻辑档案（patch.json）成对**随包放在应用的
+// resources/dictionaries（electron-builder 的 extraResources），而数据根与它未必同处一地——Windows 的
+// zip 解压后就在旁边、NSIS 装到用户目录也可写，但 macOS 的数据根恒在用户数据目录（.app 包内不可写，
+// 见 common.dataRoot），Linux 的 AppImage 又挂在只读临时目录，两者都取不到旁边那份。首次运行时把数据根里
+// **缺的文件**复制过去即可，此后一切照旧（外部资源优先）。
+// 逐文件补齐、不按版本整体跳过：老用户数据根里已有 zh-CN.json、没有 patch.json，按「版本已播种」判断
+// 就永远补不上档案，而引擎按成对语义会拒绝汉化。只补目标缺失的文件——用户自己替换过、或在线更新过的
+// 文件一律不覆盖；非版本号形态的目录（README / 夹具）不进数据根。
 function seedBundledDicts() {
   if (!common.isElectronPackaged()) return;
   const src = path.join(process.resourcesPath, 'dictionaries');
   if (!fs.existsSync(src)) return;
   const dest = path.join(common.dataRoot(), 'dictionaries');
+  // 成对的两份文件：翻译字典与替换逻辑档案（档案文件名以 version-profile.js 为准）
+  const pairFiles = ['zh-CN.json', versionProfile.PROFILE_FILE];
   for (const version of fs.readdirSync(src)) {
-    const from = path.join(src, version, 'zh-CN.json');
-    const to = path.join(dest, version, 'zh-CN.json');
-    if (fs.existsSync(to) || !fs.existsSync(from)) continue;
-    fs.mkdirSync(path.dirname(to), { recursive: true });
-    fs.copyFileSync(from, to);
+    if (!common.DICT_VERSION_RE.test(version)) continue;
+    for (const file of pairFiles) {
+      const from = path.join(src, version, file);
+      const to = path.join(dest, version, file);
+      if (!fs.existsSync(from) || fs.existsSync(to)) continue;
+      fs.mkdirSync(path.dirname(to), { recursive: true });
+      fs.copyFileSync(from, to);
+    }
   }
 }
 

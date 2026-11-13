@@ -38,6 +38,16 @@
 # 两处都只判形态、不回显值（该值是 Secret）。失败原因（地址错 / 鉴权失败 / 超时……）随结论一起
 # 写进注解、step summary 与提交信息，不必翻日志才对得上号。
 # 需要离线排查时用本地 `node scripts/dict/dict-auto.js --no-ai`。
+#
+# 【成对产出（2026-11 起）】每个版本的资产是「字典 zh-CN.json + 替换逻辑档案 patch.json」成对：
+# 同一条链路在取到两平台官方产物后，用 version-profile 的 probeApp/buildProfile 探测生成档案，
+# 与字典同一轮落盘（任一步失败两份一起回滚，不留半对）。--on-exist=skip 的判据也是成对：
+# 只有字典缺档案的版本会走「只补产档案」的迁移路径，不会每天白跑。
+# 【失败分类】报告的 failureKind 区分 ai-unreachable（网关不可达/超时/鉴权/5xx/模型没按契约回）
+# 与 ai-quality（占位符不一致/空译/无中文）等，注解用 `::error title=…::` 直接标明类别；
+# 失败时把「待译草稿」（tmp/dict-auto-pending-<版本>.json，含 untranslatedRows/原因/来源）
+# 作为 artifact 上传，人工补译/排查不必翻几千行日志。
+# 【质量门禁不降级】未译比例、干跑语法与命中率、字典校验、测试门禁全部保留；不打折。
 
 name: 字典自动更新
 
@@ -142,19 +152,54 @@ jobs:
           if [ -n "$IN_ON_EXIST" ]; then args+=(--on-exist "$IN_ON_EXIST"); fi
           node scripts/dict/dict-auto.js "${args[@]}" --report tmp/dict-auto-report.json
 
-      # 产出的字典要先过一遍仓库自身的测试，再允许进版本库
+      # 产出的字典与档案要先过一遍仓库自身的测试，再允许进版本库
       - name: 跑测试
         id: test
         run: node --test
 
+      # 失败时也要上传：待译草稿正是人工补译 / 排查网关问题的输入。与报告 JSON 一起传，
+      # 不看日志也能知道「哪些文案没译出来、为什么」。
+      - name: 上传待译草稿与报告
+        if: ${{ always() && !cancelled() }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: dict-auto-pending-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            tmp/dict-auto-pending-*.json
+            tmp/dict-auto-report.json
+          if-no-files-found: warn
+          retention-days: 14
+
+      # 成对门禁：字典与替换逻辑档案必须成对入库。否则提交出去的是半对资源——引擎会拒绝打补丁，
+      # 而下一轮定时任务又会因「已有字典」跳过，问题被永久固化（docs/agents/已知坑.md 有同类实证）。
+      - name: 校验字典与档案成对
+        id: pair
+        run: |
+          node -e '
+            const fs = require("fs"), path = require("path");
+            const root = "dictionaries";
+            const bad = [];
+            for (const version of fs.readdirSync(root)) {
+              if (!/^\d+\.\d+\.\d+$/.test(version)) continue;
+              const dir = path.join(root, version);
+              if (!fs.existsSync(dir)) continue;
+              const hasDict = fs.existsSync(path.join(dir, "zh-CN.json"));
+              const hasProfile = fs.existsSync(path.join(dir, "patch.json"));
+              if (hasDict !== hasProfile) bad.push(`${version}: 缺 ${hasDict ? "patch.json" : "zh-CN.json"}`);
+            }
+            if (bad.length) {
+              console.log("::error title=字典与档案不成对::" + bad.join(" / "));
+              process.exit(1);
+            }
+            console.log("字典与档案成对校验通过");
+          '
+
       - name: 提交
-        # 被取消时不提交（可能是有人手动掐掉了一次跑偏的任务）；**测试没通过也不提交**——
-        # 产出与测试校验是同一条链，测试红说明刚产出的字典不可用。实测 3.6.7 的自动产出丢了
-        # main.js|Delete（右键菜单标签，见 scripts/inject/context-menu.js），「每个版本字典都
-        # 覆盖注入标签」的测试当场红，但 always() 仍把这份缺键字典提交上了 main；下一轮定时任务
-        # checkout 到它之后，产出步骤因「已有字典」跳过、测试照旧红，每跑必红且自己修不回来。
+        # 被取消时不提交（可能是有人手动掐掉了一次跑偏的任务）；**测试没通过或成对校验没过也不提交**——
+        # 产出与测试校验是同一条链，测试红说明刚产出的字典不可用；半对资源（缺档案）提交出去会让
+        # 下一轮因「已有字典」跳过、把问题永久固化（docs/agents/已知坑.md 有同类实证）。
         # 其余情况都走一遍，由下面的「有没有变化」自行决定是空跑还是真提交
-        if: ${{ always() && !cancelled() && steps.test.outcome == 'success' }}
+        if: ${{ always() && !cancelled() && steps.test.outcome == 'success' && steps.pair.outcome == 'success' }}
         env:
           RELEASE_TOKEN: ${{ secrets.RELEASE_TOKEN }}
           IN_DRY_RUN: ${{ inputs.dry_run }}
@@ -178,22 +223,33 @@ jobs:
           git config user.name "$login"
           git config user.email "${uid}+${login}@users.noreply.github.com"
 
-          # 提交信息按仓库的约定式格式生成，正文带每版本的继承/新增/未译数字——
-          # 光看「自动产出」看不出这轮到底动了什么，数字放在正文里便于回溯
+          # 提交信息按仓库的约定式格式生成，正文带每版本的继承/新增/未译数字与档案锚点数——
+          # 光看「自动产出」看不出这轮到底动了什么，数字放在正文里便于回溯；失败条目带上
+          # failureKind（ai-unreachable / ai-quality / profile-probe …），一眼能看出是网关问题
+          # 还是翻译质量/产物结构问题。
           node -e '
             const fs = require("fs");
             const r = JSON.parse(fs.readFileSync("tmp/dict-auto-report.json", "utf8"));
-            const made = r.reports.filter((p) => p.ok && !p.skipped);
+            const made = r.reports.filter((p) => p.ok && !p.skipped && !p.diffMode && !p.profileOnly);
+            const filled = r.reports.filter((p) => p.ok && p.profileOnly);
             const failed = r.reports.filter((p) => !p.ok && !p.skipped);
-            const title = made.length === 1
-              ? `feat(dict): 自动产出 ${made[0].version} 字典`
-              : `feat(dict): 自动产出 ${made.map((p) => p.version).join(" / ")} 字典`;
+            let title;
+            if (made.length === 1) title = `feat(dict): 自动产出 ${made[0].version} 字典与替换逻辑档案`;
+            else if (made.length > 1) title = `feat(dict): 自动产出 ${made.map((p) => p.version).join(" / ")} 字典与替换逻辑档案`;
+            else if (filled.length) title = `feat(dict): 补产 ${filled.map((p) => p.version).join(" / ")} 的替换逻辑档案`;
+            else title = "chore(dict): 自动产出巡检（无产出）";
+            const profileText = (p) => p.profile
+              ? `，档案 ${p.profile.anchors.length} 个锚点${p.profile.labels ? ` / 标签 ${p.profile.labels.windows}+${p.profile.labels.macos}` : ""}`
+              : "，档案未产出";
             const body = made.map((p) =>
               `- ${p.version}：继承 ${p.inherited} 条（其中 ${p.variant} 条官方改了大小写），` +
               `新增 ${p.added} 条（译出 ${p.translated || 0}、判定无需翻译 ${p.echoed || 0}、未译 ${p.untranslated}），` +
-              `官方已删除 ${p.dropped} 条；分段 common ${p.counts.common} / macos ${p.counts.macos}`
+              `官方已删除 ${p.dropped} 条；分段 common ${p.counts.common} / macos ${p.counts.macos}` + profileText(p)
             );
-            for (const p of failed) body.push(`- ${p.version}：产出失败——${p.reason}${p.reasonDetail ? `（${p.reasonDetail}）` : ""}`);
+            for (const p of filled) body.push(`- ${p.version}：已有字典，本轮补产替换逻辑档案（${p.profile ? p.profile.anchors.join(" / ") : "—"}）`);
+            for (const p of failed) {
+              body.push(`- ${p.version}：产出失败${p.failureKind ? `[${p.failureKind}]` : ""}——${p.reason}${p.reasonDetail ? `（${p.reasonDetail}）` : ""}`);
+            }
             fs.writeFileSync("tmp/dict-auto-message.txt", `${title}\n\n${body.join("\n")}\n`);
             console.log(fs.readFileSync("tmp/dict-auto-message.txt", "utf8"));
           '
@@ -212,18 +268,20 @@ jobs:
               const out = [];
               for (const p of r.reports) {
                 if (p.skipped) out.push(`跳过 ${p.version}：${p.reason}`);
+                else if (p.profileOnly) out.push(`补产档案 ${p.version}：已有字典，本轮只探测生成替换逻辑档案`);
                 else if (p.diffMode) out.push(`对比 ${p.version}（磁盘未改动）：新增 ${p.diff.addedCount} / 删除 ${p.diff.removedCount} / 译文变化 ${p.diff.changedCount} / 换段 ${p.diff.movedCount} / 组归属变化 ${p.diff.groupsChangedCount}`);
-                else if (p.ok) out.push(`成功 ${p.version}：common ${p.counts.common} / macos ${p.counts.macos}，新译 ${p.translated || 0}，无需翻译 ${p.echoed || 0}，未译 ${p.untranslated}${p.reasonDetail ? `（${p.reasonDetail}）` : ""}`);
-                else out.push(`失败 ${p.version}：${p.reason}${p.reasonDetail ? `——${p.reasonDetail}` : ""}`);
+                else if (p.ok) out.push(`成功 ${p.version}：common ${p.counts.common} / macos ${p.counts.macos}，新译 ${p.translated || 0}，无需翻译 ${p.echoed || 0}，未译 ${p.untranslated}${p.draftOnly ? "（--no-ai 草稿，未译未补齐）" : ""}${p.reasonDetail ? `（${p.reasonDetail}）` : ""}；档案 ${p.profile ? p.profile.anchors.length + " 个锚点" : "未产出"}`);
+                else out.push(`失败 ${p.version}${p.failureKind ? ` [${p.failureKind}]` : ""}：${p.reason}${p.reasonDetail ? `——${p.reasonDetail}` : ""}${p.pendingDraft ? `；待译草稿 ${p.pendingDraft}` : ""}`);
               }
               console.log(out.join("\n"));
-              require("fs").appendFileSync(process.env.GITHUB_STEP_SUMMARY, "## 字典产出\n\n" + out.map((l) => "- " + l).join("\n") + "\n");
+              require("fs").appendFileSync(process.env.GITHUB_STEP_SUMMARY, "## 字典与档案产出\n\n" + out.map((l) => "- " + l).join("\n") + "\n");
             '
           fi
 
-      # 上一步 continue-on-error，失败要在这里显式暴露，否则整轮跑绿而问题被吞掉
+      # 上一步 continue-on-error，失败要在这里显式暴露，否则整轮跑绿而问题被吞掉。
+      # 注解带 title 与下一步：失败时报告/待译草稿已作为 artifact 上传（见「上传待译草稿与报告」）。
       - name: 检查产出结果
         if: steps.build.outcome == 'failure'
         run: |
-          echo "::error::字典产出未通过（详见上方日志与汇总）"
+          echo "::error title=字典产出未通过::字典产出未通过（详见上方日志与汇总；待译草稿见本次运行的 Artifacts）"
           exit 1

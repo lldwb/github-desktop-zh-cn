@@ -1,6 +1,6 @@
 // tools/check-gui-dist.js — GUI 产物自检（零依赖，CI 与本地共用）
 //
-// 只做**静态**检查：产物文件在不在、应用包结构对不对、内置字典进没进包、
+// 只做**静态**检查：产物文件在不在、应用包结构对不对、内置字典与替换逻辑档案成对进没进包、
 // Windows 产物是不是 GUI 子系统（双击不弹控制台）、体积裁剪有没有生效、
 // 各产物多少 MB（日志里直接看得到，不必下载附件）。界面能不能起、汉化能不能成
 // 属于运行态，得在带桌面的机器上实测——CI runner 没有桌面会话，起不了窗口。
@@ -13,6 +13,9 @@ const path = require('path');
 // 项目名取包名，与 tools/build.js 拼 cli 产物名（`${PKG.name}-cli-v…`）同口径；
 // 产物名里的项目名不在这里另写一份字面量
 const PKG = require('../package.json');
+// 版本目录形态与档案文件名都取既有模块的 SSOT（DSH 数据根判定与档案加载逻辑一律走 version-profile.js）
+const { DICT_VERSION_RE } = require('../scripts/common.js');
+const { PROFILE_FILE } = require('../scripts/version-profile.js');
 
 const OUT = path.join(__dirname, '..', 'dist', 'gui');
 const PE_SIGNATURE = Buffer.from('PE');
@@ -39,7 +42,21 @@ const listDir = (p) => {
   }
 };
 
-// 应用包内该有的两样：界面与业务代码（app.asar）、内置字典
+const isDir = (p) => {
+  try {
+    return fs.statSync(p).isDirectory();
+  } catch {
+    return false;
+  }
+};
+
+// 应用包内该有的两样：界面与业务代码（app.asar）、内置字典资源。
+//
+// 内置资源按**成对**口径检查：dictionaries/<版本>/ 下必须同时有 zh-CN.json（翻译字典）与
+// patch.json（该版本的替换逻辑档案），任一份缺了该版本就不可用（引擎会按成对语义明确拒绝）。
+// 打包漏掉档案**只有运行时才会炸**（用户点汉化才报错），所以在这里静态拦住。档案只做最小结构
+// 校验（合法 JSON / version 与目录名一致 / schemaVersion 是数字），完整校验由 version-profile.js
+// 的 validateProfile 在运行时按数据根做。非版本号形态的项（README.md 等）不是版本目录，跳过。
 function checkResources(resourcesDir, label) {
   if (!exists(resourcesDir)) {
     bad(`${label}：找不到 ${resourcesDir}`);
@@ -51,11 +68,48 @@ function checkResources(resourcesDir, label) {
   else if (fs.statSync(asar).size < 100 * 1024) bad(`${label}：app.asar 偏小（${fs.statSync(asar).size} 字节），界面与业务代码可能没打进去`);
   else ok(`${label}：app.asar ${(fs.statSync(asar).size / 1024).toFixed(0)} KB`);
 
-  // 字典（extraResources → resources/dictionaries），至少要有能用的版本
+  // 字典资源（extraResources → resources/dictionaries）：两文件都在才算可用版本
   const dictRoot = path.join(resourcesDir, 'dictionaries');
-  const versions = listDir(dictRoot).filter((v) => exists(path.join(dictRoot, v, 'zh-CN.json')));
-  if (versions.length) ok(`${label}：内置字典 ${versions.join(' / ')}`);
-  else bad(`${label}：resources/dictionaries 下没有可用的 zh-CN.json`);
+  const versions = [];
+  for (const v of listDir(dictRoot)) {
+    if (!DICT_VERSION_RE.test(v) || !isDir(path.join(dictRoot, v))) continue;
+    const dictFile = path.join(dictRoot, v, 'zh-CN.json');
+    const profileFile = path.join(dictRoot, v, PROFILE_FILE);
+    const hasDict = exists(dictFile);
+    const hasProfile = exists(profileFile);
+    if (!hasDict && !hasProfile) continue; // 空目录不算可用版本，也不误报
+    if (!hasDict) {
+      bad(`${label}：内置资源 ${v} 缺字典 zh-CN.json（成对失效）`);
+      continue;
+    }
+    if (!hasProfile) {
+      bad(`${label}：内置资源 ${v} 缺替换逻辑档案 ${PROFILE_FILE}（成对失效，运行时会被引擎拒绝）`);
+      continue;
+    }
+    // 档案最小结构校验：只保证「打进去的是一份该版本的档案」，不做完整 schema 校验
+    let profile;
+    try {
+      profile = JSON.parse(fs.readFileSync(profileFile, 'utf8'));
+    } catch (e) {
+      bad(`${label}：${v} 的 ${PROFILE_FILE} 不是合法 JSON（${e.message}）`);
+      continue;
+    }
+    if (!profile || typeof profile !== 'object' || Array.isArray(profile)) {
+      bad(`${label}：${v} 的 ${PROFILE_FILE} 不是 JSON 对象`);
+      continue;
+    }
+    if (profile.version !== v) {
+      bad(`${label}：${v} 的 ${PROFILE_FILE} version 字段（${JSON.stringify(profile.version)}）与目录名不一致`);
+      continue;
+    }
+    if (typeof profile.schemaVersion !== 'number') {
+      bad(`${label}：${v} 的 ${PROFILE_FILE} 缺数字 schemaVersion`);
+      continue;
+    }
+    versions.push(v);
+  }
+  if (versions.length) ok(`${label}：内置成对资源 ${versions.length} 个版本（${versions.join(' / ')}）`);
+  else bad(`${label}：resources/dictionaries 下没有成对可用的版本资源（zh-CN.json + ${PROFILE_FILE}）`);
 
   return exists(asar) ? asar : null;
 }
@@ -145,6 +199,7 @@ const checkAsarContents = (asar) => {
     'gui/style.css',
     'scripts/common.js',
     'scripts/net.js',
+    'scripts/version-profile.js',
     'scripts/cmd/patch.js',
     'scripts/cmd/restore.js',
     'scripts/dict/dict-sync.js',

@@ -1,51 +1,175 @@
-// scripts/dict/dict-sync.js — 字典在线同步
-// 打包只内嵌最新版本字典，其余版本的字典运行时从仓库获取：
-//   - ensureDict：本地缺该版本字典时才联网（汉化最新版本不联网，直接吃内嵌）；
-//   - syncLatest：用户主动「同步字典」时强制拉取仓库最新版并覆盖。
-// 远程源按 common.remoteDictUrls 的顺序尝试，全失败则抛出可读错误由调用方兜底。
+// scripts/dict/dict-sync.js — 字典与替换逻辑档案的成对在线同步
+// 打包只内嵌最新版本（成对的字典 + 档案），其余版本运行时从仓库获取：
+//   - ensureDict：本地缺该版本资源时才联网；「本地有」按**成对**判（外部成对 → 内嵌成对 → 联网），
+//     只补缺的那份（用户已有的文件不覆盖）；
+//   - syncLatest：用户主动「同步字典」时成对拉取仓库最新版并覆盖（字典 + 档案一起）。
+// 远程源按 common.remoteDictUrls / common.remoteProfileUrls 的顺序成对尝试（raw → jsDelivr → Gitee），
+// 每个源都要两份都取到且校验通过才算成功；全失败抛出可读错误（逐源写清缺哪一份）。
+//
+// 为什么必须成对：引擎（patch / verify）按版本加载档案并强校验锚点，只有字典没有档案时无法汉化。
+// 半对落盘比没落盘更糟——本地看似有资源、引擎却拒绝，且「已存在」判断会让后续同步不再重试。
 'use strict';
 const fs = require('fs');
 const path = require('path');
 const net = require('../net.js');
 const common = require('../common.js');
+const versionProfile = require('../version-profile.js');
 
-// 拉取并校验字典文本：JSON 必须能解析，避免把错误页 / 半截内容落盘成坏字典
-async function fetchDict(version) {
-  const urls = common.remoteDictUrls(version);
+// —— 远程成对资源：同一套候选源，每个源同时取两份文件 ——
+// 字典与档案的候选地址各自由 common 的远程地址函数拼（地址 SSOT 在 common），这里只按序配对。
+// 返回值 label 取主机名（不硬编码源名，换源时日志自动跟着变）。
+function pairSources(version) {
+  const dictUrls = common.remoteDictUrls(version);
+  const profileUrls = common.remoteProfileUrls(version);
+  return dictUrls.map((dictUrl, i) => ({
+    label: new URL(dictUrl).host,
+    dictUrl,
+    profileUrl: profileUrls[i],
+  }));
+}
+
+// 拉取并校验一对资源。opts.fetch 仅供单测注入（默认 net.get）；每个源必须两份都取到、
+// 字典能被 JSON.parse、档案能通过 version-profile 的结构校验，才算该源成功。
+// 全部源失败时抛错：逐源列出「缺哪一份 / 哪份校验失败」，调用方直接展示给用户。
+async function fetchPair(version, opts = {}) {
+  const fetchText = opts.fetch || ((url) => net.get(url, { timeout: 15000 }));
+  const sources = pairSources(version);
   const failures = [];
-  for (const url of urls) {
-    try {
-      const text = await net.get(url, { timeout: 15000 });
-      JSON.parse(text);
-      return { text, url };
-    } catch (e) {
-      failures.push(`${url}\n      ${e.message}`);
+  for (const source of sources) {
+    const texts = {};
+    let broken = false;
+    for (const [kind, url] of [
+      ['dict', source.dictUrl],
+      ['profile', source.profileUrl],
+    ]) {
+      if (broken) break;
+      try {
+        texts[kind] = await fetchText(url);
+      } catch (e) {
+        failures.push(`${source.label} 的${kind === 'dict' ? '字典' : '替换逻辑档案'}取不到：${e.message}`);
+        broken = true;
+      }
     }
+    if (broken) continue;
+    // 先校验字典（错页/半截内容不落盘），再校验档案并取规范化结果（写盘/比对都用这份）。
+    try {
+      JSON.parse(texts.dict);
+    } catch (e) {
+      failures.push(`${source.label} 的字典不是合法 JSON：${e.message}`);
+      continue;
+    }
+    let profile;
+    try {
+      profile = versionProfile.validateProfile(JSON.parse(texts.profile), { version });
+    } catch (e) {
+      failures.push(`${source.label} 的替换逻辑档案校验失败：${e.message}`);
+      continue;
+    }
+    return {
+      version,
+      dictText: texts.dict,
+      profileText: `${JSON.stringify(profile, null, 2)}\n`,
+      profile,
+      url: source.label,
+    };
   }
   throw new Error(
-    `无法获取 GitHub Desktop ${version} 的字典（已尝试 ${urls.length} 个源）：\n    ${failures.join('\n    ')}`
+    `无法获取 GitHub Desktop ${version} 的字典与替换逻辑档案（两者必须成对，缺一不可；` +
+      `已尝试 ${sources.length} 个源）：\n    ${failures.join('\n    ')}`
   );
 }
 
-// 原子落盘：先写 .part 再改名，避免读到写了一半的文件
-function writeDict(version, text) {
-  const file = common.dictFile(version);
-  fs.mkdirSync(path.dirname(file), { recursive: true });
-  const part = `${file}.part`;
-  fs.writeFileSync(part, text);
-  fs.renameSync(part, file);
-  return file;
+function readFileOrNull(file) {
+  try {
+    return fs.readFileSync(file);
+  } catch {
+    return null;
+  }
 }
 
-// 确保汉化前有字典可用。返回 downloaded 告知调用方是否发生了联网下载。
-async function ensureDict(version) {
-  const file = common.dictFile(version);
-  if (fs.existsSync(file)) return { source: 'external', path: file, downloaded: false };
-  if (common.hasEmbeddedDict(version)) {
-    return { source: 'embedded', path: null, downloaded: false };
+// 成对落盘：两份都先写 `.part`，全部就绪后再逐个 rename；任一失败即回滚已替换的文件、
+// 清掉 `.part`，保证磁盘上不会出现「字典新、档案旧/缺」或反之的半对状态。
+// onlyMissing：只写本地缺的文件（ensureDict 用——用户已有的那份不被覆盖）；false 时全量覆盖
+//（syncLatest 用）。
+function writePair(version, pair, { onlyMissing = false } = {}) {
+  const entries = [
+    { label: '字典', target: common.dictFile(version), text: pair.dictText, part: null },
+    { label: '替换逻辑档案', target: versionProfile.profileFile(version), text: pair.profileText, part: null },
+  ].filter((entry) => !(onlyMissing && fs.existsSync(entry.target)));
+  if (entries.length === 0) return { changed: false, files: [] };
+
+  const backups = new Map();
+  const renamed = [];
+  try {
+    for (const entry of entries) {
+      fs.mkdirSync(path.dirname(entry.target), { recursive: true });
+      entry.part = `${entry.target}.part`;
+      fs.writeFileSync(entry.part, entry.text, 'utf8');
+    }
+    for (const entry of entries) {
+      backups.set(entry.target, readFileOrNull(entry.target));
+      fs.renameSync(entry.part, entry.target);
+      renamed.push(entry);
+    }
+    return { changed: true, files: entries.map((entry) => entry.target) };
+  } catch (e) {
+    for (const entry of entries) {
+      if (!entry.part) continue;
+      try {
+        fs.rmSync(entry.part, { force: true });
+      } catch {
+        /* 清 .part 失败不掩盖原始错误 */
+      }
+    }
+    for (const entry of renamed) {
+      try {
+        const backup = backups.get(entry.target);
+        if (backup === null || backup === undefined) fs.rmSync(entry.target, { force: true });
+        else fs.writeFileSync(entry.target, backup);
+      } catch {
+        /* 回滚尽力而为；错误消息里说明可能残留 */
+      }
+    }
+    const err = new Error(
+      `写入 GitHub Desktop ${version} 的字典/替换逻辑档案失败（已尝试回滚，不留半对）：${e.message}`
+    );
+    err.cause = e;
+    throw err;
   }
-  const { text, url } = await fetchDict(version);
-  return { source: 'downloaded', path: writeDict(version, text), downloaded: true, url };
+}
+
+// 读取本地一对资源的文本（不存在返回 null），供 syncLatest 判断「内容是否变化」。
+function readPairText(version) {
+  const read = (file) => (fs.existsSync(file) ? fs.readFileSync(file, 'utf8') : null);
+  return {
+    dictText: read(common.dictFile(version)),
+    profileText: read(versionProfile.profileFile(version)),
+  };
+}
+
+// 确保汉化前有一对可用资源。返回 { source, path, downloaded, files }：
+//   source: external（本地成对）/ embedded（内嵌成对，SEA 产物）/ downloaded（本次联网补齐）。
+// 本地只有一半时联网只补缺的那份（用户已有文件不被覆盖）；联网失败抛错，不静默降级。
+async function ensureDict(version, opts = {}) {
+  const status = versionProfile.pairStatus(version);
+  if (status.paired) {
+    const external = fs.existsSync(common.dictFile(version));
+    return {
+      source: external ? 'external' : 'embedded',
+      path: external ? common.dictFile(version) : null,
+      downloaded: false,
+      files: [],
+    };
+  }
+  const pair = await (opts.fetchPair || fetchPair)(version, opts);
+  const written = writePair(version, pair, { onlyMissing: true });
+  return {
+    source: 'downloaded',
+    path: common.dictFile(version),
+    downloaded: true,
+    url: pair.url,
+    files: written.files,
+  };
 }
 
 // —— 远端字典版本列表（只取列表，不下载字典）——
@@ -103,14 +227,15 @@ async function remoteDictVersions(opts = {}) {
   };
 }
 
-// 切换 / 安装动作之后的字典预取：本地（外部或内嵌）已有就不碰网络，缺了才联网取一份。
-// 与 ensureDict 的区别只在**失败语义**：切换 / 安装本身已经成功，字典没取到不该把整件事判失败，
-// 故这里把异常收成 { ok: false, error } 返回，由调用方在界面 / 菜单里明说「已切换，但字典没取到」。
+// 切换 / 安装动作之后的资源预取：本地（外部或内嵌）成对已有就不碰网络，缺了才联网补齐。
+// 与 ensureDict 的区别只在**失败语义**：切换 / 安装本身已经成功，资源没取到不该把整件事判失败，
+// 故这里把异常收成 { ok: false, error } 返回，由调用方在界面 / 菜单里明说「已切换，但字典与档案
+// 没取全」。错误消息来自 fetchPair，会写清缺的是字典还是档案、试过哪些源。
 //
-// 降级策略（任务要求二选一并说明）：**切换 / 安装成功 + 明确提示字典获取失败**，不拒绝切换。
-// 理由：版本切换（写 config）是用户选定的意图，字典是「切过去顺便准备好」的附赠能力——为一次
-// 网络失败把用户的选择回滚，等于制造一个「切不过去」的假故障；且后续「汉化」时 patch.ensureDict
-// 还会再兜底一次，失败提示里也指向下一步（稍后可在「关于」里点「同步字典」重试）。
+// 降级策略（任务要求二选一并说明）：**切换 / 安装成功 + 明确提示失败**，不拒绝切换。
+// 理由：版本切换（写 config）是用户选定的意图，字典与档案是「切过去顺便准备好」的附赠能力——
+// 为一次网络失败把用户的选择回滚，等于制造一个「切不过去」的假故障；且后续「汉化」时
+// patch.ensureDict 还会再兜底一次，失败提示里也指向下一步（稍后可在「关于」里点「同步字典」重试）。
 // opts.ensure 仅供单测注入（默认 ensureDict）。
 async function prefetchDict(version, opts = {}) {
   const ensure = opts.ensure || ensureDict;
@@ -122,20 +247,34 @@ async function prefetchDict(version, opts = {}) {
       source: r.source,
       downloaded: !!r.downloaded,
       path: r.path,
-      message: r.downloaded ? `已自动下载 ${version} 的字典。` : null,
+      message: r.downloaded ? `已自动下载 ${version} 的字典与替换逻辑档案。` : null,
     };
   } catch (e) {
-    return { ok: false, version, error: `未能获取 ${version} 的字典：${e.message}` };
+    return { ok: false, version, error: `未能获取 ${version} 的字典与替换逻辑档案：${e.message}` };
   }
 }
 
-// 强制更新到仓库最新版（菜单「检查更新」用）；内容未变时不动本地文件
-async function syncLatest(version) {
-  const file = common.dictFile(version);
-  const before = fs.existsSync(file) ? fs.readFileSync(file, 'utf8') : null;
-  const { text, url } = await fetchDict(version);
-  if (before === text) return { changed: false, path: file, url };
-  return { changed: true, path: writeDict(version, text), url };
+// 强制更新到仓库最新版（菜单「同步字典」/ GUI「关于」用）：**成对**拉取并覆盖，内容未变时不动本地文件。
+// changed 为真表示至少一份文件被更新；changedFiles 列出实际写盘的文件（供界面/日志说清动了哪份）。
+async function syncLatest(version, opts = {}) {
+  const pair = await (opts.fetchPair || fetchPair)(version, opts);
+  const before = readPairText(version);
+  const changedFiles = [];
+  if (before.dictText !== pair.dictText) changedFiles.push('zh-CN.json');
+  if (before.profileText !== pair.profileText) changedFiles.push(versionProfile.PROFILE_FILE);
+  const path = common.dictFile(version);
+  const profilePath = versionProfile.profileFile(version);
+  if (changedFiles.length === 0) return { changed: false, path, profilePath, url: pair.url, changedFiles };
+  writePair(version, pair);
+  return { changed: true, path, profilePath, url: pair.url, changedFiles };
 }
 
-module.exports = { fetchDict, writeDict, ensureDict, syncLatest, remoteDictVersions, prefetchDict };
+module.exports = {
+  fetchPair,
+  writePair,
+  readPairText,
+  ensureDict,
+  syncLatest,
+  remoteDictVersions,
+  prefetchDict,
+};

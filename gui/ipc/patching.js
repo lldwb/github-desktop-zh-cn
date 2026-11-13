@@ -4,6 +4,7 @@
 'use strict';
 
 const common = require('../../scripts/common.js');
+const versionProfile = require('../../scripts/version-profile.js');
 const patch = require('../../scripts/cmd/patch.js');
 const restore = require('../../scripts/cmd/restore.js');
 const dictSync = require('../../scripts/dict/dict-sync.js');
@@ -11,15 +12,25 @@ const dictSync = require('../../scripts/dict/dict-sync.js');
 module.exports = function createPatchingHandlers(ctx) {
   const { confirmed, requireTarget, withBusy } = ctx;
 
+  // 本地成对状态 → 确认框里的一句提示。成对完整（字典 + 替换逻辑档案都在）时不提示；
+  // 缺哪份就说哪份——「只有字典、缺档案」是老用户数据根最常见的情形，不能笼统说成「本地无字典」。
+  function localTip(version) {
+    const pair = versionProfile.pairStatus(version);
+    if (pair.paired) return '';
+    const missing = [];
+    if (!pair.dict) missing.push('字典');
+    if (!pair.profile) missing.push('替换逻辑档案');
+    return `（本地缺${missing.join('与')}，将联网成对获取；也可在「关于」里点「同步字典」）`;
+  }
+
   return {
     patch: async () => {
       const t = requireTarget();
       if (t.error) return t.error;
       const { target, version } = t;
 
-      // 本地（含内嵌）没有对应字典时不中止：交给 patch 联网取，取不到再报错（与 CLI 一致）
-      const local = common.listDictVersions().includes(version);
-      const tip = local ? '' : `（本地无 ${version} 字典，将联网获取）`;
+      // 本地不成对时不中止：交给 patch 联网成对获取（字典 + 档案都要），取不到再报错（与 CLI 一致）
+      const tip = localTip(version);
       return confirmed({
         askOptions: {
           buttons: ['开始汉化', '取消'],
@@ -69,20 +80,27 @@ module.exports = function createPatchingHandlers(ctx) {
       });
     },
 
-    // 同步字典（原「检查更新」里的一半，现在独立）：拉当前版本的最新字典覆盖本地。
-    // 只在用户主动点的时候走——汉化时本地缺字典由 patch 自己联网取，那条路不受影响；
-    // 这里的语义是「强制拉最新」，与 CLI 菜单的「同步字典」同一套（都走 dict-sync.syncLatest）。
+    // 同步字典与替换逻辑档案（成对）：拉当前版本的最新资源覆盖本地。只在用户主动点的时候走——
+    // 汉化时本地缺资源由 patch 自己联网成对取，那条路不受影响；这里的语义是「强制拉最新」，
+    // 与 CLI 菜单的「同步字典」同一套（都走 dict-sync.syncLatest）。
     syncDict: async () => {
       const t = requireTarget();
       if (t.error) return t.error;
       const { version } = t;
 
-      return withBusy('syncDict', `正在同步 ${version} 字典 …`, async () => {
+      return withBusy('syncDict', `正在同步 ${version} 字典与替换逻辑档案 …`, async () => {
         try {
           const r = await dictSync.syncLatest(version);
-          return { ok: true, notes: [r.changed ? `字典已更新：${version}` : `字典已是最新（${version}）。`] };
+          return {
+            ok: true,
+            notes: [
+              r.changed
+                ? `字典与替换逻辑档案已更新：${version}`
+                : `字典与替换逻辑档案已是最新（${version}）。`,
+            ],
+          };
         } catch (e) {
-          return { ok: false, error: `更新字典失败：${e.message}` };
+          return { ok: false, error: `同步字典与替换逻辑档案失败：${e.message}` };
         }
       });
     },

@@ -81,11 +81,14 @@ function resolveVersion(args) {
   return { version, app };
 }
 
-// 字典就位并读出条目：本地有外部字典或内嵌字典都不联网；两者都没有（如汉化旧版本）才下载。
-// 返回 { entries, downloaded }。
+// 资源就位并读出条目：本地（外部成对或内嵌成对）有就不联网；缺一份或都缺才联网补齐
+//（dict-sync.ensureDict 成对语义：只补缺的那份，用户已有文件不被覆盖）。返回 { entries, downloaded }。
 async function prepareDict(version, log) {
   const synced = await dictSync.ensureDict(version);
-  if (synced.downloaded) log(`已下载字典：${synced.path}`);
+  if (synced.downloaded) {
+    const names = (synced.files || []).map((f) => path.basename(f)).join(' + ');
+    log(`已下载字典与替换逻辑档案${names ? `（${names}）` : ''}：${synced.path}`);
+  }
 
   const entries = loadDict(version);
   log(`字典：${dictLabel(version)}（${entries.size} 条）`);

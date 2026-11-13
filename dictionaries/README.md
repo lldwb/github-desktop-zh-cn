@@ -1,19 +1,22 @@
-# dictionaries/ — 语言字典（核心资产）
+# dictionaries/ — 版本资产（翻译字典 + 替换逻辑档案）
 
-本目录是仓库的核心资产：**「原文 → 中文」翻译字典**，按 GitHub Desktop 版本目录组织。
+本目录是仓库的核心资产：**按 GitHub Desktop 版本成对组织的两份文件**——`zh-CN.json` 是「原文 → 中文」翻译字典（唯一翻译资产），`patch.json` 是该版本的**替换逻辑档案**（记录「怎么替换」；是数据、不执行，见下「每版本替换逻辑档案」）。
 
 ## 目录约定
 
 ```
 dictionaries/
-├── 3.6.5/          # 按 GitHub Desktop 版本号分目录
-│   └── zh-CN.json   # 该版本的字典
-├── 3.6.6/
-│   └── zh-CN.json
+├── 3.6.6/            # 按 GitHub Desktop 版本号分目录
+│   ├── zh-CN.json    # 该版本的翻译字典（原文 → 中文）
+│   └── patch.json    # 该版本的替换逻辑档案（怎么替换）
+├── 3.6.7/
+│   ├── zh-CN.json
+│   └── patch.json
 └── README.md
 ```
 
-- **版本强对应**：字典必须与 GitHub Desktop 版本一一对应（错配可能导致应用无法启动）；`patch` / `verify` 会校验字典版本与安装版本一致。
+- **版本强对应**：字典与替换逻辑档案同目录、同版本强对应（目录名 = 官方产物的 `package.json.version`，档案里也写 `version` 并在加载时核对）；`patch` / `verify` 会校验版本一致，**缺档案（或档案不合法）明确拒绝**并给下一步，不会回退到其它版本的替换逻辑。错配可能导致应用无法启动。
+- **成对纪律**：字典与档案是**一对**，缺一不可——引擎按 `pairStatus` / `assertPair` 判定，只拿到一半时报出缺的是哪份、怎么补。注意两个口径：`common.listDictVersions()` 保留原义「字典存在」（字典维护 / 构建内嵌等只看字典的场景用），`version-profile.js` 的 `listPairVersions()` 才是「成对完整」（GUI / CLI 的「有没有字典」判定用）。
 - **来源**：`main.js`（主进程）与 `renderer.js`（渲染进程）中硬编码的界面文本（含界面元素、读屏文本、命令行文本、报错文本；不含用户不可见的日志文本）。
 - **自定义**：用户可按需在字典中覆盖 / 增补条目——但**改完仍要过 `dict-edit` 的校验**（见下），手工改会绕过它。
 
@@ -35,7 +38,40 @@ dictionaries/
 - **分段判据**：`common` 段对**所有平台**生效；平台段只对该平台生效。同名键同时在 `common` 与平台段时**平台段优先**（同一文案在不同平台语境不同的场合）。
 - **`linux` 段为空是预期**：官方从未发布 Linux 产物（近 30 个 release 的资产全为 Windows nupkg/exe/msi 与 macOS zip）。
 - **`groups` 只是分类参考**，不影响替换行为；由 `scripts/dict/dict-groups.js` 读产物 sourcemap 推断源文件归属，未定位到的落「待分组」。
-- **唯一写入口是 `scripts/dict/dict-edit.js`**（`add` / `update` / `remove` / `set-group` / `move` / `merge` / `regroup` / `migrate` / `apply`）：先校验再原子替换，校验不过时原文件保持不动。**别手工编辑这个 JSON**——手工改绕过校验，坏数据要等 `patch` 时才暴露。要重跑一个已有字典的版本，用 `scripts/dict/dict-auto.js --on-exist=diff|overwrite`（`diff` 全程不写盘）。
+- **唯一写入口是 `scripts/dict/dict-edit.js`**（`add` / `update` / `remove` / `set-group` / `move` / `merge` / `regroup` / `migrate` / `apply`）：先校验再原子替换，校验不过时原文件保持不动。**别手工编辑这个 JSON**——手工改绕过校验，坏数据要等 `patch` 时才暴露。要重跑一个已有字典的版本，用 `scripts/dict/dict-auto.js --on-exist=diff|overwrite`（`diff` 全程不写盘）。注意这是**字典**的写入口；替换逻辑档案 `patch.json` 的唯一写入口是 `scripts/version-profile.js` 的 `writeProfile()`（见下节），两条写入口不混。
+
+## 每版本替换逻辑档案（patch.json）
+
+`zh-CN.json` 记录「译什么」，`patch.json` 记录「怎么替换」——它是**数据，不执行**（引擎只解释，不 `eval`、不 require 档案里引用的任何东西）。两份文件同目录、同版本强对应。
+
+**为什么需要**：替换逻辑本身也有版本相关性——注入点（两个注入块插在 main.js 末尾 `//# sourceMappingURL=` 注释之前）、更新管控的方法锚点（`async checkForUpdates(`）、右键菜单的 role → 英文标签表，都随版本 / Electron 而变。过去这些写在代码里、按「最新版实测值」全局生效，旧版本只是「没报错」而不是「验证过」。搬进档案后，引擎按目标版本加载并**强校验**：锚点次数不符（0 次或非期望次数）、策略名未知、档案结构非法都**明确拒绝**并给可读下一步。
+
+字段概览（`schemaVersion: 1`，完整定义与示例见 `docs/design/version-profile/design.md`）：
+
+| 字段 | 内容 |
+| --- | --- |
+| `schemaVersion` / `version` / `targets` | 结构版本、目标版本（必须等于目录名）、替换对象（须与 `common.TARGETS` 完全一致） |
+| `sourcemaps` | 官方产物 sourcemap 可用性（`scan` / 组名推断依赖它） |
+| `anchors` | 锚点 id → `{ text, file, placement, expected }`：注入点、更新管控方法锚点的文本与实测出现次数 |
+| `injections` | 策略名 → 参数：`context-menu`（两平台 role → 英文标签表、是否启用、注入点）与 `update-control`（方法锚点、注入点、是否启用；不支持的版本显式禁用并写原因） |
+| `evidence` | 两平台官方产物的探测证据：产物名 / 大小 / 包内路径 / `main.js`、`renderer.js` 的字节数与 sha256 / 锚点实测次数 / 标签来源与字面量次数 |
+
+**谁生成**：按该版本的官方两平台产物**探测生成**，不手写、不复制旧版本：
+
+```bash
+node scripts/version-profile.js probe --version <版本> --write   # 探测并落盘（--overwrite 覆盖已核对档案）
+node scripts/version-profile.js show --version <版本>            # 查看摘要（--json 打印完整档案）
+node scripts/version-profile.js validate --version <版本>        # 结构 + 证据自洽校验（含成对提示）
+node scripts/version-profile.js check --version <版本> --path <resources目录>  # 对本地产物断言锚点
+```
+
+探测只读官方产物、不执行其中任何代码；右键菜单标签表从产物 sourcemap 里的官方源码（`build-default-menu.ts`）推导，并与该平台 bundle 里的字面量交叉验证——标签错一个字，注入后再由字典替换就会静默落空，所以宁可探测失败也不写「大概是这样」。
+
+**唯一写入口**：`scripts/version-profile.js` 的 `writeProfile()`（先整份校验、再 `.part` 改名的原子落盘；默认拒绝覆盖已存在的档案）。禁止手工编辑 `patch.json`，也禁止把旧版本的档案复制给新版本——锚点与标签必须按该版本官方产物实测。
+
+**缺档案的行为**：引擎（`patch` / `verify`，以及 `restore` 重放更新管控组时）按成对语义拒绝，并指出缺哪份、怎么补（工具「同步字典」会成对拉取，或按上面的 `probe` 命令生成）。**尚未迁移出档案的版本打补丁会被明确拒绝——这是预期语义，不是 bug**；补齐档案后自动恢复。远端目录列表只能说明「远端可能有」，不能证明档案存在；真正下载 / 使用时成对获取并强校验，缺档案给明确错误与下一步（同步字典 / 更新工具）。
+
+**升级版本必须重新探测档案**：新版本官方产物重新构建后，注入锚点、右键菜单标签来源、整模板键里的局部变量名都可能变化；沿用旧版本档案会让注入静默落空或插错位置。升级流程见 `.claude/skills/translation-maintain/references/版本升级.md`。
 
 ## 键形态与替换规则
 

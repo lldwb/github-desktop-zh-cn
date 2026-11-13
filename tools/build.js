@@ -55,22 +55,39 @@ function printHelp() {
   -h, --help       显示本帮助`);
 }
 
-// 只内嵌最新版本的字典：产物保持单文件、体积最小。其余版本由运行时的 dict-sync
-// 从仓库获取（见 AGENTS.md 的「在线能力」）——汉化最新版本无需联网。
+// 只内嵌**最新一版成对资源**（字典 zh-CN.json + 替换逻辑档案 patch.json）：产物保持单文件、
+// 体积最小。其余版本运行时由 dict-sync 成对从仓库获取（见 AGENTS.md 的「在线能力」）——汉化
+// 最新版本无需联网。
+//
+// 为什么必须成对：引擎按该版本的档案决定「注入到哪、锚点期望几次」，只有字典没有档案的版本
+// 打不了补丁（patch 会明确拒绝）。因此「可用版本」= 两文件都齐；最新版本缺任一文件时**不内嵌
+// 它**，退到最新的成对版本并在构建日志里警告（让产物可用，同时把缺档案的版本暴露给维护者）。
 // 「最新」只认三段数字目录（DICT_VERSION_RE）：夹具、下载残留、临时解包目录都不算数。
-function collectAssets() {
-  const dir = path.join(REPO_ROOT, 'dictionaries');
+function collectAssets(dictRoot = path.join(REPO_ROOT, 'dictionaries')) {
   const versions = fs
-    .readdirSync(dir, { withFileTypes: true })
-    .filter((e) => e.isDirectory() && DICT_VERSION_RE.test(e.name) && fs.existsSync(path.join(dir, e.name, 'zh-CN.json')))
+    .readdirSync(dictRoot, { withFileTypes: true })
+    .filter((e) => e.isDirectory() && DICT_VERSION_RE.test(e.name))
     .map((e) => e.name)
     .sort(compareVersions);
-  if (versions.length === 0) throw new Error('dictionaries/ 下没有可用字典，无法内嵌');
-  const latest = versions[versions.length - 1];
-  if (versions.length > 1) {
-    console.log(`     内嵌字典只取最新版本 ${latest}（其余 ${versions.length - 1} 个版本运行时在线获取）`);
+  const has = (version, file) => fs.existsSync(path.join(dictRoot, version, file));
+  const pairs = versions.filter((version) => has(version, 'zh-CN.json') && has(version, 'patch.json'));
+  if (pairs.length === 0) {
+    throw new Error('dictionaries/ 下没有成对的「字典 + 替换逻辑档案」，无法内嵌');
   }
-  return { [`dictionaries/${latest}/zh-CN.json`]: path.join(dir, latest, 'zh-CN.json') };
+  const latest = pairs[pairs.length - 1];
+  const incomplete = versions.filter((version) => has(version, 'zh-CN.json') && !has(version, 'patch.json'));
+  if (incomplete.length > 0) {
+    console.warn(
+      `     警告：以下版本有字典但缺替换逻辑档案（不内嵌、打补丁会被引擎拒绝）：${incomplete.join(' / ')}`
+    );
+  }
+  if (versions.length > 1) {
+    console.log(`     内嵌只取最新成对版本 ${latest}（其余 ${versions.length - 1} 个版本运行时在线成对获取）`);
+  }
+  return {
+    [`dictionaries/${latest}/zh-CN.json`]: path.join(dictRoot, latest, 'zh-CN.json'),
+    [`dictionaries/${latest}/patch.json`]: path.join(dictRoot, latest, 'patch.json'),
+  };
 }
 
 // 优先用本地安装的 postject，其次 npx 拉取固定版本
@@ -156,7 +173,7 @@ function main() {
     fs.writeFileSync(bundleFile, code, 'utf8');
     console.log(`1/5 已打包入口：${path.relative(REPO_ROOT, bundleFile)}（${(Buffer.byteLength(code) / 1024).toFixed(1)} KB）`);
 
-    // 2. 生成 SEA 配置（内嵌全部字典；用绝对路径，避免相对路径基准歧义）
+    // 2. 生成 SEA 配置（内嵌最新一版成对的字典与档案；用绝对路径，避免相对路径基准歧义）
     const assets = collectAssets();
     const blobFile = path.join(buildDir, 'sea-prep.blob');
     const configFile = path.join(buildDir, 'sea-config.json');
@@ -176,7 +193,7 @@ function main() {
       )}\n`,
       'utf8'
     );
-    console.log(`2/5 已生成 SEA 配置（内嵌字典 ${Object.keys(assets).length} 份）`);
+    console.log(`2/5 已生成 SEA 配置（内嵌最新成对资源 ${Object.keys(assets).length} 个文件）`);
 
     // 3. 生成 blob（基底若非当前 node，用 --node 指定的那份来跑——blob 与最终产物必须是同一个 node）
     const baseNode = args.node || process.execPath;
@@ -219,11 +236,15 @@ function main() {
     // 产物自检：能启动并输出帮助，说明注入成功
     const probe = execFileSync(outFile, ['--help'], { encoding: 'utf8' });
     if (!probe.includes('用法')) throw new Error('产物自检失败：--help 未输出预期内容');
-    console.log('     自检通过：产物可执行且内嵌字典就位');
+    console.log('     自检通过：产物可执行且内嵌资源就位');
   } catch (e) {
     console.error(`错误：${e.message}`);
     process.exit(1);
   }
 }
 
-main();
+// collectAssets 单独导出：构建脚本本身不 import（main 由 require.main 守门），导出只为单测
+// 能在临时目录上验证「成对选择 / 缺档案警告」规则，不依赖仓库 checkout 的真实内容。
+module.exports = { collectAssets };
+
+if (require.main === module) main();

@@ -512,6 +512,14 @@ function remoteDictUrls(version) {
   return [`${GH_RAW}/${rel}`, `${GH_CDN}/${rel}`, `${GITEE_RAW}/${rel}`];
 }
 
+// 替换逻辑档案的远程候选地址（与字典同一套源与顺序）。档案 = dictionaries/<版本>/patch.json，
+// 与字典**成对**：下载/使用时必须两份都拿到（见 version-profile.js 的 pairStatus / assertPair）。
+// 地址拼装一律留在本文件（远程地址 SSOT），dict-sync 等调用方不自行拼 URL。
+function remoteProfileUrls(version) {
+  const rel = `dictionaries/${version}/patch.json`;
+  return [`${GH_RAW}/${rel}`, `${GH_CDN}/${rel}`, `${GITEE_RAW}/${rel}`];
+}
+
 // 远端仓库**字典目录列表**的候选地址（按序尝试：GitHub API 权威源 → Gitee 镜像兜底）。
 // 用途是「显示阶段判断某个版本远端有没有字典」——只取目录名，**不下载任何字典文件**：
 // 下载走 remoteDictUrls + dict-sync.ensureDict，只在切换 / 安装这类动作里发生。
@@ -972,6 +980,7 @@ module.exports = {
   splitScopedKey,
   reverseEntries,
   remoteDictUrls,
+  remoteProfileUrls,
   remoteDictListUrls,
   hasEmbeddedDict,
   embeddedAsset,

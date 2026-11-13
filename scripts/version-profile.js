@@ -630,6 +630,15 @@ function assertPair(version) {
   );
 }
 
+// 本机**成对完整**的版本列表（外部文件 ∪ 内嵌资源；升序，与 common.listDictVersions 同序）。
+// GUI/CLI 的「切换版本」「有没有字典」判定用它：只有字典没有档案的版本不算可用——引擎会拒绝，
+// 界面若标成「有字典」，用户点了汉化才报错（见 docs/design/version-profile/design.md §8.4）。
+// 注意保留 common.listDictVersions() 原义（字典存在），不要直接改它：它被字典维护、构建内嵌
+// 等「只看字典」的场景使用，语义改成成对会扩散到一堆无关调用点。
+function listPairVersions() {
+  return common.listDictVersions().filter((version) => pairStatus(version).paired);
+}
+
 // ============================ 写入口 ============================
 
 // 档案的唯一写入口：先整份校验、再写 .part 改名（原子落盘，失败不留半截文件）。
@@ -1375,6 +1384,7 @@ module.exports = {
   assertAnchors,
   pairStatus,
   assertPair,
+  listPairVersions,
   writeProfile,
   probeApp,
   deriveMenuLabels,

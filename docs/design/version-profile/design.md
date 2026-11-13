@@ -1,7 +1,11 @@
 # 每版本替换逻辑档案（version-profile）设计
 
-> 状态：**第一阶段已落地**（模块 + 3.6.7 样板档案 + patch/restore/verify 接入 + 单测 + 端到端）。
-> 第二阶段（其余 4 个存量版本档案、dict-sync / 打包 / GUI / dict-auto / CI / 文档）见 §8，尚未实施。
+> 状态：**两个阶段均已落地**。
+> 第一阶段：模块 + 3.6.7 样板档案 + patch/restore/verify 接入 + 单测 + 端到端；
+> 第二阶段：3.6.0/3.6.4/3.6.5/3.6.6 档案、dict-sync 成对获取、build 内嵌最新成对、Electron 播种与打包校验、
+> GUI/CLI 成对判定、dict-auto 档案产出 + 失败分类 + 待译草稿 artifact、CI workflow、文档同步
+>（§8 各节末尾有「实现状态」回填，§9 有最终测试与端到端记录）。3.6.8~3.6.10 的档案由版本/字典线用同一工具产出，
+> 不属本线写作用域。
 >
 > 读者：维护「版本升级」流水线的人、正在改 `scripts/cmd/*` 与 CII 的人、需要读/写 `dictionaries/<版本>/patch.json` 的人。
 > 相关实现：`scripts/version-profile.js`（本设计的唯一实现）、`scripts/cmd/patch.js`、`scripts/cmd/restore.js`、
@@ -298,15 +302,36 @@ sourcemap：两平台 `main.js.map` / `renderer.js.map` 均 present 且带 sourc
 windows `&Undo / &Redo / Cu&t / &Copy / &Paste / Delete / Select &all`，
 macos `Undo / Redo / Cut / Copy / Paste / Delete / Select All`；每个标签在对应平台 bundle 的字面量次数均为 1（delete 为 0）。
 
+### 6.5 存量版本探测记录（第二阶段，2026-11-14）
+
+四个存量版本均按同一命令逐版本探测（各自独立进程；release-assets 主机偶发重置时重试），**全部成功**，
+档案结构一致（schemaVersion 1，锚点两平台均为 `injectionPoint=1` / `checkForUpdates=1` 故 update-control 启用，
+标签 7 个 × 两平台），每个档案约 7 KB：
+
+| 版本 | windows 产物 | macos 产物 | windows main.js（字节 / sha256 前 12） | macos main.js | 探测证据 |
+| --- | --- | --- | --- | --- | --- |
+| 3.6.0 | `GitHubDesktop-3.6.0-x64-full.nupkg` | `GitHub.Desktop-x64.zip` | 240,785 / `f9db58c97b52` | 237,890 / `8da24bf1f7f0` | 两平台锚点 1/1、标签 7/7 |
+| 3.6.4 | `GitHubDesktop-3.6.4-x64-full.nupkg` | `GitHub.Desktop-x64.zip` | 241,605 / `d082cb40047e` | 238,726 / `5436eaec56a2` | 同上 |
+| 3.6.5 | `GitHubDesktop-3.6.5-x64-full.nupkg` | `GitHub.Desktop-x64.zip` | 241,676 / `ea583adb1bb2` | 238,797 / `d1bf7e201d2c` | 同上 |
+| 3.6.6 | `GitHubDesktop-3.6.6-x64-full.nupkg` | `GitHub.Desktop-x64.zip` | 242,192 / `ff9db9cb646e` | 239,979 / `1718e97b55dd` | 同上 |
+
+结论：3.6.0~3.6.7 的注入点/方法锚点与右键菜单标签表在官方产物上同形（「旧版本只是没报错」的猜测被实测取代）；
+每份档案的 `evidence.platforms.<平台>.files` 记录了 main.js / renderer.js / package.json 的字节数与 sha256，
+可据此复核探测所用产物（例如 3.6.6 的 windows main.js 与 `tmp/backup/3.6.6/main.js` 一致）。
+端到端（patch/verify/restore 在官方产物副本上）结果见 §9.2。
+
 ## 7. 兼容与迁移
 
-### 7.1 阶段划分与中间态
+### 7.1 阶段划分与迁移状态
 
-- **第一阶段（已落地）**：模块 + 3.6.7 样板 + patch/restore/verify 接入 + 单测。存量 5 个版本里只有 3.6.7 有档案，
-  因此 **3.6.0 / 3.6.4 / 3.6.5 / 3.6.6 在本阶段会明确拒绝打补丁/校验**（消息给「探测生成」下一步）。
-  这是**刻意的**：宁可拒绝，也不静默套用未经探测的锚点。第二阶段补上这 4 份档案后恢复。
-- **第二阶段**：其余 4 个存量版本按各自官方产物探测生成档案；`3.6.8~3.6.10` 由版本/字典线在产出字典时同步产出档案
-  （同一套 `probeApp` + `buildProfile`，见 §8.6）；流水线各环节改为成对（§8）。
+- **第一阶段（已落地）**：模块 + 3.6.7 样板 + patch/restore/verify 接入 + 单测。当时存量 5 个版本里只有 3.6.7
+  有档案，其余版本会被明确拒绝（消息给「探测生成」下一步）——宁可拒绝，也不静默套用未经探测的锚点。
+- **第二阶段（已落地）**：3.6.0 / 3.6.4 / 3.6.5 / 3.6.6 按各自官方产物探测生成档案（§6.5），
+  至此 3.6.0~3.6.7 全部成对；`3.6.8~3.6.10` 由版本/字典线用同一工具产出（不属本线写作用域）；
+  流水线各环节改为成对（§8）。
+- **中间态语义保留**：任何版本只要缺档案（例如用户只手动放了 `zh-CN.json`、或远端只同步到一半），
+  `patch` / `verify` 都会**明确拒绝**并给出下一步（同步字典 / 探测生成），不会回退到其它版本的逻辑。
+  这是设计内的安全语义，不是故障。
 
 ### 7.2 过渡默认值（二阶段应删除）
 
@@ -324,27 +349,33 @@ macos `Undo / Redo / Cut / Copy / Paste / Delete / Select All`；每个标签在
   ——这改变了「只放一份字典就能覆盖」的既有能力，是有意的成对纪律；说明要进 `dictionaries/README.md`。
 - 旧版工具（不认识档案）读新目录：只会忽略 `patch.json`，行为与改造前一致（向后兼容）。
 
-## 8. 流水线改造清单（第二阶段，待实施）
+## 8. 流水线改造（第二阶段，已实施）
 
-> 以下为设计定稿，实施时逐项落地并回填本文件状态。**接口以 `scripts/version-profile.js` 的导出为准**（§10）。
+> 本节是**实现后的最终口径**；各小节末尾的「实现状态」标注了对应代码与验证方式。文档同步（AGENTS.md /
+> dictionaries/README.md / 版本升级.md / 已知坑.md）见 §8.7。
 
 ### 8.1 在线获取成对（`scripts/dict/dict-sync.js` + `common.js`）
 
 - `common.js`：新增 `remoteProfileUrls(version)`（与 `remoteDictUrls` 同一套 raw → jsDelivr → Gitee 兜底；
-  URL 拼装仍只能在 common，遵守「远程地址只有一处定义」纪律）；新增 `profileFile` / 内嵌档案判定所需的路径函数
-  （或直接复用 `version-profile.js` 的 `profileFile` / `hasEmbeddedProfile`）。
-- `dict-sync.js`：`fetchPair(version)` 逐源同时取 `zh-CN.json` 与 `patch.json`，**两者都取到且都通过校验才算该源成功**；
-  `writePair()` 两文件各写 `.part`、全部就绪后依次 rename，第二次 rename 失败要回滚第一次；
-  `ensureDict()` 改为**成对判断**（外部成对 → 内嵌成对 → 联网成对），返回 `missing` 区分缺哪份；
-  `syncLatest()` 覆盖语义同样成对；`prefetchDict()` 文案改「字典与档案」并区分网络失败 / 远端缺档案。
-- 失败语义：只拿到一半 → 明确失败（列缺哪份），不落盘半对。
+  URL 拼装仍只能在 common，遵守「远程地址只有一处定义」纪律）。
+- `dict-sync.js`：`fetchPair(version)` 按源成对取两份——**同一个源必须字典与档案都取到、字典能 JSON.parse、
+  档案能通过 `validateProfile`，才算该源成功**；失败时逐源列出「缺哪一份 / 哪份校验失败」。
+  `writePair()` 两份都先写 `.part`、全部就绪后再逐个 rename；任一 rename 失败即回滚已替换的文件并清 `.part`，
+  保证磁盘上不出现半对。`ensureDict()` 改为**成对判断**（外部成对 → 内嵌成对 → 联网成对），
+  本地只有一半时联网**只补缺的那份**（用户已有文件不被覆盖）；`syncLatest()` 成对覆盖，
+  返回 `changedFiles`；`prefetchDict()` 文案改「字典与替换逻辑档案」，失败消息来自 fetchPair（写清缺哪份）。
+- **实现状态**：已落地；单测 `test/dict/dict-sync-pair.test.js`（fetchPair 逐源成功/失败文案、writePair
+  只补缺/原子回滚/无 `.part` 残留、ensureDict 三态、syncLatest 成对覆盖与未变不动，全部注入式零网络）。
 
 ### 8.2 打包内嵌（`tools/build.js`）
 
-- `collectAssets()` 改为「最新版本成对」：`dictionaries/<latest>/{zh-CN.json,patch.json}` 两份都内嵌；
-  最新版本缺任一文件 → **构建失败**（不产出半对产物）。
-- **一并修正既有不一致**（archify-lead 取证发现）：`build.js:61-74` 的实现只内嵌最新一版字典，
-  而 159 行附近注释写「内嵌全部字典」——以实现为准改注释/日志（日志按「版本数」而不按 assets 条数打印）。
+- `collectAssets()` 改为内嵌**最新一版成对资源**（`zh-CN.json` + `patch.json` 两份都齐才算可用版本）；
+  若更新的版本有字典但缺档案，**退到最新的成对版本并在构建日志里警告**（让产物可用，同时把缺口暴露给维护者），
+  只有在没有任何成对版本时才失败。
+- **一并修正既有不一致**：原实现只内嵌最新一版字典，而注释写「内嵌全部字典」——以实现为准改注释/日志
+  （日志按「最新成对资源 N 个文件」打印）。
+- **实现状态**：已落地；`collectAssets(dictRoot)` 导出供单测，`test/tools/build-assets.test.js` 覆盖
+  「选最新成对 / 缺档案告警退档 / 无成对即失败」（临时目录驱动，不依赖仓库 checkout 内容）。
 
 ### 8.3 Electron 打包与播种（`electron-builder.yml` + `gui/main.js` + `tools/check-gui-dist.js`）
 
@@ -352,51 +383,68 @@ macos `Undo / Redo / Cut / Copy / Paste / Delete / Select All`；每个标签在
 - `seedBundledDicts()` 改为**逐文件补齐**：`zh-CN.json` 与 `patch.json` 分别判断目标缺则复制
   （老用户数据根已有字典、没有档案，必须能只补档案；不能按「版本已播种」整体跳过）；
   `readdirSync` 增加 `DICT_VERSION_RE` 过滤（README/夹具目录不进数据根）。
-- `check-gui-dist.js`：内置资源校验改为**成对**（两文件都在才算版本可用；档案做最小结构校验：合法 JSON、
-  `version` 与目录名一致、`schemaVersion` 存在）；asar 清单加入 `scripts/version-profile.js`。
+- `check-gui-dist.js`：内置资源校验改为**成对**（两文件都在才算版本可用；档案做最小结构校验：
+  合法 JSON、`version` 与目录名一致、`schemaVersion` 存在）；asar 清单加入 `scripts/version-profile.js`。
+- **实现状态**：已落地（GUI 链由并行子任务完成，主线复核 diff 与 `node --check`；Electron 运行时冒烟
+  由 CI 的产物启动冒烟步骤覆盖，本地未跑 GUI 运行时）。
 
 ### 8.4 GUI / CLI 的「有没有字典」判定
 
-- 保留 `common.listDictVersions()` 原义（字典存在），新增 `listDictPairs()`（成对）给需要成对语义处——
-  避免直接改语义扩散到 8+ 调用点与既有测试。
-- `gui/ipc/misc.js` 的 `hasDict` 与 `collectState` 改为**成对口径**；`gui/renderer.js` 三态
-  `local / remote / none` 不变，但 `local` 指成对完整；「本地半对」要有单独提示（如「缺替换逻辑档案，请同步」），
-  不能显示成可用、点汉化才报错。
-- `install-version.listDownloadable()` / CLI 菜单 / `prefetchDict` 文案同步成对口径。
-- 远端**目录列表无法证明档案存在**（现在只取 `dictionaries/` 目录名）：二选一
-  （① 增加 `dictionaries/manifest.json` 由产出时同 commit 更新，含两文件 sha256；② 维持目录级但把
-  `remoteDict.ok` 语义降为「远端可能有」，prefetch 失败文案区分网络失败与远端缺档案）。实施前定夺并更新 §8.4。
+- 保留 `common.listDictVersions()` 原义（字典存在），新增 `version-profile.js` 的
+  `listPairVersions()`（成对完整）——避免直接改语义扩散到 8+ 调用点与既有测试。
+- `gui/ipc/misc.js` 的 `hasDict` 与 `collectState` 改为**成对口径**，并带 `profileMissing`（有字典缺档案，
+  供界面单独提示）；`gui/renderer.js` 三态 `local / remote / none` 不变，但 `local` 指成对完整，
+  「缺替换逻辑档案」有独立标签（不能显示成可用、点汉化才报错）。
+- `install-version.listDownloadable()` / CLI 菜单 / `prefetchDict` 文案同步成对口径
+  （`opts.pairVersions` 可注入；保留 `opts.dictVersions` 兼容测试）。
+- **决策（用户已确认）：不引入 manifest 资产。** 理由：manifest 要新增资产 + 缓存 + 原子性（产出/提交/同步
+  三处都要维护），而收益只是「显示阶段更精确」；正确性由**下载与使用时的强校验**保证——远端目录列表只代表
+  「远端可能有版本目录」，真正 prefetch / patch 时 `fetchPair` 会成对校验，缺档案给明确错误与下一步
+  （同步字典 / 更新工具）。因此切换版本窗口显示阶段维持「本地目录 + 远端目录名」。
+- **实现状态**：已落地（`listPairVersions` 单测见 `test/version-profile.test.js`；install-version 用例已更新）。
 
 ### 8.5 自动产出（`scripts/dict/dict-auto.js` + `.github/workflows/dict-auto.yml`）
 
-- **产出档案**：`buildOne` 里在取到两平台产物后调 `probeApp` + `buildProfile`（纯函数，不额外联网）；
-  与字典同一轮写盘、同一事务（任一失败 → 两个文件都回滚）；`--no-ai` 也产出/校验档案（档案与 AI 无关）。
-- **迁移死锁**：`--on-exist=skip` 现在只判 `zh-CN.json` 存在 → 存量版本永远补不上档案、而引擎会拒绝。
-  改为「字典**与档案**都存在才算 skip」。
-- **失败分类**（用户已确认策略）：
-  - `failureKind`：`ai-unreachable`（网络/超时/鉴权/5xx）/ `ai-quality`（占位符/空译/无汉字）/
-    `product-fetch` / `profile-probe` / `dry-run-threshold` / `dict-validate`；
-  - 失败时上传**待译草稿 artifact**（`tmp/dict-auto-pending-*.json`：version / text / source / targets / reason），
-    workflow 加 `actions/upload-artifact`（`always()`，与报告 JSON 一起）；
-  - 注解带 `title=`（`::error title=AI 网关不可达::…` / `::error title=翻译质量不达标::…`）；
-  - AI 连通性**预检**（`--preflight` 或 workflow 内小脚本）：不可达时 fail-fast，不再伪装成「未译超门槛」。
-- **gate 不变**：干跑语法/命中率、未译比例上限、字典校验等既有门槛保持严格；不静默降级。
-- **提交门禁**：提交前加「字典与档案成对」检查步骤（轮内 `dictionaries/*` 缺任一 → `::error title=字典与档案不成对::`），
-  防止半对入库后被 skip 永久固化。
+- **产出档案**：`buildOne` 取到两平台产物后调 `probeProfile`（`probeApp` + `buildProfile`，纯本地、不额外联网），
+  与字典同一轮落盘：字典走 dict-edit 事务 → 档案走 `writeProfile`；任一失败把**两份一起**回滚
+  （失败即删/恢复原内容，不留半对）。`--dry-run` 不写任一份但照常做档案生成校验；`--no-ai` 也产出/校验档案，
+  报告标 `draftOnly: true`。
+- **迁移死锁修复**：`--on-exist=skip` 的判据改为「字典**与**档案都在才跳过」；「已有字典、缺档案」走
+  **只补档案**的迁移路径（不重跑 AI、不改字典，产出档案后 ok）。
+- **失败分类**：`report.failureKind` 取值 `ai-unreachable`（网络/超时/鉴权/5xx/模型没按契约回 JSON）、
+  `ai-quality`（占位符不一致/空译/无中文）、`product-fetch`、`profile-probe`、`dry-run-threshold`、
+  `dict-validate`、`dict-write`、`groups-infer`；分类由 `dict-ai.classifyFailure()`（协议层，只认错误形态）
+  给出，`dict-auto` 映射为上面两档 AI 类别。注解用 `::error title=…::`（如「AI 网关不可达」「翻译质量不达标」），
+  运行摘要的注解栏直接可区分，不必翻日志。
+- **待译草稿 artifact**：`tmp/dict-auto-pending-<版本>.json`（version / fetchedAt / failureKind / reason /
+  untranslated / untranslatedRows（含 reason）/ candidates（text、source、targets））。在候选确定后先写一份
+  （AI 卡死/超时也不丢「待译的是什么」），翻译后再写一份补上每条真实原因；workflow 用
+  `actions/upload-artifact`（`always()`）与报告 JSON 一起上传。
+- **严格质量门禁不降级**：未译比例上限、干跑语法/命中率、字典校验、`node --test` 门禁全部保留；
+  `--dry-run` 也不再掩盖失败（`reason` 存在即失败）。提交前新增「字典与档案成对」门禁步骤
+  （有字典缺档案 → `::error title=字典与档案不成对::` 并失败，防止半对入库后被 skip 永久固化）。
+- **未做**：独立的「AI 网关连通性预检」请求（需要额外一次请求，且失败原因仍要靠分类给出精确区分）；
+  以 `failureKind=ai-unreachable` + 注解标题替代。若后续需要可在 `--preflight` 下补。
+- **实现状态**：已落地；`test/dict/dict-auto.test.js` 覆盖纯函数与注入标签；`dict-ai` 新增
+  `classifyFailure` 单测。CI 侧改动用 `tools/ops/wf-lint.cjs`（本机无 bash，run 块 bash -n 不可用；
+  YAML 结构解析通过，内嵌 3 段 `node -e` 脚本另行用 vm 语法解析通过）。
 
 ### 8.6 新版本产出（版本/字典线）
 
 新增版本时产出字典的人按同一入口产出档案：取到两平台官方产物后
 `probeApp` → `buildProfile` → `writeProfile`（或 dict-auto 的同一链路）。不允许手写/复制旧版本档案的锚点。
+3.6.8~3.6.10 已由版本/字典线用该工具产出（不在本线提交范围）。
 
-### 8.7 文档同步（第二阶段一并做）
+### 8.7 文档同步（已实施）
 
-- `AGENTS.md`：核心资产、版本强对应、`common.js` 职责（内嵌资源读取）、dict-sync / dict-auto / build / check-gui-dist /
-  字典组织 / hasDict 三态 等段落改「成对」口径（调研已给出逐行建议，实施时按行改）。
-- `dictionaries/README.md`：目录树加 `patch.json`；新增「每版本替换逻辑档案」一节（字段、写入口、缺档案行为）。
-- `.claude/skills/translation-maintain/references/版本升级.md`：升级流程加「探测生成/校验档案」一步；
-  失效分类加「档案失效」；提交命令 `git add` 两文件；「不要拿旧版本套用」补充档案同样不能套用。
-- `docs/agents/已知坑.md`：升级即失效、右键菜单锚点实测范围、Electron 播种、hasDict、自动产出注入标签等条目补成对口径。
+- `AGENTS.md`：核心资产、版本强对应、`version-profile.js` 定位、dict-sync 成对、build 内嵌最新成对、
+  Electron 播种/校验、hasDict 三态、dict-auto 产出档案 + 失败分类 + 草稿 + 不降级、跨模块共用约定。
+- `dictionaries/README.md`：目录树加 `patch.json`、新增「每版本替换逻辑档案」一节（字段概览/生成/唯一写入口/
+  缺档案行为/升级需重新探测）。
+- `.claude/skills/translation-maintain/references/版本升级.md`：升级流程加「探测生成/校验档案」一步、
+  失效分类加「档案失效」、提交命令加档案文件、强调不能复制旧版本档案。
+- `docs/agents/已知坑.md`：补充档案语义、半对/中间态明确拒绝、锚点按策略断言、播种逐文件补齐、
+  远端目录列表 ≠ 远端有档案、自动产出的失败分类与草稿 artifact。
 
 ## 9. 测试与验收
 
@@ -408,52 +456,63 @@ macos `Undo / Redo / Cut / Copy / Paste / Delete / Select All`；每个标签在
   成对校验（只有字典 / 只有档案 / 成对 / assertPair）、写入口（拒绝覆盖 / overwrite / 原子无 `.part` 残留）、
   探测（两平台合成产物生成档案、两平台锚点不一致拒绝、两平台标签推导不一致拒绝、bundle 缺字面量拒绝、
   产物版本不符拒绝、sourcemap 缺 sourcesContent 拒绝）。
-- `test/cmd/patch.test.js`：新增缺档案、锚点 0/2 次、未知策略、schemaVersion/targets、参数来自档案
+- `test/dict/dict-sync-pair.test.js`（13 例）：`fetchPair` 逐源成对（一个源缺档案换源、全源失败写清缺哪份、
+  档案校验失败不落盘）；`writePair` onlyMissing 只补缺、全量覆盖、第二次 rename 失败回滚且无 `.part` 残留；
+  `ensureDict` 成对不联网 / 半对只补缺 / 两份都缺 / 失败不留半对；`syncLatest` 未变不动、成对覆盖与 `changedFiles`。
+- `test/tools/build-assets.test.js`（3 例）：`collectAssets` 选最新成对版本、最新缺档案时告警退档、
+  无任何成对版本时构建失败（临时目录驱动，不依赖仓库 checkout 内容）。
+- `test/cmd/install-version-dict.test.js`：`listDownloadable` 的 `dictLocal` 改为成对口径（`opts.pairVersions`），
+  保留 `opts.dictVersions` 兼容注入；prefetch 文案按「字典与替换逻辑档案」。
+- `test/cmd/patch.test.js`：缺档案、锚点 0/2 次、未知策略、schemaVersion/targets、参数来自档案
   （自定义注入点 + 自定义标签表）、更新管控未启用被请求、更新管控锚点 0/2 次——都断言**拒绝且不写盘/不建备份**。
-- `test/cmd/verify.test.js`：新增缺档案、锚点 0/2 次、档案声明更新管控但产物缺方法锚点。
+- `test/cmd/verify.test.js`：缺档案、锚点 0/2 次、档案声明更新管控但产物缺方法锚点。
 - `test/inject/context-menu.test.js`：注入器参数化（自定义标签表 + 自定义注入点）；标签表来源改为
   「有档案的版本用档案表，无档案的版本退回过渡默认表」。
-- `test/fixtures/profile.js`：档案夹具（make/write/writeRaw），与夹具字典同目录、非版本号形态、用例后清理。
+- `test/dict/dict-ai.test.js`：新增 `classifyFailure`（transport/auth/server/format/quality/other 归类与优先级）。
+- `test/dict/dict-auto.test.js`：既有纯函数 + 注入标签用例（`withInjectedLiterals` 兼容布尔/标签表两种入参）；
+  新增 `profileSummary` / `failureTitle` / `draftFile` 等纯函数用例（不触发网络）。
 
-### 9.2 3.6.7 端到端（官方产物解包副本）
+### 9.2 端到端（官方产物解包副本；3.6.7 + 存量 4 版本）
 
-产物：官方 windows-x64 3.6.7 的 app 目录复制到 `tmp/version-profile/e2e-3.6.7/resources/app/`
-（`main.js` sha256 `05a1b607…`、`renderer.js` `e43df79e…`，与档案证据一致）。备份为官方原文（`tmp/backup/3.6.7/`）。
-实测（命令与输出见交付回报）：
+产物：各版本官方 windows-x64 的 app 目录复制到 `tmp/version-profile/e2e-<版本>/resources/app/`
+（sha256 与档案 `evidence` 一致）；备份为官方原文。命令与结果：
 
-| 步骤 | 结果 |
-| --- | --- |
-| `version-profile check` | `锚点校验通过：injectionPoint=1、checkForUpdates=1`，exit 0 |
-| `patch --dry-run` | 命中 main.js 128（其中右键菜单标签 7）/ renderer.js 2274，合计 2402，不写盘，exit 0 |
-| `patch`（写盘） | 同上命中；exit 0 |
-| `verify` | `main.js：命中 0 处`（已汉化）、`renderer.js：命中 8 处`、`校验通过。`，exit 0 |
-| 抽查 | context-menu 注入块存在；main.js 中文片段去重 131 / renderer 1969 |
-| `restore` | exit 0；两文件与官方产物 **逐字节相同**（sha256 一致） |
-| `patch --update-control` | 命中同上；exit 0 |
-| `verify`（含更新管控） | 校验通过，exit 0 |
-| 抽查 | update-control 注入块存在、`if(!globalThis.__gdzcAllowUpdate())return;` 闸门在、guard 模式代码在 |
-| 第二轮 `restore` | 两文件再次与官方产物逐字节相同 |
+| 版本 | `version-profile check` | `patch --dry-run` / `patch` 合计命中 | `verify` | `restore` 后与官方产物 |
+| --- | --- | --- | --- | --- |
+| 3.6.7（第一阶段样板） | 锚点 1/1 ✓ | 2402（main 128，其中右键菜单标签 7；renderer 2274） | 校验通过 | 逐字节相同（sha256 `05a1b607…` / `e43df79e…`） |
+| 3.6.6 | 锚点 1/1 ✓ | 2350 | 校验通过 | 逐字节相同 |
+| 3.6.5 | 锚点 1/1 ✓ | 2256 | 校验通过 | 逐字节相同 |
+| 3.6.4 | 锚点 1/1 ✓ | 2314 | 校验通过 | 逐字节相同 |
+| 3.6.0 | 锚点 1/1 ✓ | 2297 | 校验通过 | 逐字节相同 |
 
-复跑命令（本机零重启：tmp 副本没有 `GitHubDesktop.exe`，`restartApp` 判定「未运行」不会碰真实应用）：
+3.6.7 额外做了 `--update-control` 轮：注入块 + `if(!globalThis.__gdzcAllowUpdate())return;` 闸门 + guard 模式代码
+均在，`verify` 通过，二轮 `restore` 仍逐字节相同。存量 4 版本的 `--update-control` 轮同样注入成功、`verify` 通过、
+`restore` 逐字节还原（日志 `tmp/version-profile/e2e-<版本>.log`、汇总 `tmp/version-profile/e2e-legacy.log`）。
+
+复跑命令（本机零重启：tmp 副本没有 `GitHubDesktop.exe`，`restartApp` 判定「未运行」不会碰真实应用；
+`<版本>` 取 3.6.0/3.6.4/3.6.5/3.6.6/3.6.7）：
 
 ```bash
-D=tmp/version-profile/e2e-3.6.7
-node scripts/version-profile.js check --version 3.6.7 --path $D/resources
-node scripts/cmd/patch.js --version 3.6.7 --path $D/resources --dry-run
-node scripts/cmd/patch.js --version 3.6.7 --path $D/resources
-node scripts/cmd/verify.js --version 3.6.7 --path $D/resources
-node scripts/cmd/restore.js --version 3.6.7 --path $D/resources
-node scripts/cmd/patch.js --version 3.6.7 --path $D/resources --update-control
-node scripts/cmd/verify.js --version 3.6.7 --path $D/resources
-node scripts/cmd/restore.js --version 3.6.7 --path $D/resources
+D=tmp/version-profile/e2e-<版本>
+node scripts/version-profile.js check --version <版本> --path $D/resources
+node scripts/cmd/patch.js --version <版本> --path $D/resources --dry-run
+node scripts/cmd/patch.js --version <版本> --path $D/resources
+node scripts/cmd/verify.js --version <版本> --path $D/resources
+node scripts/cmd/restore.js --version <版本> --path $D/resources
+node scripts/cmd/patch.js --version <版本> --path $D/resources --update-control
+node scripts/cmd/verify.js --version <版本> --path $D/resources
+node scripts/cmd/restore.js --version <版本> --path $D/resources
 ```
 
-### 9.3 全量测试 / 打包
+### 9.3 档案有效性复核与全量测试
 
-- `npm test` 全绿（201 用例：200 pass，1 skip 为既有平台条件跳过；0 fail）。
-- `node --check` 覆盖全部改动的脚本与测试文件。
-- `npm run bundle`（`tools/bundle.js --out tmp/build/bundle.js`）通过：`version-profile.js` 的静态 `require`
-  依赖（common / dict/release-assets）都能被收集。
+- 收口时对 `3.6.7 / 3.6.8 / 3.6.9 / 3.6.10` 逐份 `version-profile validate`（schema 本阶段**未变更**：
+  仅新增 `listPairVersions()` 读出接口与 `remoteProfileUrls`，`schemaVersion`/必填字段/校验规则/标签结构/
+  `writeProfile` 序列化形态都不变，因此两份已由版本线生成的档案无需重生成；3.6.10 若尚未落盘则如实标注）。
+- `npm test` 全绿（`node --test`；第二阶段新增用例见 §9.1）。
+- `node --check` 覆盖全部改动的脚本与测试文件；`npm run bundle` 通过（`version-profile.js` 的静态 require
+  依赖 common / dict/release-assets 均可收集）；`tools/ops/wf-lint.cjs` 的 YAML 结构解析通过、内嵌 node 脚本语法通过
+  （本机无 bash，run 块 `bash -n` 不可用，已注明）。
 
 ## 10. 接口与文件清单（给其它工作线）
 
@@ -468,6 +527,7 @@ hasStrategy(profile, name), strategy(profile, name, { platform }) -> params,
 anchorsFor(profile, strategies), assertAnchors(content, profile, { file, strategies }) -> counts,
 pairStatus(version) -> { version, dict, profile, paired, missing },
 assertPair(version),
+listPairVersions() -> string[],          // 本机成对完整的版本（GUI/CLI 判定用）
 writeProfile(version, profile, { overwrite, outFile }) -> file,
 probeApp(appDir, meta) -> measurement,       // 纯本地读文件（dict-auto 二阶段直接用）
 buildProfile(version, { measurements }) -> profile,  // 纯函数，生成即校验
@@ -476,21 +536,33 @@ describe(profile), countOccurrences(text, needle), profilePlatform(platform),
 main  // CLI
 ```
 
-**改动的文件**
+**改动的文件（两个阶段合计）**
 
 | 文件 | 改动 |
 | --- | --- |
-| `scripts/version-profile.js` | 新增：档案加载/校验/策略解析/锚点断言/成对/写入口/探测/CLI |
-| `dictionaries/3.6.7/patch.json` | 新增：3.6.7 样板档案（探测生成，含两平台证据） |
-| `scripts/cmd/patch.js` | 读档案、写盘前锚点断言、注入参数来自档案、更新管控失败语义 |
+| `scripts/version-profile.js` | 新增：档案加载/校验/策略解析/锚点断言/成对校验/写入口/探测/CLI；`listPairVersions()` |
+| `dictionaries/3.6.0|3.6.4|3.6.5|3.6.6|3.6.7/patch.json` | 新增：样板与存量版本档案（探测生成，含两平台证据）。3.6.8~3.6.10 由版本/字典线产出 |
+| `scripts/common.js` | 导出 `embeddedAsset`（内嵌档案读取复用）；新增 `remoteProfileUrls`（远程档案地址 SSOT） |
+| `scripts/dict/dict-sync.js` | 成对在线同步：`fetchPair` / `writePair` / `readPairText`；`ensureDict` 成对语义（只补缺）；`syncLatest` 成对覆盖；`prefetchDict` 文案 |
+| `scripts/cmd/patch.js` | 读档案、写盘前锚点断言、注入参数来自档案、更新管控失败语义、成对下载日志 |
 | `scripts/cmd/restore.js` | 按组重放 updateControl 时读档案 + 断锚点 + 传参 |
 | `scripts/cmd/verify.js` | 读档案、锚点断言、右键菜单标签表来自档案、打印档案摘要；错误打印 hint |
 | `scripts/inject/context-menu.js` | 标签表/注入点参数化（生产路径必须传，默认值仅过渡） |
 | `scripts/inject/update-control.js` | 方法锚点/期望次数/注入点参数化（同上） |
-| `scripts/common.js` | 导出 `embeddedAsset`（内嵌档案读取需要；内嵌资源 SSOT 复用，不另写 node:sea 逻辑） |
-| `test/version-profile.test.js` | 新增：本模块单测 |
-| `test/fixtures/profile.js` | 新增：档案夹具 |
-| `test/cmd/{patch,restore,verify}.test.js`、`test/inject/context-menu.test.js` | 补档案夹具与失败语义用例 |
+| `tools/build.js` | `collectAssets` 内嵌最新**成对**版本（缺档案告警退档、无成对即失败）；修正实现与注释不一致；导出供单测 |
+| `gui/main.js` | `seedBundledDicts` 逐文件补齐（老用户只缺档案也能补）+ 版本目录形态过滤 |
+| `gui/ipc/misc.js` | `hasDict` 成对口径 + `profileMissing` / `pairVersions` 供界面提示 |
+| `gui/renderer.js` | 三态 local 指成对完整；缺档案独立标签 |
+| `gui/ipc/patching.js` / `gui/ipc/versions.js` | 本地可见性/提示成对口径（透传字段） |
+| `scripts/cmd/install-version.js` | `listDownloadable` 的 `dictLocal` 成对口径（`opts.pairVersions`，保留 `opts.dictVersions` 兼容） |
+| `scripts/cli.js` | 切换版本的本地判定改用 `listPairVersions`；同步文案成对 |
+| `tools/check-gui-dist.js` | 内置资源成对校验 + asar 清单加 `scripts/version-profile.js` |
+| `scripts/dict/dict-auto.js` | 每版本探测/生成/写入档案（与字典同轮、失败一起回滚）；skip 条件成对；只补档案迁移路径；失败分类 `failureKind`；待译草稿 artifact；`::error title=` 注解；dry-run 不再掩盖失败 |
+| `scripts/dict/dict-ai.js` | 新增协议层失败归类 `classifyFailure()` |
+| `.github/workflows/dict-auto.yml` | 上传待译草稿+报告 artifact；成对提交门禁；分类注解；提交信息含档案锚点；汇总含失败分类/草稿 |
+| `test/version-profile.test.js`、`test/dict/dict-sync-pair.test.js`、`test/tools/build-assets.test.js`、`test/fixtures/profile.js` | 新增测试/夹具 |
+| `test/cmd/{patch,restore,verify,install-version-dict}.test.js`、`test/inject/context-menu.test.js`、`test/dict/{dict-ai,dict-auto}.test.js` | 更新/补用例 |
+| `docs/design/version-profile/design.md`、`AGENTS.md`、`dictionaries/README.md`、`.claude/skills/translation-maintain/references/版本升级.md`、`docs/agents/已知坑.md` | 设计文档与四份文档同步 |
 
 **给调度线的提示**
 
@@ -503,14 +575,25 @@ main  // CLI
 
 ## 11. 风险与未决
 
-| # | 风险 / 未决 | 处置 |
+**第二阶段已消除的风险**（记录原因，防止回退）：
+
+| 原风险 | 处置 |
+| --- | --- |
+| 3.6.0 / 3.6.4 / 3.6.5 的官方产物锚点形态未知 | 已逐版本探测：四版本两平台锚点均为 1/1、标签表同形，档案已入库（§6.5）；若未来某版本结构不同，探测会失败/禁用策略而不是猜测 |
+| `--on-exist=skip` 只判字典 → 存量版本补不上档案（迁移死锁） | skip 条件改为成对；「已有字典缺档案」走只补档案迁移路径（§8.5） |
+| dict-auto 只回滚字典、半对残留 | 字典与档案同轮写入、失败一起回滚（§8.5） |
+| 打包只加字典不加档案 → 离线汉化最新版失败 | build 内嵌最新成对 + 缺档案告警退档（§8.2）；播种逐文件补齐（§8.3） |
+| 老用户数据根已有字典、无档案 | `seedBundledDicts` 逐文件补齐（§8.3） |
+| 远端目录列表证明不了档案存在（manifest 方案悬而未决） | **决策：不引入 manifest**；显示阶段维持目录级，正确性由下载/使用时成对强校验保证（§8.4） |
+| `--dry-run` 掩盖干跑失败 / `--no-ai` 静默产出缺译字典 | dry-run 的 reason 也判失败；`--no-ai` 报告标 `draftOnly` 并进待译草稿 artifact（§8.5） |
+| 半对资源不静默 | `pairStatus` / `assertPair` + 引擎拒绝（§5）；dict-sync 成对事务（§8.1） |
+
+**仍在 / 未决**：
+
+| # | 项 | 说明与处置 |
 | --- | --- | --- |
-| 1 | 3.6.0 / 3.6.4 / 3.6.5 的官方产物锚点形态未知（本机尚无产物） | 第二阶段逐版本探测；三平台产物若结构与 3.6.7 不同（如方法不带 `async`、`editMenu` 缺失），探测会失败/禁用策略——**绝不把 3.6.7 的锚点抄给旧版本** |
-| 2 | 两平台锚点次数/标签推导不一致时 schema v1 无法表达 | 探测失败、人工确认后再扩 schema（不静默取其一） |
-| 3 | 远端目录列表无法证明 `patch.json` 存在 | §8.4 的 manifest 方案（待定夺） |
-| 4 | `--on-exist=skip` 只判字典 → 存量版本补不上档案（迁移死锁） | §8.5 改为「成对才算 skip」 |
-| 5 | dict-auto 只回滚字典、半对残留 | §8.5 同一事务回滚两文件 |
-| 6 | 打包只加字典不加档案 → 离线汉化最新版失败 | §8.2 成对内嵌 + 最新版本缺任一即构建失败 |
-| 7 | 老用户数据根已有字典、无档案 | §8.3 逐文件补齐播种 |
-| 8 | `--dry-run` 掩盖干跑失败 / `--no-ai` 静默产出缺译字典 | 二阶段：dry-run 保留失败结论；`--no-ai` 报告标 `draftOnly` 并进草稿 artifact |
-| 9 | 3.6.7 档案的 `generatedAt` 是探测时间，重新探测会变 | 属预期（证据可追溯）；归档/审阅关注 anchors/labels/evidence 而非时间戳 |
+| 1 | 两平台锚点次数/标签推导不一致时 schema v1 无法表达 | 探测失败、人工确认后再扩 schema（不静默取其一）。当前 5 个版本均一致 |
+| 2 | 3.6.8~3.6.10 档案归属版本/字典线 | 已用同一工具产出；本线不提交这些目录。若未来新版本只产字典不产档案，patch/verify 会明确拒绝——流水线已改为成对产出，正常路径不会出现 |
+| 3 | AI 连通性预检未做 | 以 `failureKind=ai-unreachable` + `::error title=AI 网关不可达` 替代；后续如需 fail-fast 可加 `--preflight`（§8.5「未做」） |
+| 4 | 档案 `generatedAt` 每次探测会变 | 属预期（证据可追溯）；审阅关注 anchors/labels/evidence |
+| 5 | Electron/GUI 运行时行为 | 本线只做静态校验与 `node --check`；GUI 产物启动冒烟由 CI（`build.yml` 的 `--smoke-test`）覆盖，本地未跑 Electron 运行时 |

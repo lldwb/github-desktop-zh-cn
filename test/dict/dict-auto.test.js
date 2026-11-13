@@ -332,3 +332,67 @@ test('shapeDiff：每类截到上限，但总数照实报', () => {
   assert.strictEqual(shaped.removedCount, 0);
   assert.deepStrictEqual(shaped.removed, []);
 });
+
+// ============================ 档案产出 / 失败分类 / 待译草稿 ============================
+
+const fs = require('node:fs');
+const path = require('node:path');
+const profileFixture = require('../fixtures/profile');
+
+test('failureTitle：失败分类映射成 CI 注解标题，未知分类有兜底', () => {
+  assert.strictEqual(dictAuto.failureTitle({ failureKind: 'ai-unreachable' }), 'AI 网关不可达');
+  assert.strictEqual(dictAuto.failureTitle({ failureKind: 'ai-quality' }), '翻译质量不达标');
+  assert.strictEqual(dictAuto.failureTitle({ failureKind: 'profile-probe' }), '替换逻辑档案探测失败');
+  assert.strictEqual(dictAuto.failureTitle({ failureKind: 'product-fetch' }), '官方产物获取失败');
+  assert.strictEqual(dictAuto.failureTitle({}), '字典产出未通过');
+});
+
+test('draftFile：待译草稿落在数据根 tmp 下、按版本命名（workflow 用 glob 上传）', () => {
+  assert.strictEqual(path.basename(dictAuto.draftFile('3.6.7')), 'dict-auto-pending-3.6.7.json');
+  assert.strictEqual(path.dirname(dictAuto.draftFile('3.6.7')), common.getTmpDir());
+});
+
+test('writePendingDraft：有候选写文件（含未译原因/来源/目标），无候选清掉旧草稿', (t) => {
+  const version = '0.0.0-pending';
+  const file = dictAuto.draftFile(version);
+  fs.rmSync(file, { force: true });
+  t.after(() => fs.rmSync(file, { force: true }));
+
+  dictAuto.writePendingDraft(
+    version,
+    {
+      fetchedAt: '2026-01-01T00:00:00.000Z',
+      failureKind: 'ai-unreachable',
+      reason: '未译 1/1 条（100%）超过上限 30%',
+      untranslated: 1,
+      untranslatedRows: [{ text: 'Open Repository', reason: '请求超时' }],
+    },
+    [{ text: 'Open Repository', source: 'ui/repository.tsx', targets: [{ platform: 'windows', key: 'Open Repository' }] }]
+  );
+
+  const draft = JSON.parse(fs.readFileSync(file, 'utf8'));
+  assert.strictEqual(draft.version, version);
+  assert.strictEqual(draft.failureKind, 'ai-unreachable');
+  assert.deepStrictEqual(draft.untranslatedRows, [{ text: 'Open Repository', reason: '请求超时' }]);
+  assert.strictEqual(draft.candidates.length, 1);
+  assert.deepStrictEqual(draft.candidates[0], {
+    text: 'Open Repository',
+    source: 'ui/repository.tsx',
+    targets: [{ platform: 'windows', key: 'Open Repository' }],
+    reason: '请求超时',
+  });
+
+  // 没有待译条目时删掉草稿（避免 artifact 里混入上一轮的旧文件）
+  dictAuto.writePendingDraft(version, { fetchedAt: 'x' }, []);
+  assert.strictEqual(fs.existsSync(file), false);
+});
+
+test('profileSummary：给报告的档案摘要含锚点/启用策略/标签数与平台', () => {
+  const profile = profileFixture.make('3.6.7', { updateControl: true });
+  const s = dictAuto.profileSummary(profile);
+  assert.strictEqual(s.schemaVersion, profileFixture.make('3.6.7').schemaVersion);
+  assert.deepStrictEqual(s.anchors.sort(), ['checkForUpdates', 'injectionPoint']);
+  assert.deepStrictEqual(s.enabled.sort(), ['context-menu', 'update-control']);
+  assert.deepStrictEqual(s.labels, { windows: 7, macos: 7 });
+  assert.deepStrictEqual(s.platforms, []);
+});
