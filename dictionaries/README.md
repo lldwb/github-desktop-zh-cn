@@ -38,7 +38,7 @@ dictionaries/
 - **分段判据**：`common` 段对**所有平台**生效；平台段只对该平台生效。同名键同时在 `common` 与平台段时**平台段优先**（同一文案在不同平台语境不同的场合）。
 - **`linux` 段为空是预期**：官方从未发布 Linux 产物（近 30 个 release 的资产全为 Windows nupkg/exe/msi 与 macOS zip）。
 - **`groups` 只是分类参考**，不影响替换行为；由 `scripts/dict/dict-groups.js` 读产物 sourcemap 推断源文件归属，未定位到的落「待分组」。
-- **唯一写入口是 `scripts/dict/dict-edit.js`**（`add` / `update` / `remove` / `set-group` / `move` / `merge` / `regroup` / `migrate` / `apply`）：先校验再原子替换，校验不过时原文件保持不动。**别手工编辑这个 JSON**——手工改绕过校验，坏数据要等 `patch` 时才暴露。要重跑一个已有字典的版本，用 `scripts/dict/dict-auto.js --on-exist=diff|overwrite`（`diff` 全程不写盘）。注意这是**字典**的写入口；替换逻辑档案 `patch.json` 的唯一写入口是 `scripts/version-profile.js` 的 `writeProfile()`（见下节），两条写入口不混。
+- **唯一写入口是 `scripts/dict/dict-edit.js`**（`add` / `update` / `remove` / `set-group` / `move` / `merge` / `regroup` / `migrate` / `apply`）：先校验再原子替换，校验不过时原文件保持不动。**别手工编辑这个 JSON**——手工改绕过校验，坏数据要等 `patch` 时才暴露。要重跑一个已有字典的版本，用 `scripts/dict/dict-auto.js --on-exist=diff|overwrite`（`diff` **不写字典与档案**，只报差异；仍会落 `tmp/dict-auto-pending-<版本>.json` 待译草稿供 CI artifact）。注意这是**字典**的写入口；替换逻辑档案 `patch.json` 的唯一写入口是 `scripts/version-profile.js` 的 `writeProfile()`（见下节），两条写入口不混。
 
 ## 每版本替换逻辑档案（patch.json）
 

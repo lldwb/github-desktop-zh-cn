@@ -216,7 +216,7 @@ dictionaries/<版本>/
 
 | 入口 | 读档案 | 锚点断言 | 失败语义 |
 | --- | --- | --- | --- |
-| `patch.run` | 恒读（`resolveVersion` 之后、联网与写盘之前） | 写盘前：i18n 的 `context-menu` 锚点；请求了 `--update-control` 时**同时**断言 `update-control` 锚点 | 抛错（exit 1）；hint 给下一步；**失败前不写盘/不建备份** |
+| `patch.run` | 先 `ensureDict` 成对就位（本地成对不联网、半对只补缺；联网失败抛错拒绝），**之后**才 `loadProfile` | 写盘前：i18n 的 `context-menu` 锚点；请求了 `--update-control` 时**同时**断言 `update-control` 锚点 | 抛错（exit 1）；hint 给下一步；**失败前不写盘/不建备份** |
 | `patch` 的注入 | 标签表、注入点、方法锚点全部来自档案（`strategy()`） | 注入器内部再加一道次数防线（返回 `changed:false`+reason） | 未启用策略被请求 → 明确拒绝（不静默跳过） |
 | `restore.run`（按组重放 updateControl） | 读档案 | 在官方原文上断言 `update-control` 锚点 | 档案缺失/策略未启用 → 明确失败（账上记着该组却无法重放，静默跳过会让「保留的组」凭空消失） |
 | `restore.run`（整份还原 / 字典逆向） | 不需要（不注入） | — | 不受档案影响：这是恢复通道，不能被档案问题卡死 |
@@ -358,8 +358,9 @@ macos `Undo / Redo / Cut / Copy / Paste / Delete / Select All`；每个标签在
 
 - `common.js`：新增 `remoteProfileUrls(version)`（与 `remoteDictUrls` 同一套 raw → jsDelivr → Gitee 兜底；
   URL 拼装仍只能在 common，遵守「远程地址只有一处定义」纪律）。
-- `dict-sync.js`：`fetchPair(version)` 按源成对取两份——**同一个源必须字典与档案都取到、字典能 JSON.parse、
-  档案能通过 `validateProfile`，才算该源成功**；失败时逐源列出「缺哪一份 / 哪份校验失败」。
+- `dict-sync.js`：`fetchPair(version)` 按源成对取两份——**同一个源必须字典与档案都取到、字典通过
+  `dict-edit.validateDoc`（`_meta.version` 与目标版本一致、formatVersion=2、条目合法）、档案通过
+  `validateProfile`**，才算该源成功（只做 JSON.parse 会把别的版本/旧格式字典写进 `<版本>/zh-CN.json`）；失败时逐源列出「缺哪一份 / 哪份校验失败」。
   `writePair()` 两份都先写 `.part`、全部就绪后再逐个 rename；任一 rename 失败即回滚已替换的文件并清 `.part`，
   保证磁盘上不出现半对。`ensureDict()` 改为**成对判断**（外部成对 → 内嵌成对 → 联网成对），
   本地只有一半时联网**只补缺的那份**（用户已有文件不被覆盖）；`syncLatest()` 成对覆盖，
@@ -407,15 +408,18 @@ macos `Undo / Redo / Cut / Copy / Paste / Delete / Select All`；每个标签在
 
 - **产出档案**：`buildOne` 取到两平台产物后调 `probeProfile`（`probeApp` + `buildProfile`，纯本地、不额外联网），
   与字典同一轮落盘：字典走 dict-edit 事务 → 档案走 `writeProfile`；任一失败把**两份一起**回滚
-  （失败即删/恢复原内容，不留半对）。`--dry-run` 不写任一份但照常做档案生成校验；`--no-ai` 也产出/校验档案，
+  （失败即删/恢复原内容，不留半对）。`--dry-run` 不写任一份（含「已有字典缺档案」的**迁移路径**：
+  只打印「将写入档案」、不落盘）但照常做档案生成校验；`--no-ai` 也产出/校验档案，
   报告标 `draftOnly: true`。
 - **迁移死锁修复**：`--on-exist=skip` 的判据改为「字典**与**档案都在才跳过」；「已有字典、缺档案」走
   **只补档案**的迁移路径（不重跑 AI、不改字典，产出档案后 ok）。
 - **失败分类**：`report.failureKind` 取值 `ai-unreachable`（网络/超时/鉴权/5xx/模型没按契约回 JSON）、
   `ai-quality`（占位符不一致/空译/无中文）、`product-fetch`、`profile-probe`、`dry-run-threshold`、
   `dict-validate`、`dict-write`、`groups-infer`；分类由 `dict-ai.classifyFailure()`（协议层，只认错误形态）
-  给出，`dict-auto` 映射为上面两档 AI 类别。注解用 `::error title=…::`（如「AI 网关不可达」「翻译质量不达标」），
-  运行摘要的注解栏直接可区分，不必翻日志。
+  给出，`kind` 取**多数类**（tie 按 transport→auth→server→format→quality 优先级；1 条网关错误混在
+  大量质量失败里不会把排查方向带偏），各类计数写进报告 `failureCounts`。`dict-auto` 把非 quality 的
+  AI 类别映射为 `ai-unreachable`；注解用 `::error title=…::` 并附「分类 <类> <数>」，运行摘要与提交信息
+  同样带计数，不必翻日志。
 - **待译草稿 artifact**：`tmp/dict-auto-pending-<版本>.json`（version / fetchedAt / failureKind / reason /
   untranslated / untranslatedRows（含 reason）/ candidates（text、source、targets））。在候选确定后先写一份
   （AI 卡死/超时也不丢「待译的是什么」），翻译后再写一份补上每条真实原因；workflow 用
@@ -468,26 +472,41 @@ macos `Undo / Redo / Cut / Copy / Paste / Delete / Select All`；每个标签在
 - `test/cmd/verify.test.js`：缺档案、锚点 0/2 次、档案声明更新管控但产物缺方法锚点。
 - `test/inject/context-menu.test.js`：注入器参数化（自定义标签表 + 自定义注入点）；标签表来源改为
   「有档案的版本用档案表，无档案的版本退回过渡默认表」。
-- `test/dict/dict-ai.test.js`：新增 `classifyFailure`（transport/auth/server/format/quality/other 归类与优先级）。
+- `test/dict/dict-ai.test.js`：`classifyFailure`（transport/auth/server/format/quality/other 归类；
+  `kind` 取**多数类**、tie 按优先级；`响应结构不认识` 归 format）。
 - `test/dict/dict-auto.test.js`：既有纯函数 + 注入标签用例（`withInjectedLiterals` 兼容布尔/标签表两种入参）；
-  新增 `profileSummary` / `failureTitle` / `draftFile` 等纯函数用例（不触发网络）。
+  `profileSummary` / `failureTitle` / `draftFile` / `writePendingDraft` 纯函数用例；**`buildOne` 迁移路径
+  `--dry-run` 不写档案**（合成两平台产物 + `--reuse`，离线；非 dry-run 才写且可被 validate）。
+- `test/common/tool-path.test.js`：`packagedToolPath()` 源码态 null / 打包态 `process.execPath`（P4：
+  patch 注入与 restore 按组重放共用同一取值）。
+- `test/dict/dict-sync-pair.test.js` 追加：本地只有档案 → 只补字典（P5）；字典 `_meta.version` 错配 /
+  formatVersion≠2 → 该源失败且不留半对（P7）。
+- `test/version-profile.test.js` 追加：启用策略引用的锚点必须声明在 main.js（P6）、`anchorsFor` 未知策略
+  fail-closed（P6）。
+- `test/inject/context-menu.test.js` 追加：`updateControl.buildInjection` 传 `profileFile` 时「支持上限 /
+  自动汉化前置」两处都判成对完整（P3）。
+- `test/cmd/patch.test.js` 更新：缺档案时**先尝试成对补齐**，补齐失败才拒绝（仍断言不写盘/不建备份），
+  并新增「补齐后继续汉化」正向用例（P1）。
 
 ### 9.2 端到端（官方产物解包副本；3.6.7 + 存量 4 版本）
 
 产物：各版本官方 windows-x64 的 app 目录复制到 `tmp/version-profile/e2e-<版本>/resources/app/`
-（sha256 与档案 `evidence` 一致）；备份为官方原文。命令与结果：
+（sha256 与档案 `evidence` 一致）；备份为官方原文。取证时点 2026-11；命中数随字典迭代变化，
+**不在文档写死**（仓库既有纪律），复跑时看命令输出的「合计命中」。命令与结论：
 
-| 版本 | `version-profile check` | `patch --dry-run` / `patch` 合计命中 | `verify` | `restore` 后与官方产物 |
+| 版本 | `version-profile check` | `patch --dry-run` / `patch` | `verify` | `restore` 后与官方产物 |
 | --- | --- | --- | --- | --- |
-| 3.6.7（第一阶段样板） | 锚点 1/1 ✓ | 2402（main 128，其中右键菜单标签 7；renderer 2274） | 校验通过 | 逐字节相同（sha256 `05a1b607…` / `e43df79e…`） |
-| 3.6.6 | 锚点 1/1 ✓ | 2350 | 校验通过 | 逐字节相同 |
-| 3.6.5 | 锚点 1/1 ✓ | 2256 | 校验通过 | 逐字节相同 |
-| 3.6.4 | 锚点 1/1 ✓ | 2314 | 校验通过 | 逐字节相同 |
-| 3.6.0 | 锚点 1/1 ✓ | 2297 | 校验通过 | 逐字节相同 |
+| 3.6.7（第一阶段样板） | 锚点 1/1 ✓ | 通过（含右键菜单标签命中） | 校验通过 | 逐字节相同（sha256 与档案证据一致） |
+| 3.6.6 | 锚点 1/1 ✓ | 通过 | 校验通过 | 逐字节相同 |
+| 3.6.5 | 锚点 1/1 ✓ | 通过 | 校验通过 | 逐字节相同 |
+| 3.6.4 | 锚点 1/1 ✓ | 通过 | 校验通过 | 逐字节相同 |
+| 3.6.0 | 锚点 1/1 ✓ | 通过 | 校验通过 | 逐字节相同 |
 
 3.6.7 额外做了 `--update-control` 轮：注入块 + `if(!globalThis.__gdzcAllowUpdate())return;` 闸门 + guard 模式代码
 均在，`verify` 通过，二轮 `restore` 仍逐字节相同。存量 4 版本的 `--update-control` 轮同样注入成功、`verify` 通过、
 `restore` 逐字节还原（日志 `tmp/version-profile/e2e-<版本>.log`、汇总 `tmp/version-profile/e2e-legacy.log`）。
+返工轮另对 3.6.7 与 3.6.10 双平台产物副本复跑（`version-profile check` 两平台锚点断言 + Windows 副本
+patch/verify/restore + `--update-control` 轮），结论同上。
 
 复跑命令（本机零重启：tmp 副本没有 `GitHubDesktop.exe`，`restartApp` 判定「未运行」不会碰真实应用；
 `<版本>` 取 3.6.0/3.6.4/3.6.5/3.6.6/3.6.7）：
