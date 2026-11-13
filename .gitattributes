@@ -1,0 +1,8 @@
+# 生成物豁免行尾空白检查
+#
+# docs/架构图/*.html 由 archify finalize 生成，其内联 <style> 模板自带缩进空行
+# （15 行、每行 6 空格，位于 print / embed / present / reduced-motion 样式段），
+# 属渲染器原始字节而非候选内容；对产物做后处理会让 finalize 回执（strict
+# provenance 的 artifact sha256）与提交字节不一致，故按路径豁免行尾空白检查。
+# 范围仅限该目录下的生成物 HTML，其它文件仍按默认规则检查。
+docs/架构图/*.html whitespace=-blank-at-eol,-blank-at-eof
