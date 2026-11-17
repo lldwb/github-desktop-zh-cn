@@ -1,5 +1,37 @@
 # Changelog
 
+## [1.2.0] - 2026-11-17
+
+> 每个版本自包含「一份翻译字典 + 一套替换逻辑档案」（`dictionaries/<版本>/patch.json`）：注入锚点、右键菜单标签表、更新管控参数都按该版本官方产物实测固化，引擎按版本加载并强校验，不再让一套全局逻辑服务所有版本。9 个版本（3.6.0 / 3.6.4 / 3.6.5 / 3.6.6 / 3.6.7 / 3.6.8 / 3.6.9 / 3.6.10 / 3.6.11）的字典与档案成对入库，获取 / 打包 / GUI 判定 / 自动产出 / CI 全部改为成对语义。
+
+### 新增
+
+- **每版本替换逻辑档案（`patch.json`）**：新增 `scripts/version-profile.js`——档案的唯一实现与唯一写入口：加载（外部文件 → 内嵌 → 联网）、结构校验、策略解析、锚点断言（按本次操作真正要注入的策略筛）、成对校验（`pairStatus`/`assertPair`/`listPairVersions`）、写入口 `writeProfile()`（先校验再原子落盘，默认拒绝覆盖）、官方两平台产物探测（`probeApp`/`buildProfile`/`probeVersion`，CLI `probe|show|validate|check`）。档案是**数据、不执行**；缺档案 / 锚点次数不符 / 策略名未知一律明确拒绝并给下一步。
+- **9 个版本成对资产**：`dictionaries/<版本>/patch.json` 覆盖 3.6.0 / 3.6.4 / 3.6.5 / 3.6.6 / 3.6.7 / 3.6.8 / 3.6.9 / 3.6.10 / 3.6.11，均由官方 Windows + macOS 两平台产物实测生成；证据记录产物名 / 大小 / 文件 sha256 / 锚点实测次数 / 标签来源与字面量次数（`evidence.platforms`），可复核探测所用产物。
+- **成对在线同步**：`dict-sync` 新增 `fetchPair` / `writePair`——同一个源必须字典与档案都取到且都校验通过（字典走 `dict-edit.validateDoc`、档案走 `validateProfile`）才算成功；`.part` 原子落盘、失败回滚，不留半对；`ensureDict` 改为成对判断且只补缺的那份（不覆盖用户已有文件）；`syncLatest` 成对覆盖；`prefetchDict` 文案与错误区分缺哪份。
+- **打包与 GUI 成对口径**：`build.js` 内嵌最新一版成对资源（最新版本缺档案时告警并退到最新成对版本，无成对才失败）；Electron `seedBundledDicts()` 逐文件补齐（老用户数据根只有字典、缺档案时能只补档案）；`check-gui-dist` 成对校验并把 `version-profile.js` 补进 asar 清单；GUI/CLI 的「有没有字典」改**成对完整**口径（`listDictVersions` 原义保留、新增 `listPairVersions`），本地有字典缺档案单独标「缺替换逻辑档案」。
+- **dict-auto 成对产出 + 失败可诊断**：每版本取到两平台产物后 `probeApp` + `buildProfile` 生成档案，与字典**同一轮**落盘（任一步失败两份一起回滚）；`--on-exist=skip` 判据改为成对（存量只有字典的版本走「只补产档案」迁移路径，不重跑 AI）；失败分类 `ai-unreachable` / `ai-quality` / `product-fetch` / `profile-probe` / `dry-run-threshold` / `dict-validate` 等，注解带 `::error title=` 与各类计数；失败落待译草稿 `tmp/dict-auto-pending-<版本>.json` 供 workflow 上传 artifact；`--no-ai` 报告标 `draftOnly`；`--dry-run` 不再掩盖失败；严格质量门禁不降级。
+- **CI 成对门禁**：`dict-auto.yml` 的提交门禁改用 `pairStatus`/`listPairVersions` 判成对，并逐版本离线跑 `version-profile validate` 做结构门禁；新增「待译草稿 + 报告」artifact 上传；提交信息与运行汇总带档案锚点/失败分类。
+- **项目架构图**：`docs/架构图/`（standalone HTML + 候选 JSON）。
+- **设计文档**：`docs/design/version-profile/design.md`——档案 schema、引擎语义、失败与兼容、迁移与流水线清单、探测记录、模块接口与风险。
+
+### 变更
+
+- `patch` / `restore` / `verify` 接入档案：写盘前断言锚点、注入参数（标签表 / 注入点 / 方法锚点 / 期望次数）全部来自档案；请求了档案未启用的更新管控 → 明确拒绝；`patch` 先成对补齐资源、再加载档案并断言（本地有字典缺档案时会联网成对取，失败照旧拒绝且不写盘/不建备份）。
+- `update-control` 注入块的「已支持版本上限 / 更新后自动汉化前置」改判**成对完整**（字典 + 档案都在），避免只有字典的高版本被误判成「工具已支持」而放行更新；`restore` 按组重放补传工具路径（打包态 autoPatch 不再静默丢失）。
+- `common.packagedToolPath()` 收敛「更新后自动汉化」的工具路径取值，`patch` 与 `restore` 共用同一份。
+- 文档同步：AGENTS.md / dictionaries/README.md / `.claude/skills/translation-maintain/references/版本升级.md` / docs/agents/已知坑.md 全面改「成对」口径。
+
+### 修复
+
+- 独立验收返工：锚点断言按策略筛选（只汉化不被更新管控的锚点变化挡住）；`anchorsFor` 对未知策略名 fail-closed；启用策略引用的锚点必须声明在 main.js；dict-sync 字典校验 `_meta.version`/`formatVersion`；dict-auto 迁移路径 `--dry-run` 不写档案；失败分类改多数类并覆盖「响应结构不认识」；CI 成对门禁走 SSOT + 结构校验。
+- 已知坑补录：半对资源不算可用、远端字典目录列表 ≠ 远端有档案、自动产出注入标签与迁移死锁、fail-closed 校验等。
+
+### 说明
+
+- 按语义化分级规则取**中版本** 1.2.0：字典组织方式与工具链发生变更（新增 `patch.json` 成对资产与 `version-profile.js` 引擎、成对同步/打包/CI），属「大改」；对使用者行为向后兼容（旧版本字典仍可用、缺档案时明确拒绝并给下一步）。
+- `package.json` 版本号 1.1.3 → 1.2.0
+
 ## [1.1.3] - 2026-09-23
 
 > 产物全面瘦身：10 个产物（cli 4 + gui 6）全部压进 Gitee 单文件附件上限 100 MB，mac 侧平台词从内核词 darwin 改成使用者一眼可读的 macos（本次发版双名字过渡一版），Gitee 镜像开始随发行版传附件。构建侧把 mac x64 基底挪到 arm64 机器交叉编译，绕开 intel runner 的整机停摆。
