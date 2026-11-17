@@ -1,0 +1,234 @@
+{
+  "schemaVersion": 1,
+  "version": "3.6.11",
+  "generatedAt": "2026-11-17T06:38:12.723Z",
+  "generator": "scripts/dict/dict-auto.js --version 3.6.11",
+  "targets": [
+    "main.js",
+    "renderer.js"
+  ],
+  "sourcemaps": {
+    "main.js": true,
+    "renderer.js": true
+  },
+  "anchors": {
+    "injectionPoint": {
+      "text": "\n//# sourceMappingURL=",
+      "file": "main.js",
+      "placement": "before-last",
+      "expected": 1
+    },
+    "checkForUpdates": {
+      "text": "async checkForUpdates(",
+      "file": "main.js",
+      "placement": "unique",
+      "expected": 1
+    }
+  },
+  "injections": {
+    "context-menu": {
+      "enabled": true,
+      "injectionPoint": "injectionPoint",
+      "labels": {
+        "windows": {
+          "copy": "&Copy",
+          "cut": "Cu&t",
+          "delete": "Delete",
+          "paste": "&Paste",
+          "redo": "&Redo",
+          "selectall": "Select &all",
+          "undo": "&Undo"
+        },
+        "macos": {
+          "copy": "Copy",
+          "cut": "Cut",
+          "delete": "Delete",
+          "paste": "Paste",
+          "redo": "Redo",
+          "selectall": "Select All",
+          "undo": "Undo"
+        }
+      }
+    },
+    "update-control": {
+      "enabled": true,
+      "injectionPoint": "injectionPoint",
+      "methodAnchor": "checkForUpdates"
+    }
+  },
+  "evidence": {
+    "probe": {
+      "at": "2026-11-17T06:38:12.723Z",
+      "tool": "scripts/version-profile.js",
+      "platforms": [
+        "windows",
+        "macos"
+      ],
+      "archs": {
+        "windows": "x64",
+        "macos": "x64"
+      },
+      "menuSource": "webpack:///./app/src/main-process/menu/build-default-menu.ts"
+    },
+    "platforms": {
+      "windows": {
+        "platform": "windows",
+        "arch": "x64",
+        "assetName": "GitHubDesktop-3.6.11-x64-full.nupkg",
+        "appVersion": "3.6.11",
+        "appDir": "lib/net45/resources/app",
+        "files": {
+          "main.js": {
+            "bytes": 235544,
+            "sha256": "ebf14d7d844268f8be76dbb17deb6976caee8f3673c75cc62acf25693b59e6f2"
+          },
+          "renderer.js": {
+            "bytes": 3314350,
+            "sha256": "df8ac40d0eca0eba878d4572929516d5b050f520391bff7b2e5aa10c238367e7"
+          },
+          "package.json": {
+            "bytes": 508,
+            "sha256": "780aed499449c98d16f2accd92bb30988ca91f4b35654d13368eb383d1efd3c7"
+          }
+        },
+        "sourcemaps": {
+          "main.js": {
+            "present": true,
+            "sourcesContent": true
+          },
+          "renderer.js": {
+            "present": true,
+            "sourcesContent": true
+          }
+        },
+        "anchors": {
+          "injectionPoint": 1,
+          "checkForUpdates": 1
+        },
+        "labels": {
+          "undo": {
+            "label": "&Undo",
+            "origin": "build-default-menu",
+            "bundleLiteralCount": 1,
+            "source": "webpack:///./app/src/main-process/menu/build-default-menu.ts:161"
+          },
+          "redo": {
+            "label": "&Redo",
+            "origin": "build-default-menu",
+            "bundleLiteralCount": 1,
+            "source": "webpack:///./app/src/main-process/menu/build-default-menu.ts:162"
+          },
+          "cut": {
+            "label": "Cu&t",
+            "origin": "build-default-menu",
+            "bundleLiteralCount": 1,
+            "source": "webpack:///./app/src/main-process/menu/build-default-menu.ts:164"
+          },
+          "copy": {
+            "label": "&Copy",
+            "origin": "build-default-menu",
+            "bundleLiteralCount": 1,
+            "source": "webpack:///./app/src/main-process/menu/build-default-menu.ts:165"
+          },
+          "paste": {
+            "label": "&Paste",
+            "origin": "build-default-menu",
+            "bundleLiteralCount": 1,
+            "source": "webpack:///./app/src/main-process/menu/build-default-menu.ts:166"
+          },
+          "selectall": {
+            "label": "Select &all",
+            "origin": "build-default-menu",
+            "bundleLiteralCount": 1,
+            "source": "webpack:///./app/src/main-process/menu/build-default-menu.ts:168"
+          },
+          "delete": {
+            "label": "Delete",
+            "origin": "electron-default",
+            "bundleLiteralCount": 0,
+            "source": "electron-default"
+          }
+        }
+      },
+      "macos": {
+        "platform": "macos",
+        "arch": "x64",
+        "assetName": "GitHub.Desktop-x64.zip",
+        "appVersion": "3.6.11",
+        "appDir": "GitHub Desktop.app/Contents/Resources/app",
+        "files": {
+          "main.js": {
+            "bytes": 233295,
+            "sha256": "b3ef3e3249c1c48191466d3fa2884155584388c0c5b15681aaf6dc178ab25cf2"
+          },
+          "renderer.js": {
+            "bytes": 3292802,
+            "sha256": "ccb1fa09dd36fc69fa4fe5730fffa57ec812b88ef83445dccc40e71fe881a441"
+          },
+          "package.json": {
+            "bytes": 598,
+            "sha256": "e6efc28aa093c7f7f0e2f6cb8625bd8596c3d5bb640dcbe22c64cb16078d5ec6"
+          }
+        },
+        "sourcemaps": {
+          "main.js": {
+            "present": true,
+            "sourcesContent": true
+          },
+          "renderer.js": {
+            "present": true,
+            "sourcesContent": true
+          }
+        },
+        "anchors": {
+          "injectionPoint": 1,
+          "checkForUpdates": 1
+        },
+        "labels": {
+          "undo": {
+            "label": "Undo",
+            "origin": "build-default-menu",
+            "bundleLiteralCount": 1,
+            "source": "webpack:///./app/src/main-process/menu/build-default-menu.ts:161"
+          },
+          "redo": {
+            "label": "Redo",
+            "origin": "build-default-menu",
+            "bundleLiteralCount": 1,
+            "source": "webpack:///./app/src/main-process/menu/build-default-menu.ts:162"
+          },
+          "cut": {
+            "label": "Cut",
+            "origin": "build-default-menu",
+            "bundleLiteralCount": 1,
+            "source": "webpack:///./app/src/main-process/menu/build-default-menu.ts:164"
+          },
+          "copy": {
+            "label": "Copy",
+            "origin": "build-default-menu",
+            "bundleLiteralCount": 1,
+            "source": "webpack:///./app/src/main-process/menu/build-default-menu.ts:165"
+          },
+          "paste": {
+            "label": "Paste",
+            "origin": "build-default-menu",
+            "bundleLiteralCount": 1,
+            "source": "webpack:///./app/src/main-process/menu/build-default-menu.ts:166"
+          },
+          "selectall": {
+            "label": "Select All",
+            "origin": "build-default-menu",
+            "bundleLiteralCount": 1,
+            "source": "webpack:///./app/src/main-process/menu/build-default-menu.ts:168"
+          },
+          "delete": {
+            "label": "Delete",
+            "origin": "electron-default",
+            "bundleLiteralCount": 0,
+            "source": "electron-default"
+          }
+        }
+      }
+    }
+  }
+}
