@@ -123,6 +123,14 @@ jobs:
         with:
           node-version: 22
           # 不开 cache: npm —— 本仓库无 dependencies，没有 package-lock.json
+      # runner 镜像 2026-11 起默认 python3 升到 3.14，而 node 22 的 configure 只认 3.8–3.13
+      #（实测报 "Please use python3.13 or … python3.8 / Found Python 3.14.4"）。显式装 3.12 并
+      # 让 PATH 的 python3 指向它——node 的 configure 用运行它的解释器，不吃 --python 参数。
+      - name: 准备 node 基底构建用的 Python（3.12）
+        if: runner.os != 'Windows'
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
       - name: 单元测试
         run: npm test
       # Windows 不自编译：官方基底构建出的产物 83.6 MB 本就达标，省掉一套 VS 工具链编译的复杂度。
@@ -202,6 +210,32 @@ jobs:
           mkdir -p "$src"
           tar -xJf "$RUNNER_TEMP/node-src.tar.xz" -C "$src" --strip-components=1
           cd "$src"
+          # runner 镜像 2026-11 起默认 python3 升到 3.14，而 node 22 的 configure 只认
+          # Python 3.8–3.13（实测报 "Please use python3.13 or … python3.8 / Found Python 3.14.4"）
+          # ——基础镜像漂移不该卡死发版：显式挑一个受支持的解释器，都没有就装一个。
+          pick_python() {
+            for c in python3.13 python3.12 python3.11 python3.10 python3.9 python3.8; do
+              if command -v "$c" >/dev/null 2>&1; then echo "$c"; return 0; fi
+            done
+            return 1
+          }
+          PY="$(pick_python)" || {
+            echo "::warning::runner 未装 Python 3.8–3.13（默认 python3：$(python3 --version 2>&1 || echo 无)），尝试安装 python3.12"
+            if command -v apt-get >/dev/null 2>&1; then
+              sudo apt-get update -qq
+              sudo apt-get install -y -qq python3.12
+              PY=python3.12
+            elif command -v brew >/dev/null 2>&1; then
+              brew install python@3.12
+              PY=python3.12
+            else
+              echo "::error::找不到 Python 3.8–3.13，且无 apt/brew 可安装"
+              exit 1
+            fi
+          }
+          export PYTHON="$PY"
+          command -v "$PY" >/dev/null 2>&1 || { echo "::error::Python 选择失败：$PY 不存在（可用 3.8–3.13）"; exit 1; }
+          echo "node 基底构建使用 Python：$("$PY" --version 2>&1)"
           # macOS x64 的 SEA 注入损坏（nodejs/node#59553）的候选修复是经典链接器基底（gyp 链接
           # 命令透传 LDFLAGS）——是否需要由上面诊断步判定，先走默认链接器。曾在 intel runner
           # 上反复尝试无果，2026-09-22 定性：与 -ld_classic 无关，是上游 runner 镜像整机停摆
@@ -226,9 +260,9 @@ jobs:
             # 对该问题的判定有效。经典链接器是上游候选修复（诊断步已证 Xcode 26.6 支持
             # -ld_classic），基底改用它链接，期望产物回到 ~84 MB。
             export LDFLAGS="-Wl,-ld_classic"
-            ./configure --with-intl=small-icu --dest-cpu=x64 --openssl-no-asm
+            "$PY" ./configure --with-intl=small-icu --dest-cpu=x64 --openssl-no-asm
           else
-            ./configure --with-intl=small-icu
+            "$PY" ./configure --with-intl=small-icu
           fi
           # make 套 timeout 看门狗：编译子进程挂起但 VM 还活着时，杀掉后增量续编一次
           #（out/Release 里编好的目标文件都在，重跑 make 只补剩余的）；整机停摆它救不了

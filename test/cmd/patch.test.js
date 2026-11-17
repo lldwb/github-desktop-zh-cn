@@ -473,7 +473,9 @@ test('参数来自档案：注入点锚点与标签表都用档案里的值', as
   // 产物用一个**非默认**的注入点注释，档案声明同一个文本——若引擎仍写死
   // `//# sourceMappingURL=`，注入块就会落到文件末尾而不是锚点之前，标签也不会是自定义那套。
   const marker = '\n//# custom-anchor=';
-  const labels = { windows: { undo: '&CustomUndo' }, macos: { undo: 'CustomUndo' } };
+  // 两平台用**同一个**自定义标签：注入块按当前平台取标签表，断言不依赖运行平台
+  //（此前 windows/macos 取不同值，macOS CI 上断言 windows 标签失败——发版 v1.2.0 预热实测）。
+  const labels = { windows: { undo: '&CustomUndo' }, macos: { undo: '&CustomUndo' } };
   const main = `;(function () {\n  var x = 1;\n})();\n${marker}main.js\n`;
   const app = makeApp({ main });
   prepare(t, app, { marker, labels });
